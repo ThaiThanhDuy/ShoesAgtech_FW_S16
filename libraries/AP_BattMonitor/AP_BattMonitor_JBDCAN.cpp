@@ -70,33 +70,6 @@ void AP_BattMonitor_JBDCAN::handle_frame_callback(
 }
 
 // Process received CAN frame from JBD BMS
-void AP_BattMonitor_JBDCAN::handle_frame(const AP_HAL::CANFrame &frame) {
-  const uint8_t *data = frame.data;
-
-  uint16_t raw_voltage = (data[0] << 8) | data[1];
-  float voltage = raw_voltage * 0.01f;
-
-  int16_t raw_current = (data[2] << 8) | data[3];
-  float current = raw_current * 0.01f;
-
-  uint16_t raw_capacity = (data[4] << 8) | data[5];
-  float remaining_mah = raw_capacity * 10.0f;
-
-  // Calculate consumed capacity if pack capacity is available
-  if (_params._pack_capacity > 0) {
-    _state.consumed_mah = _params._pack_capacity - remaining_mah;
-  }
-
-  _state.voltage = voltage;
-  _state.current_amps = current;
-  _state.healthy = true;
-  _last_update_us = AP_HAL::micros();
-
-  if (voltage > 0) {
-    _state.consumed_wh = _state.consumed_mah * voltage * 0.001f;
-  }
-}
-// Duy điều chỉnh V 63V -> 58.8V cho pack -> bị lỗi sụt áp khi chạy auto mode
 // void AP_BattMonitor_JBDCAN::handle_frame(const AP_HAL::CANFrame &frame) {
 //   const uint8_t *data = frame.data;
 
@@ -106,23 +79,13 @@ void AP_BattMonitor_JBDCAN::handle_frame(const AP_HAL::CANFrame &frame) {
 //   int16_t raw_current = (data[2] << 8) | data[3];
 //   float current = raw_current * 0.01f;
 
-//   // --- LOGIC FIX CHO PIN 14S ---
-//   const float V_MAX = 58.8f;
-//   const float V_MIN = 44.8f;
+//   uint16_t raw_capacity = (data[4] << 8) | data[5];
+//   float remaining_mah = raw_capacity * 10.0f;
 
-//   // Tính tỷ lệ % dựa trên áp thực tế (0.0 đến 1.0)
-//   float pct = (voltage - V_MIN) / (V_MAX - V_MIN);
-//   if (pct > 1.0f)
-//     pct = 1.0f;
-//   if (pct < 0.0f)
-//     pct = 0.0f;
-
-//   // Ép Consumed mAh theo thực tế pin 14S
+//   // Calculate consumed capacity if pack capacity is available
 //   if (_params._pack_capacity > 0) {
-//     float remaining_mah = pct * _params._pack_capacity;
 //     _state.consumed_mah = _params._pack_capacity - remaining_mah;
 //   }
-//   // -----------------------------
 
 //   _state.voltage = voltage;
 //   _state.current_amps = current;
@@ -133,6 +96,43 @@ void AP_BattMonitor_JBDCAN::handle_frame(const AP_HAL::CANFrame &frame) {
 //     _state.consumed_wh = _state.consumed_mah * voltage * 0.001f;
 //   }
 // }
+// Duy điều chỉnh V 63V -> 58.8V cho pack
+void AP_BattMonitor_JBDCAN::handle_frame(const AP_HAL::CANFrame &frame) {
+  const uint8_t *data = frame.data;
+
+  uint16_t raw_voltage = (data[0] << 8) | data[1];
+  float voltage = raw_voltage * 0.01f;
+
+  int16_t raw_current = (data[2] << 8) | data[3];
+  float current = raw_current * 0.01f;
+
+  // --- LOGIC FIX CHO PIN 14S ---
+  const float V_MAX = 58.8f;
+  const float V_MIN = 44.8f;
+
+  // Tính tỷ lệ % dựa trên áp thực tế (0.0 đến 1.0)
+  float pct = (voltage - V_MIN) / (V_MAX - V_MIN);
+  if (pct > 1.0f)
+    pct = 1.0f;
+  if (pct < 0.0f)
+    pct = 0.0f;
+
+  // Ép Consumed mAh theo thực tế pin 14S
+  if (_params._pack_capacity > 0) {
+    float remaining_mah = pct * _params._pack_capacity;
+    _state.consumed_mah = _params._pack_capacity - remaining_mah;
+  }
+  // -----------------------------
+
+  _state.voltage = voltage;
+  _state.current_amps = current;
+  _state.healthy = true;
+  _last_update_us = AP_HAL::micros();
+
+  if (voltage > 0) {
+    _state.consumed_wh = _state.consumed_mah * voltage * 0.001f;
+  }
+}
 // Calculate remaining capacity percentage
 bool AP_BattMonitor_JBDCAN::capacity_remaining_pct(uint8_t &percentage) const {
   if (_params._pack_capacity > 0) {

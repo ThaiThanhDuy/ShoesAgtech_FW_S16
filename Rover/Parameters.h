@@ -14,7 +14,9 @@
 #include <AP_SmartRTL/AP_SmartRTL.h>
 #include <AP_Stats/AP_Stats.h>
 #include <AP_WindVane/AP_WindVane.h>
-
+// [AP_ShoesAgtech] flow sensor + 3-mode spray controller
+#include <AP_ShoesAgtech/AP_ShoesAgtech.h>
+// [/AP_ShoesAgtech]
 #define AP_PARAM_VEHICLE_NAME rover
 
 // Global parameter class.
@@ -231,33 +233,6 @@ public:
 
     k_param_vehicle = 257, // vehicle common block of parameters
     k_param__gcs = 258,
-
-    // Duy -- adding new param
-    //
-    // AUTO MODE
-    //
-    k_param_bst_pitch_en = 193,
-    k_param_bst_pitch_delay = 194,
-    k_param_bst_pitch_scale = 195,
-    // Pitch safety
-    k_param_safe_pitch_down = 268,
-    k_param_safe_pitch_up = 269,
-
-    //
-    // RAIL MODE
-    //
-    k_param_rail_enable = 260,
-    k_param_rail_speed = 261,
-    k_param_rail_percent = 262,
-    k_param_rail_ramped_rate = 263,
-    k_param_rail_steer_dz = 264,
-    k_param_rail_auto_steer = 265,
-    k_param_rail_auto_turn_rate = 266,
-    k_param_rail_safe_pitch_en = 267,
-    k_param_rail_log_enable = 270,
-    k_param_rail_speed_lead = 271,
-    k_param_rail_pitch_delay = 272,
-    k_param_rail_pitch_scale = 273,
   };
 
   AP_Int16 format_version;
@@ -301,28 +276,6 @@ public:
   AP_Int8 mode5;
   AP_Int8 mode6;
 
-  // Duy - adding param
-
-  // AUTO  mode
-  AP_Int8 bst_pitch_en;     // 0: Disable, 1: Enable
-  AP_Int16 bst_pitch_delay; // Thời gian trễ phục hồi (ms)
-  AP_Float bst_pitch_scale; // Tỷ lệ giảm tốc (%)
-
-  // Rail mode
-  AP_Int8 rail_enable;
-  AP_Float rail_speed;
-  AP_Int16 rail_percent;
-  AP_Float rail_ramped_rate;
-  AP_Int16 rail_steer_dz;
-  AP_Int8 rail_auto_steer;      // 0: Disable, 1: Enable
-  AP_Float rail_auto_turn_rate; // Đơn vị: degrees/second
-  AP_Int8 rail_safe_pitch_en;
-  AP_Float safe_pitch_down; // Ngưỡng chúi mũi (thường là góc âm)
-  AP_Float safe_pitch_up; // Ngưỡng ngửa mũi (thường là góc dương)
-  AP_Int8 rail_log_enable;
-  AP_Float rail_speed_lead;
-  AP_Float rail_pitch_delay;
-  AP_Float rail_pitch_scale;
   Parameters() {}
 };
 
@@ -342,6 +295,9 @@ public:
   // control over servo output ranges
   SRV_Channels servo_channels;
 
+  // [AP_ShoesAgtech] instance registered in ParametersG2 for SA_* params
+  AP_ShoesAgtech custom_nav;
+  // [/AP_ShoesAgtech]
 #if AP_ROVER_ADVANCED_FAILSAFE_ENABLED
   // advanced failsafe library
   AP_AdvancedFailsafe_Rover afs;

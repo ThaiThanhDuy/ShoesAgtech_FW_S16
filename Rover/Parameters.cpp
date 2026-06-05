@@ -233,140 +233,6 @@ const AP_Param::Info Rover::var_info[] = {
     // @Description: Driving mode for switch position 6 (1750 to 2049)
     GSCALAR(mode6, "MODE6", (int8_t)Mode::Number::MANUAL),
 
-    // Duy - adding Param
-
-    // AUTO MODE //
-    // @Param: BST_PITCH_EN
-    // @DisplayName: BST Pitch Safety Enable
-    // @Description: Kich hoat che do bao ve giam toc khi Pitch vuot nguong
-    GSCALAR(bst_pitch_en, "BST_PITCH_EN", 0),
-
-    // @Param: BST_PITCH_DLY
-    // @DisplayName: BST Pitch Recovery Delay
-    // @Description: Thoi gian (ms) duy tri toc do thap sau khi Pitch on dinh
-    GSCALAR(bst_pitch_delay, "BST_PITCH_DLY", 2000),
-
-    // @Param: BST_PITCH_SCL
-    // @DisplayName: BST Pitch Speed Scale
-    // @Description: Phan tram (%) toc do giu lai khi vi pham goc Pitch
-    GSCALAR(bst_pitch_scale, "BST_PITCH_SCL", 50.0f),
-
-    // RAIL MODE //
-    // @Param: RAIL_ENABLE
-    // @DisplayName: Rail Mode Activation
-    // @Description: Enables or disables Rail Mode
-    // @Values: 0:Disabled, 1:Enabled
-    // @User: Standard
-    GSCALAR(rail_enable, "RAIL_ENABLE", 0),
-
-    // @Param: RAIL_SPEED
-    // @DisplayName: Rail Mode Speed
-    // @Description: Vận tốc tịnh tiến mục tiêu cho máy S16/S30 (m/s)
-    // @Range: 0.5 5.0
-    // @Units: m/s
-    // @User: Standard
-    GSCALAR(rail_speed, "RAIL_SPEED", 1.2f),
-
-    // @Param: RAIL_PERCENT
-    // @DisplayName: Rail Mode Throttle Percent
-    // @Description: Mức ga cố định (%) dự phòng khi mất GPS/Speed Data
-    // @Range: 0 100
-    // @Units: %
-    // @User: Standard
-    GSCALAR(rail_percent, "RAIL_PERCENT", 40),
-
-    // @Param: RAIL_RAMPED_RATE
-    // @DisplayName: Rail Mode Acceleration Rate
-    // @Description: Độ tăng vận tốc mỗi giây (m/s^2). Giá trị càng nhỏ máy tăng
-    // tốc càng mịn.
-    // @Range: 0.01 1.0
-    // @Increment: 0.01
-    // @User: Standard
-    GSCALAR(rail_ramped_rate, "RAIL_RAMP_RATE", 0.2f),
-
-    // @Param: RAIL_STR_DZ
-    // @DisplayName: Rail Mode Steering Deadzone
-    // @Description: Ngưỡng lọc nhiễu cần lái (Stick) trong chế độ Rail. Giá trị
-    // dưới ngưỡng này máy sẽ khóa vi sai đi thẳng.
-    // @Range: 0 500
-    // @Increment: 1
-    // @Units: PWM
-    // @User: Standard
-    GSCALAR(rail_steer_dz, "RAIL_STR_DZ", 50),
-
-    // @Param: RAIL_AUTO_STR
-    // @DisplayName: Rail Auto Steer Switch
-    // @Description: Kích hoạt chế độ tự động cua. Khi bật, gạt cần qua ngưỡng
-    // DZ sẽ cua với tốc độ cố định, thả cần về giữa sẽ khóa đi thẳng.
-    // @Values: 0:Disabled, 1:Enabled
-    // @User: Standard
-    GSCALAR(rail_auto_steer, "RAIL_AUTO_STR", 0),
-
-    // @Param: RAIL_AUTO_TRATE
-    // @DisplayName: Rail Auto Turn Rate
-    // @Description: Vận tốc góc mục tiêu khi thực hiện tự động cua trong chế độ
-    // Rail Auto Steer.
-    // @Range: 0 45
-    // @Units: deg/s
-    // @Increment: 1
-    // @User: Standard
-    GSCALAR(rail_auto_turn_rate, "RAIL_AUTO_TRATE", 20.0f),
-    // @Param: RAIL_PITCH_EN
-    // @DisplayName: Rail Safe Pitch Enable
-    // @Description: Kích hoạt giảm tốc độ khi góc Pitch vượt ngưỡng
-    // @Values: 0:Disabled, 1:Enabled
-    // @User: Standard
-    GSCALAR(rail_safe_pitch_en, "RAIL_PITCH_EN", 0),
-
-    // @Param: SAFE_PITCH_DN
-    // @DisplayName: Rail Safe Pitch Down (Chúi mũi)
-    // @Description: Nhập số dương (ví dụ 10). Code sẽ tự hiểu là ngưỡng chúi
-    // mũi -10 độ.
-    // @Units: deg
-    // @Range: 0 45
-    GSCALAR(safe_pitch_down, "SAFE_PITCH_DN", 10.0f),
-    // @Param: SAFE_PITCH_UP
-    // @DisplayName: Rail Safe Pitch Up (Ngửa mũi)
-    // @Description: Ngưỡng góc ngửa mũi (độ). Nếu máy ngửa quá mức này, tốc độ
-    // giảm còn 70%.
-    // @Units: deg
-    // @Range: 0 45
-    GSCALAR(safe_pitch_up, "SAFE_PITCH_UP", 10.0f),
-    // @Param: RAIL_LOG_ENABLE
-    // @DisplayName: Rail Log Enable
-    // @Description: Kích hoạt log thông tin Target Speed và Actual Speed lên
-    // GCS
-    // @Values: 0:Disabled, 1:Enabled
-    // @User: Standard
-    GSCALAR(rail_log_enable, "RAIL_LOG_ENABLE", 0),
-    // @Param: RAIL_SPD_LEAD
-    // @DisplayName: Rail Speed Lead Threshold
-    // @Description: Khoảng cách vận tốc dẫn trước giữa Setpoint và Thực tế
-    // (m/s). Tăng lên để đề-pa bốc hơn, giảm xuống để máy chạy êm hơn.
-    // @Range: 0.1 2.0
-    // @Increment: 0.1
-    // @User: Advanced
-    GSCALAR(rail_speed_lead, "RAIL_SPD_LEAD", 0.5f),
-    // @Param: RAIL_PITCH_DLY
-    // @DisplayName: Rail Pitch Recovery Delay
-    // @Description: Thoi gian (ms) duy tri toc do thap sau khi Pitch ve nguong
-    // an toan. Giup he thong on dinh truoc khi tang toc tro lai.
-    // @Range: 0 5000
-    // @Units: ms
-    // @Increment: 100
-    // @User: Advanced
-    GSCALAR(rail_pitch_delay, "RAIL_PITCH_DLY", 2000.0f),
-
-    // @Param: RAIL_PITCH_SCALE
-    // @DisplayName: Rail Pitch Speed Percentage
-    // @Description: Ty le phan tram van toc muc tieu con lai khi kich hoat
-    // Pitch Safety. 70 co nghia la giam con 70% toc do.
-    // @Range: 10 100
-    // @Units: %
-    // @Increment: 5
-    // @User: Advanced
-    GSCALAR(rail_pitch_scale, "RAIL_PITCH_SCL", 50.0f),
-
     // variables not in the g class which contain EEPROM saved variables
 
     // @Group: COMPASS_
@@ -824,6 +690,11 @@ const AP_Param::GroupInfo ParametersG2::var_info[] = {
     // @Path: mode_circle.cpp
     AP_SUBGROUPINFO(mode_circle, "CIRC", 57, ParametersG2, ModeCircle),
 
+    // [AP_ShoesAgtech] slot 58 — prefix SA_ — flow sensor + spray controller
+    // @Group: SA_
+    // @Path: ../libraries/AP_ShoesAgtech/AP_ShoesAgtech.cpp
+    AP_SUBGROUPINFO(custom_nav, "SA_", 58, ParametersG2, AP_ShoesAgtech),
+    // [/AP_ShoesAgtech]
     AP_GROUPEND};
 
 // These auxiliary channel param descriptions are here so that users of beta

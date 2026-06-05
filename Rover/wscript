@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 
+
 def build(bld):
     vehicle = bld.path.name
     bld.ap_stlib(
         name=vehicle + '_libs',
         ap_vehicle=vehicle,
-        ap_libraries=bld.ap_common_vehicle_libraries() + [
+        ap_libraries=bld.ap_common_vehicle_libraries()
+        + [
             'APM_Control',
             'AP_Mount',
             'AP_Navigation',
@@ -21,6 +23,7 @@ def build(bld):
             'AP_Torqeedo',
             'AC_PrecLand',
             'AP_IRLock',
+            'AP_ShoesAgtech',  # [AP_ShoesAgtech] flow sensor + spray controller
         ],
     )
 
