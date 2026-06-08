@@ -347,6 +347,11 @@ static const ap_message STREAM_EXTRA3_msgs[] = {
 #if AP_RANGEFINDER_ENABLED && APM_BUILD_TYPE(APM_BUILD_Rover)
     MSG_WATER_DEPTH,
 #endif  // AP_RANGEFINDER_ENABLED && APM_BUILD_TYPE(APM_BUILD_Rover)
+    // [AP_ShoesAgtech] stream custom flow/pH data (DEBUG_FLOAT_ARRAY) on Rover only
+#if APM_BUILD_TYPE(APM_BUILD_Rover)
+    MSG_FLOW_DATA,
+#endif  // APM_BUILD_TYPE(APM_BUILD_Rover)
+    // [/AP_ShoesAgtech]
     MSG_DISTANCE_SENSOR,
     MSG_SYSTEM_TIME,
 #if AP_TERRAIN_AVAILABLE

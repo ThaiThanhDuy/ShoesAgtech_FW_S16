@@ -52,6 +52,10 @@ private:
 
     void send_servo_out();
 
+    // [AP_ShoesAgtech] test: stream flow rate + pH data via DEBUG_FLOAT_ARRAY
+    void send_shoesagtech_debug_arrays();
+    // [/AP_ShoesAgtech]
+
     // if we receive a message where the user has not masked out
     // acceleration from the input packet we send a curt message
     // informing them:

@@ -13,7 +13,7 @@ public:
   void init(void);
   void update(void);
 
-  // Flow sensor getters
+  // Flow sensor getters — YF-S402B, dãy hoạt động 0.3–6 L/min
   float    get_flow_rate_lmin(void) const { return _flow_rate_filtered; }
   float    get_flow_rate_avg(void)  const { return _flow_rate_avg; }
   bool     is_enabled(void)         const { return _enable_flag.get() > 0; }
@@ -35,13 +35,22 @@ public:
   uint8_t  get_alk_slot_status(void) const { return _alk_slot_status; }
   bool     alk_is_yesterday(void)    const { return _alk_slot_status == 3; }
   bool     ph_is_enabled(void)       const { return _ph_en.get() > 0; }
+  // true when the pH sensor has produced a valid Modbus frame within the
+  // last SA_PH_TIMEOUT seconds (matches the "mất kết nối" threshold used
+  // for the GCS warning)
+  bool     ph_has_data(void)         const {
+    const uint32_t timeout_ms = (uint32_t)((_ph_timeout.get() > 0) ? _ph_timeout.get() : 1) * 1000U;
+    return (_ph_last_good_ms != 0) &&
+           (AP_HAL::millis() - _ph_last_good_ms <= timeout_ms);
+  }
   // [/AP_ShoesAgtech]
 
   static const AP_Param::GroupInfo var_info[];
   static void irq_handler(void);
 
 private:
-  // ---- Parameters: flow sensor + spray controller (slots 1-13) ----
+  // ---- Parameters: flow sensor YF-S402B + spray controller (slots 1-13)
+  //      Dãy hoạt động: 0.3–6 L/min ----
   AP_Int8  _enable_flag;    // SA_ENABLE
   AP_Float _cal_factor;     // SA_CAL_FAC   pulses/Litre
   AP_Float _ema_alpha;      // SA_EMA_AL    EMA smoothing
@@ -63,11 +72,14 @@ private:
   AP_Float _ph_off;         // SA_PH_OFF    pH calibration offset
   AP_Float _ph_kh;          // SA_PH_KH     base alkalinity dKH (from test kit)
   AP_Float _ph_ema_alpha;   // SA_PH_EMA    EMA smoothing alpha for pH
-  AP_Int8  _ph_log_enable;  // SA_PH_LOG    console print for pH sensor (independent of SA_FLOW_LOG)
-  AP_Int8  _ph_tz;          // SA_PH_TZ     UTC offset hours (Vietnam = 7)
+  AP_Int8  _ph_log_enable;  // SA_PH_LOG      console print for pH sensor (independent of SA_FLOW_LOG)
+  AP_Int8  _ph_tz;          // SA_PH_TZ       UTC offset hours (Vietnam = 7)
+  AP_Int16 _flow_log_ms;    // SA_LOG_FL_MS   flow console log interval (ms, default 1000)
+  AP_Int16 _ph_log_ms;      // SA_LOG_PH_MS   pH console log interval (ms, default 2000)
+  AP_Int16 _ph_timeout;     // SA_PH_TIMEOUT  pH "mat ket noi" timeout, seconds (default 1)
   // [/AP_ShoesAgtech]
 
-  // ---- Flow sensor state ----
+  // ---- Flow sensor state — YF-S402B (0.3–6 L/min) ----
   uint32_t _last_timestamp_ms;
   uint32_t _last_pulse_snapshot;
   uint32_t _last_log_ms;
@@ -102,6 +114,9 @@ private:
   uint32_t  _ph_update_ms;           // last time a request was initiated
   uint32_t  _ph_req_sent_ms;         // timestamp of last Modbus TX
   bool      _ph_req_pending;         // waiting for response
+  uint32_t  _ph_last_good_ms;        // timestamp of last valid frame (0 = never)
+  uint32_t  _ph_nodata_warn_ms;      // last time "no response" warning was sent
+  uint32_t  _ph_last_log_ms;         // last time pH console log was printed
   float     _ph_value;               // latest decoded pH (calibrated)
   float     _ph_value_ema;           // EMA-filtered pH (-1 = not yet init)
   float     _ph_value_ma;            // moving average pH

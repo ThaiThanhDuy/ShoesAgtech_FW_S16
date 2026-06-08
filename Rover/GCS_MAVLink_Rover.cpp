@@ -244,6 +244,67 @@ void GCS_MAVLINK_Rover::send_water_depth() {
 }
 #endif // AP_RANGEFINDER_ENABLED
 
+// [AP_ShoesAgtech] -------------------------------------------------------
+// TEST: stream flow + pH data to GCS in a single DEBUG_FLOAT_ARRAY (msg 350)
+//   array_id=0 "SA_DATA" (single combined array, id unused):
+//     [0] flow_rate     (L/min, EMA)
+//     [1] flow_rate_avg (L/min, MA)
+//     [2] flow_target   (L/min)
+//     [3] pump_pwm      (us)
+//     [4] ph            (moving-avg)         }
+//     [5] ph_mv         (mV)                 }
+//     [6] ph_temp       (°C)                 }
+//     [7] alk_dkh       (dKH)                }
+//     [8] alk_mgl       (mg/L CaCO3)         }
+// Hiển thị trong Mission Planner: Ctrl+F > MAVLink Inspector >
+// DEBUG_FLOAT_ARRAY
+void GCS_MAVLINK_Rover::send_shoesagtech_debug_arrays() {
+  if (!HAVE_PAYLOAD_SPACE(chan, DEBUG_FLOAT_ARRAY)) {
+    return;
+  }
+
+  AP_ShoesAgtech &sa = rover.g2.custom_nav;
+  if (!sa.is_enabled()) {
+    return;
+  }
+
+  // Gửi thời gian theo kiểu time_boot_ms (mili-giây từ lúc khởi động hệ
+  // thống) cho dễ đọc/khớp với đồng hồ hệ thống, thay vì micro-giây thô.
+  const uint64_t now_ms = AP_HAL::millis64();
+
+  // name[10] and data[58] buffers must be the full DEBUG_FLOAT_ARRAY field
+  // lengths, or mav_array_memcpy() reads past the end of shorter arrays
+  // (rest of data[] left zero-padded; GCS only displays the values we set)
+  const char data_name[10] = "SA_DATA";
+  // Khi không có lưu lượng, EMA/MA có thể đọng lại giá trị rất nhỏ kiểu
+  // 1.2e-7 (hiển thị dạng số mũ "e" gây nhiễu trên GCS) — ép về 0 cho sạch.
+  // Dải hoạt động cảm biến YF-S402B là 0.3–6 L/min nên dưới 0.01 chắc chắn là nhiễu.
+  const float FLOW_NOISE_FLOOR = 0.01f;
+  auto declutter_flow = [&](float v) -> float {
+    return (fabsf(v) < FLOW_NOISE_FLOOR) ? 0.0f : v;
+  };
+
+  float data[58] = {};
+  data[0] = declutter_flow(sa.get_flow_rate_lmin());
+  data[1] = declutter_flow(sa.get_flow_rate_avg());
+  data[2] = sa.get_flow_target();
+  data[3] = (float)sa.get_pump_pwm();
+
+  // pH mất tín hiệu/chưa kết nối (quá 30s không có frame hợp lệ) -> giữ
+  // nguyên data[4..8] = 0 thay vì gửi giá trị cũ/rác lên GCS
+  if (sa.ph_is_enabled() && sa.ph_has_data()) {
+    data[4] = sa.get_ph();
+    data[5] = sa.get_ph_mv();
+    data[6] = sa.get_ph_temp();
+    data[7] = sa.get_alk_dkh();
+    data[8] = sa.get_alk_mgl();
+  }
+
+  // Gộp chung tất cả vào một mảng nên array_id không còn ý nghĩa phân biệt — để 0
+  mavlink_msg_debug_float_array_send(chan, now_ms, data_name, 0, data);
+}
+// [/AP_ShoesAgtech] -------------------------------------------------------
+
 /*
   send PID tuning message
  */
@@ -381,12 +442,17 @@ bool GCS_MAVLINK_Rover::try_send_message(enum ap_message id) {
     break;
 
     // [AP_ShoesAgtech] -------------------------------------------------------
-    // Flow sensor data is streamed via:
-    //   - SA_LOG_EN=1  → console STATUSTEXT (MAV_SEVERITY_INFO) every 1s
-    //   - Log card     → FLWD binary log (Log_Write_Flow_Realtime in Rover.cpp)
-    // Data accessible if needed via:
-    //   rover.g2.custom_nav.get_flow_rate_lmin()
-    //   rover.g2.custom_nav.get_flow_rate_avg()
+    // Flow + pH data streamed to GCS via DEBUG_FLOAT_ARRAY (test):
+    //   - "SA_DATA" array_id=0: [flow_rate, flow_rate_avg, flow_target,
+    //   pump_pwm,
+    //                            ph, ph_mv, ph_temp, alk_dkh, alk_mgl]
+    // Also available via:
+    //   - SA_LOG_EN/SA_PH_LOG → console STATUSTEXT
+    //   - Log card → FLWD / PHWD binary logs (Rover/Log.cpp)
+  case MSG_FLOW_DATA:
+    CHECK_PAYLOAD_SIZE(DEBUG_FLOAT_ARRAY);
+    send_shoesagtech_debug_arrays();
+    break;
     // [/AP_ShoesAgtech] -------------------------------------------------------
 
 #if AP_OADATABASE_ENABLED
