@@ -23,6 +23,10 @@ public:
   uint16_t get_pump_pwm(void)       const { return _pump_pwm; }
   float    get_flow_target(void)    const { return _flow_target; }
 
+  // [AP_ShoesAgtech] Dosing motor getter (for logging)
+  uint16_t get_dosing_pwm(void)     const { return _dos_pwm; }
+  // [/AP_ShoesAgtech]
+
   // [AP_ShoesAgtech] pH sensor getters — Nengshi ASPS3801D-0.5M via Modbus RTU
   float    get_ph(void)              const { return _ph_value_ma; }
   float    get_ph_raw(void)          const { return _ph_value; }
@@ -79,6 +83,17 @@ private:
   AP_Int16 _ph_timeout;     // SA_PH_TIMEOUT  pH "mat ket noi" timeout, seconds (default 1)
   // [/AP_ShoesAgtech]
 
+  // [AP_ShoesAgtech] Parameters: dosing motor (vit tai thuc an tom) — servo
+  // xoay lien tuc 360 do (slots 25-31)
+  AP_Int8  _dos_chan;   // SA_DOS_CHAN   servo output channel (1-indexed)
+  AP_Int8  _dos_rc;     // SA_DOS_RC     RC channel bat/tat motor (1-indexed, vd: nut B Skydroid T10 = 8)
+  AP_Float _dos_rate;   // SA_DOS_RATE   ti le quy doi: bao nhieu gam ung voi 50 xung PWM lech (vd 100 -> 100g=50us, 200 -> 200g=50us)
+  AP_Float _dos_sp;     // SA_DOS_SP     setpoint: luong thuc an muon cap, gam (nguoi dung nhap, vd 1000)
+  AP_Int8  _dos_rev;    // SA_DOS_REV    chieu quay: 0 = thuan (xung 800..1500, 800=nhanh nhat), 1 = nguoc (xung 1500..2200)
+  AP_Int8  _dos_log_enable; // SA_DOS_LOG     console log enable cho dosing motor
+  AP_Int16 _dos_log_ms;     // SA_DOS_LOG_MS  khoang thoi gian giua hai lan in log (ms, mac dinh 1000)
+  // [/AP_ShoesAgtech]
+
   // ---- Flow sensor state — YF-S402B (0.3–6 L/min) ----
   uint32_t _last_timestamp_ms;
   uint32_t _last_pulse_snapshot;
@@ -108,6 +123,18 @@ private:
   int32_t  _last_pump_func_val;  // last servo function value we checked
   bool     _pump_config_ok;      // true when SERVOx_FUNCTION == 0 (None)
   uint32_t _last_warn_ms;        // last time we printed the warning
+
+  // [AP_ShoesAgtech] Dosing motor state — continuous-rotation 360° servo
+  uint16_t _dos_pwm;             // last PWM written (1500 = dung)
+  // SA_DOS_CHAN chi duoc phep chay khi servo dat dung 4 dieu kien:
+  // FUNCTION=0(None), MIN=800, TRIM=1500, MAX=2200 — sai 1 trong 4 thi
+  // khong chay (du nhan nut SA_DOS_RC) va canh bao lien tuc moi 5s
+  bool     _dos_config_ok;       // true khi ca 4 dieu kien servo dung
+  uint32_t _dos_warn_ms;         // last time we printed the config warning
+  bool     _dos_was_ok;          // previous _dos_config_ok (de bao "setup thanh cong" khi vua dat)
+  bool     _dos_was_on;          // previous on/off state cua SA_DOS_RC (de bao khi doi trang thai)
+  uint32_t _dos_last_log_ms;     // last time we printed the SA_DOS_LOG console log
+  // [/AP_ShoesAgtech]
 
   // [AP_ShoesAgtech] pH sensor state — Nengshi ASPS3801D-0.5M Modbus RTU
   AP_HAL::UARTDriver *_ph_uart;      // UART driver for RS485→TTL module
@@ -158,6 +185,11 @@ private:
   void     _check_pump_config(void);
   uint16_t _run_flow_pid(float target_lmin, float dt);
   void     _write_pump_pwm(uint16_t pwm);
+
+  // [AP_ShoesAgtech] Private methods — dosing motor
+  void     _check_dosing_config(void);
+  void     _update_dosing_motor(void);
+  // [/AP_ShoesAgtech]
 
   // [AP_ShoesAgtech] Private methods — pH sensor
   void     _ph_init(void);

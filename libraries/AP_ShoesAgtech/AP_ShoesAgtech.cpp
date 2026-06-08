@@ -203,6 +203,75 @@ const AP_Param::GroupInfo AP_ShoesAgtech::var_info[] = {
 
     // [/AP_ShoesAgtech]
 
+    // [AP_ShoesAgtech] -------- Dosing motor (vít tải thức ăn tôm): servo xoay
+    // liên tục 360° --------
+    // @Param: DOS_CHAN
+    // @DisplayName: Servo output channel for dosing motor (1-indexed)
+    // @Description: Phải đặt SERVOx_FUNCTION=0 (None). Thư viện xuất PWM trực
+    //   tiếp ra kênh này để điều khiển động cơ servo 360 độ định lượng.
+    // @Range: 1 16
+    // @User: Standard
+    AP_GROUPINFO("DOS_CHAN", 25, AP_ShoesAgtech, _dos_chan, 10),
+
+    // @Param: DOS_RC
+    // @DisplayName: RC channel to toggle dosing motor on/off (1-indexed)
+    // @Description: PWM > 1500 -> bật động cơ (quay theo SA_DOS_SP/SA_DOS_RATE
+    //   quy đổi), PWM <= 1500 -> tắt (xuất 1500, dừng). VD: nút B trên tay
+    //   Skydroid T10 thường gán ở kênh 8.
+    // @Range: 1 16
+    // @User: Standard
+    AP_GROUPINFO("DOS_RC", 26, AP_ShoesAgtech, _dos_rc, 8),
+
+    // @Param: DOS_RATE
+    // @DisplayName: Dosing conversion ratio (gam ứng với 50us PWM lệch)
+    // @Description: Tỉ lệ quy đổi lượng thức ăn (gam) sang độ lệch PWM. Giá
+    //   trị là số gam tương ứng với 50us PWM lệch khỏi điểm dừng (1500). VD:
+    //   nhập 100 -> cứ 100g thì lệch 50us; nhập 200 -> cứ 200g thì lệch 50us
+    //   (tỉ lệ thấp hơn, motor đáp ứng "chậm" hơn theo SA_DOS_SP).
+    //   offset(us) = SA_DOS_SP * 50 / SA_DOS_RATE
+    // @Units: g
+    // @Range: 1 1000
+    // @User: Standard
+    AP_GROUPINFO("DOS_RATE", 27, AP_ShoesAgtech, _dos_rate, 100.0f),
+
+    // @Param: DOS_SP
+    // @DisplayName: Dosing setpoint (lượng thức ăn muốn cấp, gam)
+    // @Description: Người dùng nhập trực tiếp lượng thức ăn mong muốn (gam).
+    //   Firmware tự quy đổi ra độ lệch PWM theo tỉ lệ SA_DOS_RATE rồi cộng/trừ
+    //   vào điểm dừng 1500 tuỳ chiều quay SA_DOS_REV. VD nhập 1000 (1kg) với
+    //   SA_DOS_RATE=100 -> offset = 1000*50/100 = 500us.
+    // @Units: g
+    // @User: Standard
+    AP_GROUPINFO("DOS_SP", 28, AP_ShoesAgtech, _dos_sp, 0.0f),
+
+    // @Param: DOS_REV
+    // @DisplayName: Dosing motor direction
+    // @Description: Servo 360 độ, 1500=dừng. 0 = chiều thuận: PWM chạy trong
+    //   dải 800-1500 (800=tốc độ cao nhất, giảm dần độ lệch về 1500). 1 =
+    //   chiều ngược: PWM chạy trong dải 1500-2200 (xuất xung tăng dần từ 1500
+    //   lên 2200, motor tự đảo chiều theo mức xung này).
+    // @Values: 0:Thuan (800-1500), 1:Nguoc (1500-2200)
+    // @User: Standard
+    AP_GROUPINFO("DOS_REV", 29, AP_ShoesAgtech, _dos_rev, 0),
+
+    // @Param: DOS_LOG
+    // @DisplayName: Dosing motor console log enable
+    // @Description: In ra console trạng thái ON/OFF, setpoint (SA_DOS_SP) và
+    //   PWM đang xuất ra của dosing motor mỗi SA_DOS_LOG_MS mili-giây.
+    // @Values: 0:Disabled,1:Enabled
+    // @User: Standard
+    AP_GROUPINFO("DOS_LOG", 30, AP_ShoesAgtech, _dos_log_enable, 0),
+
+    // @Param: DOS_LOG_MS
+    // @DisplayName: Dosing motor console log interval (ms)
+    // @Description: Khoảng thời gian giữa hai lần in log dosing motor ra
+    //   console khi SA_DOS_LOG=1.
+    // @Range: 100 60000
+    // @Units: ms
+    // @User: Advanced
+    AP_GROUPINFO("DOS_LOG_MS", 31, AP_ShoesAgtech, _dos_log_ms, 1000),
+    // [/AP_ShoesAgtech]
+
     AP_GROUPEND};
 
 AP_ShoesAgtech::AP_ShoesAgtech()
@@ -212,6 +281,10 @@ AP_ShoesAgtech::AP_ShoesAgtech()
       _pump_pwm(0), _flow_target(0.0f), _pid_integral(0.0f),
       _pid_output_lpf(0.0f), _pid_last_ms(0), _last_pump_chan(-1),
       _last_pump_func_val(-1), _pump_config_ok(false), _last_warn_ms(0),
+      // [AP_ShoesAgtech] dosing motor initial state
+      _dos_pwm(1500), _dos_config_ok(false), _dos_warn_ms(0),
+      _dos_was_ok(false), _dos_was_on(false), _dos_last_log_ms(0),
+      // [/AP_ShoesAgtech]
       // [AP_ShoesAgtech] pH sensor initial state
       _ph_uart(nullptr), _ph_update_ms(0), _ph_req_sent_ms(0),
       _ph_req_pending(false), _ph_last_good_ms(0), _ph_nodata_warn_ms(0),
@@ -277,6 +350,10 @@ void AP_ShoesAgtech::update(void) {
 
   // [AP_ShoesAgtech] poll pH sensor over Modbus RTU
   _ph_update();
+  // [/AP_ShoesAgtech]
+
+  // [AP_ShoesAgtech] dosing motor — RC on/off + rate-to-PWM conversion
+  _update_dosing_motor();
   // [/AP_ShoesAgtech]
 
   uint32_t now = AP_HAL::millis();
@@ -503,6 +580,134 @@ void AP_ShoesAgtech::_write_pump_pwm(uint16_t pwm) {
   uint8_t chan_idx = (uint8_t)constrain_int16(_pump_chan.get() - 1, 0, 15);
   SRV_Channels::set_output_pwm_chan(chan_idx, pwm);
 }
+
+// =============================================================
+// [AP_ShoesAgtech] DOSING MOTOR — vít tải thức ăn tôm, servo xoay liên tục 360°
+//
+// RC SA_DOS_RC bật/tắt: PWM > 1500 -> bật (quay theo SA_DOS_SP quy đổi qua tỉ
+// lệ SA_DOS_RATE), PWM <= 1500 (kể cả mất tín hiệu = 0) -> tắt, xuất 1500
+// (dừng).
+//
+// Quy đổi lượng thức ăn (SA_DOS_SP, gam) -> độ lệch PWM:
+//   offset = SA_DOS_SP * 50 / SA_DOS_RATE
+//   (SA_DOS_RATE = số gam ứng với 50us lệch; vd RATE=100 -> 100g = 50us lệch)
+//
+// Chiều quay theo SA_DOS_REV (servo 360°, 1500 = dừng):
+//   0 = thuận: pwm = constrain(1500 - offset,  800, 1500)  (800 = nhanh nhất)
+//   1 = ngược: pwm = constrain(1500 + offset, 1500, 2200)
+// Yêu cầu SERVOx_FUNCTION = 0 (None) trên kênh SA_DOS_CHAN.
+// =============================================================
+
+// =============================================================
+// DOSING CHANNEL CONFIG CHECK
+// Servo SA_DOS_CHAN BẮT BUỘC phải thoả cả 4 điều kiện mới cho phép
+// motor chạy (dù bấm nút SA_DOS_RC):
+//   FUNCTION = 0 (None), MIN = 800, TRIM = 1500, MAX = 2200
+// Sai điều kiện nào -> chỉ báo (các) điều kiện đó, lặp lại mỗi 5 giây.
+// Khi vừa đạt đủ cả 4 -> báo "setup thành công" một lần.
+// =============================================================
+void AP_ShoesAgtech::_check_dosing_config(void) {
+  uint8_t chan_idx = (uint8_t)constrain_int16(_dos_chan.get() - 1, 0, 15);
+  SRV_Channel *ch = SRV_Channels::srv_channel(chan_idx);
+  int32_t func_val = (int32_t)SRV_Channels::channel_function(chan_idx);
+  int32_t chan = (int32_t)_dos_chan.get();
+
+  bool have_chan = (ch != nullptr);
+  bool func_ok = have_chan && (func_val == (int32_t)SRV_Channel::k_none);
+  bool min_ok = have_chan && (ch->get_output_min() == 800);
+  bool trim_ok = have_chan && (ch->get_trim() == 1500);
+  bool max_ok = have_chan && (ch->get_output_max() == 2200);
+
+  _dos_config_ok = func_ok && min_ok && trim_ok && max_ok;
+
+  if (_dos_config_ok) {
+    if (!_dos_was_ok) {
+      gcs().send_text(MAV_SEVERITY_INFO,
+                      "SA: SERVO%d setup thanh cong - dosing motor san sang",
+                      (int)chan);
+    }
+    _dos_was_ok = true;
+    return;
+  }
+  _dos_was_ok = false;
+
+  uint32_t now = AP_HAL::millis();
+  if (now - _dos_warn_ms < 5000) {
+    return;
+  }
+  _dos_warn_ms = now;
+
+  if (!have_chan) {
+    gcs().send_text(MAV_SEVERITY_WARNING, "SA: SERVO%d khong ton tai",
+                    (int)chan);
+    return;
+  }
+  if (!func_ok) {
+    gcs().send_text(MAV_SEVERITY_WARNING,
+                    "SA: SERVO%d FUNCTION=%d, can dat =0 (None)", (int)chan,
+                    (int)func_val);
+  }
+  if (!min_ok) {
+    gcs().send_text(MAV_SEVERITY_WARNING, "SA: SERVO%d MIN=%u, can dat =800",
+                    (int)chan, (unsigned)ch->get_output_min());
+  }
+  if (!trim_ok) {
+    gcs().send_text(MAV_SEVERITY_WARNING, "SA: SERVO%d TRIM=%u, can dat =1500",
+                    (int)chan, (unsigned)ch->get_trim());
+  }
+  if (!max_ok) {
+    gcs().send_text(MAV_SEVERITY_WARNING, "SA: SERVO%d MAX=%u, can dat =2200",
+                    (int)chan, (unsigned)ch->get_output_max());
+  }
+}
+
+void AP_ShoesAgtech::_update_dosing_motor(void) {
+  _check_dosing_config();
+  if (!_dos_config_ok) {
+    // Cấu hình servo sai — không cho chạy, kể cả khi bấm SA_DOS_RC
+    _dos_pwm = 1500;
+    return;
+  }
+
+  uint8_t rc_idx = (uint8_t)constrain_int16(_dos_rc.get() - 1, 0, 15);
+  uint16_t rc_pwm = RC_Channels::get_radio_in(rc_idx);
+  bool motor_on = (rc_pwm > 1500);
+
+  if (motor_on != _dos_was_on) {
+    _dos_was_on = motor_on;
+    gcs().send_text(MAV_SEVERITY_INFO, "SA: Dosing motor %s",
+                    motor_on ? "ON" : "OFF");
+  }
+
+  if (motor_on) {
+    float ratio = _dos_rate.get();
+    float offset = (ratio > 0.0f) ? (_dos_sp.get() * 50.0f / ratio) : 0.0f;
+    float pwm_f;
+    if (_dos_rev.get() == 0) {
+      pwm_f = constrain_float(1500.0f - offset, 800.0f, 1500.0f);
+    } else {
+      pwm_f = constrain_float(1500.0f + offset, 1500.0f, 2200.0f);
+    }
+    _dos_pwm = (uint16_t)pwm_f;
+  } else {
+    _dos_pwm = 1500;
+  }
+
+  uint8_t chan_idx = (uint8_t)constrain_int16(_dos_chan.get() - 1, 0, 15);
+  SRV_Channels::set_output_pwm_chan(chan_idx, _dos_pwm);
+
+  // ---- DOSING CONSOLE LOG (SA_DOS_LOG) ----
+  if (_dos_log_enable.get() > 0) {
+    uint32_t now = AP_HAL::millis();
+    if (now - _dos_last_log_ms >= (uint32_t)_dos_log_ms.get()) {
+      _dos_last_log_ms = now;
+      gcs().send_text(MAV_SEVERITY_INFO, "[DOS] %s SP:%.0fg PWM:%u",
+                      motor_on ? "ON" : "OFF", (double)_dos_sp.get(),
+                      (unsigned)_dos_pwm);
+    }
+  }
+}
+// [/AP_ShoesAgtech]
 
 // =============================================================
 // [AP_ShoesAgtech] pH SENSOR — Nengshi ASPS3801D-0.5M

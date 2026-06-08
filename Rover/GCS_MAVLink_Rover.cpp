@@ -278,7 +278,8 @@ void GCS_MAVLINK_Rover::send_shoesagtech_debug_arrays() {
   const char data_name[10] = "SA_DATA";
   // Khi không có lưu lượng, EMA/MA có thể đọng lại giá trị rất nhỏ kiểu
   // 1.2e-7 (hiển thị dạng số mũ "e" gây nhiễu trên GCS) — ép về 0 cho sạch.
-  // Dải hoạt động cảm biến YF-S402B là 0.3–6 L/min nên dưới 0.01 chắc chắn là nhiễu.
+  // Dải hoạt động cảm biến YF-S402B là 0.3–6 L/min nên dưới 0.01 chắc chắn là
+  // nhiễu.
   const float FLOW_NOISE_FLOOR = 0.01f;
   auto declutter_flow = [&](float v) -> float {
     return (fabsf(v) < FLOW_NOISE_FLOOR) ? 0.0f : v;
@@ -300,7 +301,8 @@ void GCS_MAVLINK_Rover::send_shoesagtech_debug_arrays() {
     data[8] = sa.get_alk_mgl();
   }
 
-  // Gộp chung tất cả vào một mảng nên array_id không còn ý nghĩa phân biệt — để 0
+  // Gộp chung tất cả vào một mảng nên array_id không còn ý nghĩa phân biệt — để
+  // 0
   mavlink_msg_debug_float_array_send(chan, now_ms, data_name, 0, data);
 }
 // [/AP_ShoesAgtech] -------------------------------------------------------
