@@ -245,19 +245,31 @@ void GCS_MAVLINK_Rover::send_water_depth() {
 #endif // AP_RANGEFINDER_ENABLED
 
 // [AP_ShoesAgtech] -------------------------------------------------------
-// TEST: stream flow + pH data to GCS in a single DEBUG_FLOAT_ARRAY (msg 350)
-//   array_id=0 "SA_DATA" (single combined array, id unused):
+// Stream all module data to GCS in a single DEBUG_FLOAT_ARRAY (msg 350)
+//   array_id=0 "SA_DATA" layout (theo thứ tự module):
+//
+//   Module 1 — Flow sensor + Spray controller:
 //     [0] flow_rate     (L/min, EMA)
 //     [1] flow_rate_avg (L/min, MA)
-//     [2] flow_target   (L/min)
+//     [2] flow_target   (L/min) — mode 1 = SA_FLOW_SP, mode 2 = auto rate
 //     [3] pump_pwm      (us)
-//     [4] ph            (moving-avg)         }
-//     [5] ph_mv         (mV)                 }
-//     [6] ph_temp       (°C)                 }
-//     [7] alk_dkh       (dKH)                }
-//     [8] alk_mgl       (mg/L CaCO3)         }
-// Hiển thị trong Mission Planner: Ctrl+F > MAVLink Inspector >
-// DEBUG_FLOAT_ARRAY
+//     [4] spray_mode    (0=PASSTHROUGH 1=FLOW_PID 2=AUTO_RATE)
+//
+//   Module 2 — pH sensor:
+//     [5] ph            (moving-avg, 10 mẫu)    }
+//     [6] ph_mv         (mV, signed)             }
+//     [7] ph_temp       (°C)                     } chỉ khi SA_PH_EN=1
+//     [8] alk_dkh       (dKH)                    } AND ph_has_data()
+//     [9] alk_mgl       (mg/L CaCO3)             }
+//    [10] delta_ph      (pH chiều - pH sáng)     }
+//    [11] slot_status   (0=FULL 1=MORN 2=AFT 3=PREV 4=NODATA)
+//
+//   Module 3 — Dosing motor:
+//    [12] dos_sp        (gam, SA_DOS_SP)
+//    [13] dos_rate      (gam/50us, SA_DOS_RATE)
+//    [14] dos_pwm       (us)
+//
+// Hiển thị trong Mission Planner: Ctrl+F > MAVLink Inspector > DEBUG_FLOAT_ARRAY
 void GCS_MAVLINK_Rover::send_shoesagtech_debug_arrays() {
   if (!HAVE_PAYLOAD_SPACE(chan, DEBUG_FLOAT_ARRAY)) {
     return;
@@ -286,23 +298,31 @@ void GCS_MAVLINK_Rover::send_shoesagtech_debug_arrays() {
   };
 
   float data[58] = {};
+
+  // ---- Module 1: Flow sensor + Spray controller [0..4] ----
   data[0] = declutter_flow(sa.get_flow_rate_lmin());
   data[1] = declutter_flow(sa.get_flow_rate_avg());
   data[2] = sa.get_flow_target();
   data[3] = (float)sa.get_pump_pwm();
+  data[4] = (float)sa.get_spray_mode();
 
-  // pH mất tín hiệu/chưa kết nối (quá 30s không có frame hợp lệ) -> giữ
-  // nguyên data[4..8] = 0 thay vì gửi giá trị cũ/rác lên GCS
+  // ---- Module 2: pH sensor [5..11] ----
+  // pH mất tín hiệu/chưa kết nối -> giữ data[5..11] = 0 (không gửi rác)
   if (sa.ph_is_enabled() && sa.ph_has_data()) {
-    data[4] = sa.get_ph();
-    data[5] = sa.get_ph_mv();
-    data[6] = sa.get_ph_temp();
-    data[7] = sa.get_alk_dkh();
-    data[8] = sa.get_alk_mgl();
+    data[5]  = sa.get_ph();
+    data[6]  = sa.get_ph_mv();
+    data[7]  = sa.get_ph_temp();
+    data[8]  = sa.get_alk_dkh();
+    data[9]  = sa.get_alk_mgl();
+    data[10] = sa.get_delta_ph();
+    data[11] = (float)sa.get_alk_slot_status();
   }
 
-  // Gộp chung tất cả vào một mảng nên array_id không còn ý nghĩa phân biệt — để
-  // 0
+  // ---- Module 3: Dosing motor [12..14] ----
+  data[12] = sa.get_dosing_sp();
+  data[13] = sa.get_dosing_rate();
+  data[14] = (float)sa.get_dosing_pwm();
+
   mavlink_msg_debug_float_array_send(chan, now_ms, data_name, 0, data);
 }
 // [/AP_ShoesAgtech] -------------------------------------------------------
@@ -444,10 +464,10 @@ bool GCS_MAVLINK_Rover::try_send_message(enum ap_message id) {
     break;
 
     // [AP_ShoesAgtech] -------------------------------------------------------
-    // Flow + pH data streamed to GCS via DEBUG_FLOAT_ARRAY (test):
-    //   - "SA_DATA" array_id=0: [flow_rate, flow_rate_avg, flow_target,
-    //   pump_pwm,
-    //                            ph, ph_mv, ph_temp, alk_dkh, alk_mgl]
+    // Flow + pH data streamed to GCS via DEBUG_FLOAT_ARRAY:
+    //   "SA_DATA": [flow_rate, flow_rate_avg, pump_pwm, dosing_pwm,
+    //               flow_target, spray_mode, ph, ph_mv, ph_temp,
+    //               alk_dkh, alk_mgl]
     // Also available via:
     //   - SA_LOG_EN/SA_PH_LOG → console STATUSTEXT
     //   - Log card → FLWD / PHWD binary logs (Rover/Log.cpp)

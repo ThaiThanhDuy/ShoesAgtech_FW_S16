@@ -23,8 +23,10 @@ public:
   uint16_t get_pump_pwm(void)       const { return _pump_pwm; }
   float    get_flow_target(void)    const { return _flow_target; }
 
-  // [AP_ShoesAgtech] Dosing motor getter (for logging)
+  // [AP_ShoesAgtech] Dosing motor getters (for logging)
   uint16_t get_dosing_pwm(void)     const { return _dos_pwm; }
+  float    get_dosing_sp(void)      const { return _dos_sp.get(); }
+  float    get_dosing_rate(void)    const { return _dos_rate.get(); }
   // [/AP_ShoesAgtech]
 
   // [AP_ShoesAgtech] pH sensor getters — Nengshi ASPS3801D-0.5M via Modbus RTU
@@ -94,6 +96,10 @@ private:
   AP_Int16 _dos_log_ms;     // SA_DOS_LOG_MS  khoang thoi gian giua hai lan in log (ms, mac dinh 1000)
   // [/AP_ShoesAgtech]
 
+  // [AP_ShoesAgtech] Parameter: simulation mode (slot 32)
+  AP_Int8  _simulation;  // SA_SIM  0=real sensors, 1=simulated data
+  // [/AP_ShoesAgtech]
+
   // ---- Flow sensor state — YF-S402B (0.3–6 L/min) ----
   uint32_t _last_timestamp_ms;
   uint32_t _last_pulse_snapshot;
@@ -114,6 +120,10 @@ private:
   uint8_t  _spray_mode;         // 0=PASSTHROUGH 1=FLOW_PID 2=AUTO_RATE
   uint16_t _pump_pwm;
   float    _flow_target;
+
+  // [AP_ShoesAgtech] Simulation state
+  float    _sim_speed;           // simulated groundspeed (m/s) for mode 2 testing
+  // [/AP_ShoesAgtech]
   float    _pid_integral;
   float    _pid_output_lpf;
   uint32_t _pid_last_ms;
@@ -189,6 +199,10 @@ private:
   // [AP_ShoesAgtech] Private methods — dosing motor
   void     _check_dosing_config(void);
   void     _update_dosing_motor(void);
+  // [/AP_ShoesAgtech]
+
+  // [AP_ShoesAgtech] Private method — simulation
+  void     _run_simulation(void);
   // [/AP_ShoesAgtech]
 
   // [AP_ShoesAgtech] Private methods — pH sensor

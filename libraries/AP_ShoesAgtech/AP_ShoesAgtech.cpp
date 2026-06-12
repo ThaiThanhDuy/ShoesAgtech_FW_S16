@@ -272,14 +272,27 @@ const AP_Param::GroupInfo AP_ShoesAgtech::var_info[] = {
     AP_GROUPINFO("DOS_LOG_MS", 31, AP_ShoesAgtech, _dos_log_ms, 1000),
     // [/AP_ShoesAgtech]
 
+    // [AP_ShoesAgtech] Simulation mode (slot 32)
+    // @Param: SIM
+    // @DisplayName: Simulation mode
+    // @Description: Khi bật (1), bỏ qua cảm biến thật và inject dữ liệu giả lập
+    //   có biến thiên hình sin để test hiển thị GCS và logic mode 1/2. Khi tắt (0)
+    //   quay về đọc sensor thật.
+    // @Values: 0:Disabled,1:Enabled
+    // @User: Standard
+    AP_GROUPINFO("SIM", 32, AP_ShoesAgtech, _simulation, 0),
+    // [/AP_ShoesAgtech]
+
     AP_GROUPEND};
 
 AP_ShoesAgtech::AP_ShoesAgtech()
     : _last_timestamp_ms(0), _last_pulse_snapshot(0), _last_log_ms(0),
       _flow_rate_filtered(0.0f), _flow_rate_avg(0.0f), _is_initialized(false),
       _buffer_index(0), _buffer_sum(0.0f), _samples_count(0), _spray_mode(0),
-      _pump_pwm(0), _flow_target(0.0f), _pid_integral(0.0f),
-      _pid_output_lpf(0.0f), _pid_last_ms(0), _last_pump_chan(-1),
+      _pump_pwm(0), _flow_target(0.0f),
+      _sim_speed(0.0f),
+      _pid_integral(0.0f), _pid_output_lpf(0.0f), _pid_last_ms(0),
+      _last_pump_chan(-1),
       _last_pump_func_val(-1), _pump_config_ok(false), _last_warn_ms(0),
       // [AP_ShoesAgtech] dosing motor initial state
       _dos_pwm(1500), _dos_config_ok(false), _dos_warn_ms(0),
@@ -348,8 +361,13 @@ void AP_ShoesAgtech::update(void) {
 
   _check_pump_config();
 
-  // [AP_ShoesAgtech] poll pH sensor over Modbus RTU
-  _ph_update();
+  // [AP_ShoesAgtech] simulation or real sensor path
+  if (_simulation.get() > 0) {
+    _run_simulation();
+  } else {
+    // poll pH sensor over Modbus RTU (real hardware only)
+    _ph_update();
+  }
   // [/AP_ShoesAgtech]
 
   // [AP_ShoesAgtech] dosing motor — RC on/off + rate-to-PWM conversion
@@ -371,28 +389,43 @@ void AP_ShoesAgtech::update(void) {
   if (delta_t_ms >= 100) {
     _last_timestamp_ms = now;
 
-    uint32_t snap = _pulse_count;
-    uint32_t pulses = (snap >= _last_pulse_snapshot)
-                          ? (snap - _last_pulse_snapshot)
-                          : (UINT32_MAX - _last_pulse_snapshot) + snap + 1;
-    _last_pulse_snapshot = snap;
+    if (_simulation.get() > 0) {
+      // Simulation: _flow_rate_filtered/_flow_rate_avg already set by _run_simulation()
+      // Still need to advance the moving-average buffer with the simulated value
+      _buffer_sum -= _sample_buffer[_buffer_index];
+      _sample_buffer[_buffer_index] = _flow_rate_filtered;
+      _buffer_sum += _flow_rate_filtered;
+      _buffer_index = (_buffer_index + 1) % WINDOW_SIZE;
+      if (_samples_count < WINDOW_SIZE) {
+        _samples_count++;
+      }
+      if (_samples_count > 0) {
+        _flow_rate_avg = _buffer_sum / _samples_count;
+      }
+    } else {
+      uint32_t snap = _pulse_count;
+      uint32_t pulses = (snap >= _last_pulse_snapshot)
+                            ? (snap - _last_pulse_snapshot)
+                            : (UINT32_MAX - _last_pulse_snapshot) + snap + 1;
+      _last_pulse_snapshot = snap;
 
-    float dt = delta_t_ms * 0.001f;
-    float cal = (_cal_factor.get() > 0.0f) ? _cal_factor.get() : 3874.5f;
-    float raw = (dt > 0.0f) ? ((float)pulses / cal) * (60.0f / dt) : 0.0f;
+      float dt = delta_t_ms * 0.001f;
+      float cal = (_cal_factor.get() > 0.0f) ? _cal_factor.get() : 3874.5f;
+      float raw = (dt > 0.0f) ? ((float)pulses / cal) * (60.0f / dt) : 0.0f;
 
-    float alpha = constrain_float(_ema_alpha.get(), 0.01f, 1.0f);
-    _flow_rate_filtered = _flow_rate_filtered * (1.0f - alpha) + raw * alpha;
+      float alpha = constrain_float(_ema_alpha.get(), 0.01f, 1.0f);
+      _flow_rate_filtered = _flow_rate_filtered * (1.0f - alpha) + raw * alpha;
 
-    _buffer_sum -= _sample_buffer[_buffer_index];
-    _sample_buffer[_buffer_index] = _flow_rate_filtered;
-    _buffer_sum += _flow_rate_filtered;
-    _buffer_index = (_buffer_index + 1) % WINDOW_SIZE;
-    if (_samples_count < WINDOW_SIZE) {
-      _samples_count++;
-    }
-    if (_samples_count > 0) {
-      _flow_rate_avg = _buffer_sum / _samples_count;
+      _buffer_sum -= _sample_buffer[_buffer_index];
+      _sample_buffer[_buffer_index] = _flow_rate_filtered;
+      _buffer_sum += _flow_rate_filtered;
+      _buffer_index = (_buffer_index + 1) % WINDOW_SIZE;
+      if (_samples_count < WINDOW_SIZE) {
+        _samples_count++;
+      }
+      if (_samples_count > 0) {
+        _flow_rate_avg = _buffer_sum / _samples_count;
+      }
     }
   }
 
@@ -434,7 +467,7 @@ void AP_ShoesAgtech::update(void) {
 
   case 2: {
     // ---- MODE 2: AUTO RATE — L/ha × speed × boom → target ----
-    float speed_ms = AP::ahrs().groundspeed();
+    float speed_ms = (_simulation.get() > 0) ? _sim_speed : AP::ahrs().groundspeed();
     if (speed_ms < 0.1f) {
       // Stopped: release override, reset integral
       _flow_target = 0.0f;
@@ -462,9 +495,10 @@ void AP_ShoesAgtech::update(void) {
   if (_flow_log_enable.get() > 0 &&
       now - _last_log_ms >= (uint32_t)_flow_log_ms.get()) {
     _last_log_ms = now;
+    const char *flow_pfx = (_simulation.get() > 0) ? "[SIM][FLOW]" : "[FLOW]";
     gcs().send_text(MAV_SEVERITY_INFO,
-                    "[FLOW] M%u Tgt:%.1f Act:%.1f Avg:%.1f PWM:%u",
-                    (unsigned)_spray_mode, (double)_flow_target,
+                    "%s M%u Tgt:%.1f Act:%.1f Avg:%.1f PWM:%u",
+                    flow_pfx, (unsigned)_spray_mode, (double)_flow_target,
                     (double)_flow_rate_filtered, (double)_flow_rate_avg,
                     (unsigned)_pump_pwm);
   }
@@ -701,9 +735,9 @@ void AP_ShoesAgtech::_update_dosing_motor(void) {
     uint32_t now = AP_HAL::millis();
     if (now - _dos_last_log_ms >= (uint32_t)_dos_log_ms.get()) {
       _dos_last_log_ms = now;
-      gcs().send_text(MAV_SEVERITY_INFO, "[DOS] %s SP:%.0fg PWM:%u",
-                      motor_on ? "ON" : "OFF", (double)_dos_sp.get(),
-                      (unsigned)_dos_pwm);
+      gcs().send_text(MAV_SEVERITY_INFO, "[DOS] SERVO%d %s SP:%.0fg PWM:%u",
+                      (int)_dos_chan.get(), motor_on ? "ON" : "OFF",
+                      (double)_dos_sp.get(), (unsigned)_dos_pwm);
     }
   }
 }
@@ -904,12 +938,13 @@ void AP_ShoesAgtech::_ph_update(void) {
       slot_tag = "NODATA";
       break; // no data yet
     }
-    gcs().send_text(MAV_SEVERITY_INFO, "[WM] pH:%.2f MA:%.2f Tmp:%.1fC mV:%d",
-                    (double)_ph_value, (double)_ph_value_ma, (double)_ph_temp,
-                    (int)_ph_mv);
-    gcs().send_text(
-        MAV_SEVERITY_INFO, "[WM] Alk:%.2fdKH %.1fmg/L dPH:%+.2f [%s]",
-        (double)_alk_dkh, (double)_alk_mgl, (double)_delta_ph, slot_tag);
+    const char *ph_pfx = (_simulation.get() > 0) ? "[SIM][WM]" : "[WM]";
+    gcs().send_text(MAV_SEVERITY_INFO, "%s pH:%.2f MA:%.2f Tmp:%.1fC mV:%d",
+                    ph_pfx, (double)_ph_value, (double)_ph_value_ma,
+                    (double)_ph_temp, (int)_ph_mv);
+    gcs().send_text(MAV_SEVERITY_INFO, "%s Alk:%.2fdKH %.1fmg/L dPH:%+.2f [%s]",
+                    ph_pfx, (double)_alk_dkh, (double)_alk_mgl,
+                    (double)_delta_ph, slot_tag);
   }
 }
 
@@ -1068,5 +1103,50 @@ float AP_ShoesAgtech::_ph_calc_alkalinity(float ph, float base_kh_dkh,
   }
 
   return base_kh_dkh * constrain_float(pf * tf, 0.55f, 1.75f);
+}
+
+// =============================================================
+// SIMULATION — SA_SIM = 1
+// Generates sinusoidal fake sensor data so modes 1/2 and GCS
+// display can be verified without real hardware attached.
+// Called from update() instead of _ph_update() when active.
+// Flow values are written directly to _flow_rate_filtered and
+// _sim_speed; the moving-average buffer is advanced by the
+// caller (update()) as usual.
+// =============================================================
+void AP_ShoesAgtech::_run_simulation(void) {
+  uint32_t now = AP_HAL::millis();
+  float t = now * 0.001f;  // seconds since boot
+
+  // ---- Module 1: flow (2.5 ± 1.5 L/min, 20s period) ----
+  _flow_rate_filtered = 2.5f + 1.5f * sinf(2.0f * M_PI * t / 20.0f);
+
+  // ---- Module 1: simulated groundspeed (1.0 ± 0.8 m/s, 30s period) ----
+  _sim_speed = constrain_float(1.0f + 0.8f * sinf(2.0f * M_PI * t / 30.0f),
+                               0.1f, 2.0f);
+
+  // ---- Module 2: pH sensor values ----
+  // pH: 7.3 ± 0.4, 60s period
+  float ph_sim  = 7.3f + 0.4f * sinf(2.0f * M_PI * t / 60.0f);
+  // Temperature: 28.0 ± 2.0°C, 120s period
+  float temp_sim = 28.0f + 2.0f * sinf(2.0f * M_PI * t / 120.0f);
+  // Electrode mV from Nernst: ~59.16 mV/pH unit relative to pH 7
+  int16_t mv_sim = (int16_t)((7.0f - ph_sim) * 59.16f);
+  // Alkalinity: 4.0 ± 0.8 dKH, 90s period
+  float dkh_sim  = 4.0f + 0.8f * sinf(2.0f * M_PI * t / 90.0f);
+  float mgl_sim  = dkh_sim * 17.85f;
+
+  _ph_value          = ph_sim;
+  _ph_value_ema      = ph_sim;
+  _ph_value_ma       = ph_sim;
+  _ph_mv             = mv_sim;
+  _ph_temp           = temp_sim;
+  _alk_dkh           = dkh_sim;
+  _alk_mgl           = mgl_sim;
+  _delta_ph          = 0.0f;
+  _alk_slot_status   = 0;     // FULL so ph_has_data()-like checks pass
+
+  // Keep ph_has_data() returning true
+  _ph_last_good_ms = now;
 }
 // [/AP_ShoesAgtech]

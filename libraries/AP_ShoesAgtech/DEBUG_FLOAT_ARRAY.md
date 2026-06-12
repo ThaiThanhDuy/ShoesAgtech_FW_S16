@@ -29,18 +29,41 @@ theo tốc độ stream `SR3_EXTRA3` của Rover).
 
 ## 2. Layout của `data[]` (gói `"SA_DATA"`, `array_id = 0`)
 
-| Index | Tên             | Đơn vị         | Mô tả                                              | Luôn có? |
-|-------|-----------------|----------------|----------------------------------------------------|----------|
-| 0     | `flow_rate`     | L/min          | Lưu lượng tức thời, lọc EMA (`SA_EMA_AL`)          | ✓        |
-| 1     | `flow_rate_avg` | L/min          | Lưu lượng trung bình trượt (moving-average, 10 mẫu)| ✓        |
-| 2     | `flow_target`   | L/min          | Lưu lượng mục tiêu (mode 1 = `SA_FLOW_SP`, mode 2 = tính từ `SA_APP_RATE`×tốc độ×`SA_BOOM_W`) | ✓ |
-| 3     | `pump_pwm`      | µs (PWM)       | Giá trị PWM hiện đang xuất ra bơm                  | ✓        |
-| 4     | `ph`            | pH             | Giá trị pH trung bình trượt (moving-average)       | chỉ khi pH bật & có dữ liệu* |
-| 5     | `ph_mv`         | mV             | Điện áp điện cực pH (có dấu)                       | chỉ khi pH bật & có dữ liệu* |
-| 6     | `ph_temp`       | °C             | Nhiệt độ đo được từ cảm biến pH                    | chỉ khi pH bật & có dữ liệu* |
-| 7     | `alk_dkh`       | dKH            | Độ kiềm ước tính (carbonate hardness)              | chỉ khi pH bật & có dữ liệu* |
-| 8     | `alk_mgl`       | mg/L CaCO₃     | Độ kiềm ước tính, quy đổi mg/L CaCO₃               | chỉ khi pH bật & có dữ liệu* |
-| 9–57  | _(không dùng)_  | —              | Luôn bằng `0.0`                                    | —        |
+### Module 1 — Flow sensor + Spray controller (`data[0..4]`)
+
+| Index | Tên             | Đơn vị | Mô tả                                                                                           | Luôn có? |
+|-------|-----------------|--------|-------------------------------------------------------------------------------------------------|----------|
+| 0     | `flow_rate`     | L/min  | Lưu lượng tức thời, lọc EMA (`SA_EMA_AL`). Noise < 0.01 L/min ép về 0.                        | ✓        |
+| 1     | `flow_rate_avg` | L/min  | Lưu lượng trung bình trượt (moving-average, 10 mẫu). Noise < 0.01 L/min ép về 0.               | ✓        |
+| 2     | `flow_target`   | L/min  | Lưu lượng mục tiêu. Mode 0 = 0.0; mode 1 = `SA_FLOW_SP`; mode 2 = `SA_APP_RATE × speed × SA_BOOM_W × 0.006`. | ✓ |
+| 3     | `pump_pwm`      | µs     | PWM hiện đang xuất ra kênh bơm (`SA_PUMP_CHAN`). Dải 800–2200.                                  | ✓        |
+| 4     | `spray_mode`    | 0/1/2  | Chế độ phun đang chạy: **0** = PASSTHROUGH, **1** = FLOW PID, **2** = AUTO RATE.               | ✓        |
+
+### Module 2 — pH sensor (`data[5..11]`)
+
+| Index | Tên             | Đơn vị    | Mô tả                                                                      | Luôn có? |
+|-------|-----------------|-----------|----------------------------------------------------------------------------|----------|
+| 5     | `ph`            | —         | Giá trị pH trung bình trượt (moving-average, 10 mẫu).                     | chỉ khi SA_PH_EN=1 & có dữ liệu* |
+| 6     | `ph_mv`         | mV        | Điện áp điện cực pH (signed).                                              | chỉ khi SA_PH_EN=1 & có dữ liệu* |
+| 7     | `ph_temp`       | °C        | Nhiệt độ nước (đã bù `SA_PH_TOFF`).                                       | chỉ khi SA_PH_EN=1 & có dữ liệu* |
+| 8     | `alk_dkh`       | dKH       | Độ kiềm ước tính (carbonate hardness).                                     | chỉ khi SA_PH_EN=1 & có dữ liệu* |
+| 9     | `alk_mgl`       | mg/L CaCO₃ | Độ kiềm quy đổi (`alk_dkh × 17.85`).                                    | chỉ khi SA_PH_EN=1 & có dữ liệu* |
+| 10    | `delta_ph`      | —         | ΔpH = pH chiều − pH sáng hôm nay. 0.0 nếu chưa đủ 2 slot.               | chỉ khi SA_PH_EN=1 & có dữ liệu* |
+| 11    | `slot_status`   | 0–4       | Chất lượng dữ liệu kiềm: **0**=FULL, **1**=MORN, **2**=AFT, **3**=PREV(hôm qua), **4**=NODATA. | chỉ khi SA_PH_EN=1 & có dữ liệu* |
+
+### Module 3 — Dosing motor (`data[12..14]`)
+
+| Index | Tên          | Đơn vị   | Mô tả                                                                                       | Luôn có? |
+|-------|--------------|----------|---------------------------------------------------------------------------------------------|----------|
+| 12    | `dos_sp`     | gam      | Setpoint lượng thức ăn (`SA_DOS_SP`). 0 khi chưa đặt.                                      | ✓        |
+| 13    | `dos_rate`   | gam/50µs | Tỉ lệ quy đổi (`SA_DOS_RATE`): số gam ứng với 50µs lệch khỏi 1500. Công thức: `offset = dos_sp × 50 / dos_rate`. | ✓ |
+| 14    | `dos_pwm`    | µs       | PWM đang xuất ra kênh định lượng (`SA_DOS_CHAN`). 1500 = dừng, 800/2200 = tốc độ max.      | ✓        |
+
+### Không dùng
+
+| Index  | Giá trị |
+|--------|---------|
+| 15–57  | Luôn = `0.0` |
 
 Ghi chú:
 - *"pH bật & có dữ liệu"* nghĩa là CẢ HAI điều kiện: `SA_PH_EN = 1` VÀ cảm
@@ -74,15 +97,24 @@ while True:
     d = msg.data
     payload = {
         'time_boot_ms':   msg.time_usec,     # thực chất là millis(), xem mục 1
+        # Module 1 — Flow sensor + Spray controller
         'flow_rate':      d[0],
         'flow_rate_avg':  d[1],
         'flow_target':    d[2],
         'pump_pwm':       d[3],
-        'ph':             d[4],
-        'ph_mv':          d[5],
-        'ph_temp':        d[6],
-        'alk_dkh':        d[7],
-        'alk_mgl':        d[8],
+        'spray_mode':     int(d[4]),         # 0=PASSTHROUGH 1=FLOW_PID 2=AUTO_RATE
+        # Module 2 — pH sensor (0.0 khi mất kết nối hoặc SA_PH_EN=0)
+        'ph':             d[5],
+        'ph_mv':          d[6],
+        'ph_temp':        d[7],
+        'alk_dkh':        d[8],
+        'alk_mgl':        d[9],
+        'delta_ph':       d[10],
+        'slot_status':    int(d[11]),   # 0=FULL 1=MORN 2=AFT 3=PREV 4=NODATA
+        # Module 3 — Dosing motor
+        'dos_sp':         d[12],
+        'dos_rate':       d[13],
+        'dos_pwm':        d[14],
     }
     # requests.post('https://your-server/api/sa-data', json=payload)
 ```
