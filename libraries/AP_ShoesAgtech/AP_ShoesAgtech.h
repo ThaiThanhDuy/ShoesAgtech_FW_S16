@@ -100,6 +100,15 @@ private:
   AP_Int8  _simulation;  // SA_SIM  0=real sensors, 1=simulated data
   // [/AP_ShoesAgtech]
 
+  // [AP_ShoesAgtech] Parameter: flow sensor GPIO pin (slot 33)
+  AP_Int16 _flow_pin;    // SA_FLOW_PIN  GPIO pin number (default 55)
+  // [/AP_ShoesAgtech]
+
+  // [AP_ShoesAgtech] Parameters: tank volume + flow mode (slots 34-35)
+  AP_Float _tank_vol;    // SA_TANK_VOL  tank volume in litres (0 = disabled)
+  AP_Int8  _flow_mode;   // SA_FLOW_MODE 0=direct setpoint, 1=tank+mission formula
+  // [/AP_ShoesAgtech]
+
   // ---- Flow sensor state — YF-S402B (0.3–6 L/min) ----
   uint32_t _last_timestamp_ms;
   uint32_t _last_pulse_snapshot;
@@ -123,6 +132,12 @@ private:
 
   // [AP_ShoesAgtech] Simulation state
   float    _sim_speed;           // simulated groundspeed (m/s) for mode 2 testing
+  // [/AP_ShoesAgtech]
+
+  // [AP_ShoesAgtech] Mission distance cache + tank monitor state
+  float    _mission_dist_m;      // cached total mission distance (m)
+  uint16_t _mission_ncmds;       // num_commands() when distance was last cached
+  uint32_t _tank_warn_ms;        // last time tank distance warning was printed
   // [/AP_ShoesAgtech]
   float    _pid_integral;
   float    _pid_output_lpf;
@@ -203,6 +218,10 @@ private:
 
   // [AP_ShoesAgtech] Private method — simulation
   void     _run_simulation(void);
+  // [/AP_ShoesAgtech]
+
+  // [AP_ShoesAgtech] Private method — mission distance
+  float    _get_mission_dist(void);
   // [/AP_ShoesAgtech]
 
   // [AP_ShoesAgtech] Private methods — pH sensor

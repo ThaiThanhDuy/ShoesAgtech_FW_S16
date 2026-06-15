@@ -1,6 +1,7 @@
 #include "AP_ShoesAgtech.h"
 #include <AP_AHRS/AP_AHRS.h>
 #include <AP_Math/AP_Math.h>
+#include <AP_Mission/AP_Mission.h>
 #include <AP_RTC/AP_RTC.h>
 #include <GCS_MAVLink/GCS.h>
 #include <RC_Channel/RC_Channel.h>
@@ -281,6 +282,38 @@ const AP_Param::GroupInfo AP_ShoesAgtech::var_info[] = {
     // @Values: 0:Disabled,1:Enabled
     // @User: Standard
     AP_GROUPINFO("SIM", 32, AP_ShoesAgtech, _simulation, 0),
+
+    // [AP_ShoesAgtech] Flow sensor GPIO pin (slot 33)
+    // @Param: FLOW_PIN
+    // @DisplayName: Flow sensor GPIO pin number
+    // @Description: Số chân GPIO kết nối tín hiệu cảm biến lưu lượng YF-S402B.
+    //   Mặc định = 55 (Pixhawk/CubeOrange AUX GPIO). Thay đổi theo phần cứng.
+    // @Range: 1 200
+    // @User: Standard
+    AP_GROUPINFO("FLOW_PIN", 33, AP_ShoesAgtech, _flow_pin, 55),
+
+    // [AP_ShoesAgtech] Tank volume + flow mode (slots 34-35)
+    // @Param: TANK_VOL
+    // @DisplayName: Tank volume (Litres)
+    // @Description: Dung tích tank nước/hóa chất (lít). Dùng để:
+    //   (1) tính flow_target trong mode 1 khi SA_FLOW_MODE=1
+    //   (2) hiển thị cảnh báo khoảng cách còn bơm được trong mode 2.
+    //   Đặt = 0 để tắt cả hai chức năng.
+    // @Units: L
+    // @Range: 0 2000
+    // @User: Standard
+    AP_GROUPINFO("TANK_VOL", 34, AP_ShoesAgtech, _tank_vol, 0.0f),
+
+    // @Param: FLOW_MODE
+    // @DisplayName: Mode 1 setpoint source
+    // @Description: Cách tính flow_target trong mode 1 (FLOW PID):
+    //   0 = trực tiếp từ SA_FLOW_SP (L/min) — như cũ.
+    //   1 = tự tính từ SA_TANK_VOL + tổng quãng đường mission:
+    //       flow = (tank_vol × speed × 60) / mission_dist.
+    //       Khi không có mission hoặc SA_TANK_VOL=0, fallback về SA_FLOW_SP.
+    // @Values: 0:DirectSetpoint,1:TankMissionFormula
+    // @User: Standard
+    AP_GROUPINFO("FLOW_MODE", 35, AP_ShoesAgtech, _flow_mode, 0),
     // [/AP_ShoesAgtech]
 
     AP_GROUPEND};
@@ -291,6 +324,9 @@ AP_ShoesAgtech::AP_ShoesAgtech()
       _buffer_index(0), _buffer_sum(0.0f), _samples_count(0), _spray_mode(0),
       _pump_pwm(0), _flow_target(0.0f),
       _sim_speed(0.0f),
+      // [AP_ShoesAgtech] mission distance cache + tank monitor
+      _mission_dist_m(0.0f), _mission_ncmds(0), _tank_warn_ms(0),
+      // [/AP_ShoesAgtech]
       _pid_integral(0.0f), _pid_output_lpf(0.0f), _pid_last_ms(0),
       _last_pump_chan(-1),
       _last_pump_func_val(-1), _pump_config_ok(false), _last_warn_ms(0),
@@ -309,7 +345,7 @@ AP_ShoesAgtech::AP_ShoesAgtech()
       _ph_aft_valid(false), _delta_ph(0.0f), _alk_today_dkh(0.0f),
       _alk_today_mgl(0.0f), _alk_prev_dkh(0.0f), _alk_prev_mgl(0.0f),
       _alk_slot_status(4), _rtc_last_day(0), _slot_warn_ms(0)
-// [/AP_ShoesAgtech]
+      // [/AP_ShoesAgtech]
 {
   memset(_sample_buffer, 0, sizeof(_sample_buffer));
   // [AP_ShoesAgtech]
@@ -323,9 +359,10 @@ void AP_ShoesAgtech::init(void) {
     return;
   }
 
-  hal.gpio->pinMode(55, HAL_GPIO_INPUT);
+  uint8_t flow_pin = (uint8_t)constrain_int16(_flow_pin.get(), 1, 200);
+  hal.gpio->pinMode(flow_pin, HAL_GPIO_INPUT);
 
-  if (!hal.gpio->attach_interrupt(55, irq_handler,
+  if (!hal.gpio->attach_interrupt(flow_pin, irq_handler,
                                   AP_HAL::GPIO::INTERRUPT_RISING)) {
     gcs().send_text(MAV_SEVERITY_CRITICAL, "ShoesAgtech: IRQ attach failed");
   } else {
@@ -458,12 +495,41 @@ void AP_ShoesAgtech::update(void) {
     break;
   }
 
-  case 1:
-    // ---- MODE 1: FLOW PID — track SA_FLOW_SP ----
-    _flow_target = _flow_setpoint.get();
+  case 1: {
+    // ---- MODE 1: FLOW PID ----
+    // [AP_ShoesAgtech] SA_FLOW_MODE selects setpoint source
+    if (_flow_mode.get() == 0 || _tank_vol.get() <= 0.0f) {
+      // FLOW_MODE 0 (hoặc tank chưa cài): setpoint trực tiếp từ SA_FLOW_SP
+      _flow_target = _flow_setpoint.get();
+    } else {
+      // FLOW_MODE 1: flow = (tank_vol × speed × 60) / mission_dist
+      float mission_dist = _get_mission_dist();
+      float speed_ms = (_simulation.get() > 0) ? _sim_speed : AP::ahrs().groundspeed();
+      if (mission_dist > 1.0f && speed_ms >= 0.05f) {
+        _flow_target = constrain_float(
+            (_tank_vol.get() * speed_ms * 60.0f) / mission_dist, 0.0f, 200.0f);
+      } else {
+        // FLOW_MODE=1: không đạt điều kiện → dừng bơm (0) và cảnh báo mỗi 5s
+        _flow_target = 0.0f;
+        if (now - _tank_warn_ms >= 5000U) {
+          _tank_warn_ms = now;
+          if (mission_dist <= 1.0f) {
+            gcs().send_text(MAV_SEVERITY_WARNING,
+                            "SA FM1: chua co mission (dist=%.1fm) - bom dung",
+                            (double)mission_dist);
+          } else {
+            gcs().send_text(MAV_SEVERITY_WARNING,
+                            "SA FM1: toc do qua thap (%.2fm/s) - bom dung",
+                            (double)speed_ms);
+          }
+        }
+      }
+    }
+    // [/AP_ShoesAgtech]
     _pump_pwm = _run_flow_pid(_flow_target, dt_pid);
     _write_pump_pwm(_pump_pwm);
     break;
+  }
 
   case 2: {
     // ---- MODE 2: AUTO RATE — L/ha × speed × boom → target ----
@@ -483,6 +549,19 @@ void AP_ShoesAgtech::update(void) {
       _flow_target = _app_rate.get() * speed_ms * _boom_width.get() * 0.006f;
       _pump_pwm = _run_flow_pid(_flow_target, dt_pid);
       _write_pump_pwm(_pump_pwm);
+      // [AP_ShoesAgtech] Tank monitor: cảnh báo khoảng cách còn bơm được (mỗi 30s)
+      if (_tank_vol.get() > 0.0f && _flow_target > 0.01f) {
+        uint32_t now_w = AP_HAL::millis();
+        if (now_w - _tank_warn_ms >= 30000U) {
+          _tank_warn_ms = now_w;
+          float dist_m = (_tank_vol.get() / _flow_target) * speed_ms * 60.0f;
+          gcs().send_text(MAV_SEVERITY_INFO,
+                          "SA: Tank du ~%.0fm (%.1fL @%.1fL/min)",
+                          (double)dist_m, (double)_tank_vol.get(),
+                          (double)_flow_target);
+        }
+      }
+      // [/AP_ShoesAgtech]
     }
     break;
   }
@@ -501,6 +580,15 @@ void AP_ShoesAgtech::update(void) {
                     flow_pfx, (unsigned)_spray_mode, (double)_flow_target,
                     (double)_flow_rate_filtered, (double)_flow_rate_avg,
                     (unsigned)_pump_pwm);
+    // Khi mode 1 + FLOW_MODE=1: in thêm thông tin công thức
+    if (_spray_mode == 1 && _flow_mode.get() == 1 && _tank_vol.get() > 0.0f) {
+      float mdist = _get_mission_dist();
+      float spd   = (_simulation.get() > 0) ? _sim_speed : AP::ahrs().groundspeed();
+      gcs().send_text(MAV_SEVERITY_INFO,
+                      "%s FM1 dist:%.0fm spd:%.2fm/s tank:%.0fL",
+                      flow_pfx, (double)mdist, (double)spd,
+                      (double)_tank_vol.get());
+    }
   }
 }
 
@@ -1148,5 +1236,60 @@ void AP_ShoesAgtech::_run_simulation(void) {
 
   // Keep ph_has_data() returning true
   _ph_last_good_ms = now;
+}
+
+// =============================================================
+// MISSION DISTANCE — SA_FLOW_MODE = 1 (mode 1) + mode 2 monitor
+// Iterates AP_Mission waypoints and sums leg distances.
+// Result is cached until num_commands() changes (mission edited
+// or re-uploaded). Returns 0 if no mission is loaded.
+// =============================================================
+float AP_ShoesAgtech::_get_mission_dist(void) {
+  AP_Mission *mission = AP::mission();
+  if (mission == nullptr) {
+    return 0.0f;
+  }
+
+  uint16_t n = mission->num_commands();
+  if (n < 2) {
+    return 0.0f;
+  }
+
+  // Return cached value if mission hasn't changed
+  if (n == _mission_ncmds && _mission_dist_m > 0.0f) {
+    return _mission_dist_m;
+  }
+
+  float total = 0.0f;
+  Location prev_loc;
+  bool have_prev = false;
+
+  for (uint16_t i = 0; i < n; i++) {
+    AP_Mission::Mission_Command cmd;
+    if (!mission->read_cmd_from_storage(i, cmd)) {
+      continue;
+    }
+    // Only nav commands carry a meaningful location
+    if (cmd.id != MAV_CMD_NAV_WAYPOINT &&
+        cmd.id != MAV_CMD_NAV_LOITER_UNLIM &&
+        cmd.id != MAV_CMD_NAV_LOITER_TURNS &&
+        cmd.id != MAV_CMD_NAV_LOITER_TIME &&
+        cmd.id != MAV_CMD_NAV_SPLINE_WAYPOINT) {
+      continue;
+    }
+    Location loc = cmd.content.location;
+    if (loc.lat == 0 && loc.lng == 0) {
+      continue;
+    }
+    if (have_prev) {
+      total += prev_loc.get_distance(loc);
+    }
+    prev_loc = loc;
+    have_prev = true;
+  }
+
+  _mission_dist_m = total;
+  _mission_ncmds  = n;
+  return _mission_dist_m;
 }
 // [/AP_ShoesAgtech]
