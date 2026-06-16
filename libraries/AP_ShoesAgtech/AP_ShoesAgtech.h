@@ -94,6 +94,7 @@ private:
   AP_Int8  _dos_rev;    // SA_DOS_REV    chieu quay: 0 = thuan (xung 800..1500, 800=nhanh nhat), 1 = nguoc (xung 1500..2200)
   AP_Int8  _dos_log_enable; // SA_DOS_LOG     console log enable cho dosing motor
   AP_Int16 _dos_log_ms;     // SA_DOS_LOG_MS  khoang thoi gian giua hai lan in log (ms, mac dinh 1000)
+  AP_Int8  _dos_mode;       // SA_DOS_MODE    0=fixed PWM (cu), 1=variable theo speed+mission
   // [/AP_ShoesAgtech]
 
   // [AP_ShoesAgtech] Parameter: simulation mode (slot 32)

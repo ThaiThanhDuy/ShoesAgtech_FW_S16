@@ -302,6 +302,20 @@ const AP_Param::GroupInfo AP_ShoesAgtech::var_info[] = {
     // @Units: L
     // @Range: 0 2000
     // @User: Standard
+    // [AP_ShoesAgtech] Dosing motor mode (slot 36)
+    // @Param: DOS_MODE
+    // @DisplayName: Dosing motor speed mode
+    // @Description: Cách tính tốc độ động cơ định lượng khi RC bật:
+    //   0 = tốc độ cố định từ SA_DOS_SP/SA_DOS_RATE (hành vi cũ).
+    //   1 = tốc độ tỉ lệ theo vận tốc + tổng quãng đường mission:
+    //       offset = (SA_DOS_SP × speed × 60 / mission_dist) × 50 / SA_DOS_RATE.
+    //       Phân bổ SA_DOS_SP gam đều trên toàn tuyến đường.
+    //       Khi không có mission hoặc speed < 0.05 m/s → dừng + cảnh báo.
+    // @Values: 0:Fixed,1:MissionProportional
+    // @User: Standard
+    AP_GROUPINFO("DOS_MODE", 36, AP_ShoesAgtech, _dos_mode, 0),
+    // [/AP_ShoesAgtech]
+
     AP_GROUPINFO("TANK_VOL", 34, AP_ShoesAgtech, _tank_vol, 0.0f),
 
     // @Param: FLOW_MODE
@@ -791,6 +805,7 @@ void AP_ShoesAgtech::_update_dosing_motor(void) {
     return;
   }
 
+  uint32_t now = AP_HAL::millis();
   uint8_t rc_idx = (uint8_t)constrain_int16(_dos_rc.get() - 1, 0, 15);
   uint16_t rc_pwm = RC_Channels::get_radio_in(rc_idx);
   bool motor_on = (rc_pwm > 1500);
@@ -803,12 +818,44 @@ void AP_ShoesAgtech::_update_dosing_motor(void) {
 
   if (motor_on) {
     float ratio = _dos_rate.get();
-    float offset = (ratio > 0.0f) ? (_dos_sp.get() * 50.0f / ratio) : 0.0f;
-    float pwm_f;
-    if (_dos_rev.get() == 0) {
-      pwm_f = constrain_float(1500.0f - offset, 800.0f, 1500.0f);
+    float pwm_f = 1500.0f;
+
+    if (_dos_mode.get() == 0) {
+      // ---- DOS_MODE 0: tốc độ cố định từ SA_DOS_SP/SA_DOS_RATE ----
+      float offset = (ratio > 0.0f) ? (_dos_sp.get() * 50.0f / ratio) : 0.0f;
+      if (_dos_rev.get() == 0) {
+        pwm_f = constrain_float(1500.0f - offset, 800.0f, 1500.0f);
+      } else {
+        pwm_f = constrain_float(1500.0f + offset, 1500.0f, 2200.0f);
+      }
     } else {
-      pwm_f = constrain_float(1500.0f + offset, 1500.0f, 2200.0f);
+      // ---- DOS_MODE 1: tốc độ tỉ lệ theo speed + mission_dist ----
+      float mission_dist = _get_mission_dist();
+      float speed_ms = (_simulation.get() > 0) ? _sim_speed : AP::ahrs().groundspeed();
+      if (mission_dist > 1.0f && speed_ms >= 0.05f) {
+        float dos_gpm = (_dos_sp.get() * speed_ms * 60.0f) / mission_dist;
+        float offset  = (ratio > 0.0f) ? (dos_gpm * 50.0f / ratio) : 0.0f;
+        if (_dos_rev.get() == 0) {
+          pwm_f = constrain_float(1500.0f - offset, 800.0f, 1500.0f);
+        } else {
+          pwm_f = constrain_float(1500.0f + offset, 1500.0f, 2200.0f);
+        }
+      } else {
+        // Không đủ điều kiện → dừng motor + cảnh báo mỗi 5s
+        pwm_f = 1500.0f;
+        if (now - _dos_warn_ms >= 5000U) {
+          _dos_warn_ms = now;
+          if (mission_dist <= 1.0f) {
+            gcs().send_text(MAV_SEVERITY_WARNING,
+                            "SA DOS1: chua co mission (dist=%.1fm) - motor dung",
+                            (double)mission_dist);
+          } else {
+            gcs().send_text(MAV_SEVERITY_WARNING,
+                            "SA DOS1: toc do qua thap (%.2fm/s) - motor dung",
+                            (double)speed_ms);
+          }
+        }
+      }
     }
     _dos_pwm = (uint16_t)pwm_f;
   } else {
@@ -820,7 +867,6 @@ void AP_ShoesAgtech::_update_dosing_motor(void) {
 
   // ---- DOSING CONSOLE LOG (SA_DOS_LOG) ----
   if (_dos_log_enable.get() > 0) {
-    uint32_t now = AP_HAL::millis();
     if (now - _dos_last_log_ms >= (uint32_t)_dos_log_ms.get()) {
       _dos_last_log_ms = now;
       gcs().send_text(MAV_SEVERITY_INFO, "[DOS] SERVO%d %s SP:%.0fg PWM:%u",
