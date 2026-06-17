@@ -18,6 +18,7 @@
    - 2.2 [Module 2: Cảm biến pH (Modbus RTU)](#22-module-2-cảm-biến-ph-modbus-rtu)
    - 2.3 [Module 3: Động cơ định lượng (vít tải thức ăn tôm)](#23-module-3-động-cơ-định-lượng-vít-tải-thức-ăn-tôm)
    - 2.4 [Simulation (SA_SIM)](#24-simulation-sa_sim)
+   - 2.5 [Mở rộng: Flow Pin / Tank Volume / Flow Mode](#25-mở-rộng-flow-pin--tank-volume--flow-mode-slots-33-35)
 3. [Dữ liệu real-time MAVLink — DEBUG_FLOAT_ARRAY](#3-dữ-liệu-real-time-mavlink--debug_float_array)
 4. [Dữ liệu log nhị phân DataFlash](#4-dữ-liệu-log-nhị-phân-dataflash)
 5. [Cấu hình QGroundControl tùy chỉnh](#5-cấu-hình-qgroundcontrol-tùy-chỉnh)
@@ -32,7 +33,7 @@
 
 | Module | Phần cứng | Giao tiếp | Tần suất xử lý |
 |---|---|---|---|
-| Lưu lượng + Bơm phun | YF-S402B + servo bơm | GPIO pin 55 (IRQ) | 10 Hz |
+| Lưu lượng + Bơm phun | YF-S402B + servo bơm | GPIO pin `SA_FLOW_PIN` (mặc định 55, IRQ) | 10 Hz |
 | Cảm biến pH | Nengshi ASPS3801D-0.5M | UART Modbus RTU 9600 8N1 (RS485-TTL) | 0.5 Hz (request mỗi 2s) |
 | Động cơ định lượng | Servo 360° liên tục | PWM servo output | 10 Hz |
 
@@ -63,7 +64,7 @@ rover.g2.custom_nav   →   object AP_ShoesAgtech
 | `SA_RC_CHAN` | 5 | Int8 | **6** | 1 | 16 | Kênh RC (1-indexed) chọn chế độ phun: PWM<1300→mode 0, 1300–1700→mode 1, >1700→mode 2. |
 | `SA_RC_PUMP` | 6 | Int8 | **9** | 1 | 16 | Kênh RC (1-indexed) đọc PWM bơm thủ công ở mode 0 (passthrough). |
 | `SA_PUMP_CHAN` | 7 | Int8 | **8** | 1 | 16 | Kênh servo đầu ra bơm (1-indexed). **Bắt buộc** `SERVOx_FUNCTION = 0 (None)`. |
-| `SA_FLOW_SP` | 8 | Float | **5.0** | 0 | 200 | Setpoint lưu lượng (L/min) ở mode 1 — PID bám giá trị này. |
+| `SA_FLOW_SP` | 8 | Float | **5.0** | 0 | 200 | Setpoint lưu lượng (L/min) ở mode 1 khi `SA_FLOW_MODE=0`, hoặc dùng làm fallback khi `SA_FLOW_MODE=1` mà `SA_TANK_VOL=0`. |
 | `SA_PID_P` | 9 | Float | **80.0** | 0 | 500 | Hệ số P của PI controller: us PWM trên mỗi L/min sai số. |
 | `SA_PID_I` | 10 | Float | **20.0** | 0 | 200 | Hệ số I của PI controller: us PWM trên mỗi L/min/giây. |
 | `SA_PID_LPF` | 11 | Float | **0.3** | 0.01 | 1.0 | Alpha LPF cho đầu ra PID (0.01 = rất mịn, 1.0 = không lọc). |
@@ -74,8 +75,33 @@ rover.g2.custom_nav   →   object AP_ShoesAgtech
 
 ```
 PWM < 1300   →  Mode 0: PASSTHROUGH — đọc SA_RC_PUMP ghi thẳng ra SA_PUMP_CHAN
-1300–1700    →  Mode 1: FLOW PID    — PI bám SA_FLOW_SP, integral anti-windup
+1300–1700    →  Mode 1: FLOW PID    — PI bám flow_target (nguồn tùy SA_FLOW_MODE)
 PWM > 1700   →  Mode 2: AUTO RATE  — tự tính target = SA_APP_RATE × tốc_độ × SA_BOOM_W × 0.006
+```
+
+**Mode 1 — hai cách tính setpoint (SA_FLOW_MODE):**
+
+```
+SA_FLOW_MODE = 0 (mặc định):
+    flow_target = SA_FLOW_SP                          (L/min, trực tiếp)
+
+SA_FLOW_MODE = 1:
+    flow_target = (SA_TANK_VOL × speed × 60) / mission_dist
+    → phân bổ đều SA_TANK_VOL (lít) trên toàn quãng đường mission đã upload.
+    Điều kiện: phải có mission (≥2 waypoint) VÀ tốc độ ≥ 0.05 m/s.
+    Không đạt điều kiện (chưa có mission HOẶC đứng yên) → flow_target = 0.0
+    (bơm DỪNG, KHÔNG fallback về SA_FLOW_SP) + STATUSTEXT cảnh báo mỗi 5s.
+    Nếu SA_TANK_VOL = 0 → tự động coi như SA_FLOW_MODE=0 (dùng SA_FLOW_SP).
+```
+
+**Mode 2 — giám sát tank (không đổi logic điều khiển):**
+
+```
+flow_target vẫn = SA_APP_RATE × speed × SA_BOOM_W × 0.006   (như cũ)
+
+Nếu SA_TANK_VOL > 0: mỗi 30s gửi STATUSTEXT ước tính quãng đường còn bơm được:
+    "SA: Tank du ~<X>m (<tank_vol>L @<flow_target>L/min)"
+    dist_m = (SA_TANK_VOL / flow_target) × speed × 60
 ```
 
 ---
@@ -140,6 +166,25 @@ Dữ liệu pH được tích lũy theo ngày (cần GPS time):
 | `SA_DOS_REV` | 29 | Int8 | **0** | 0 | 1 | Chiều quay servo 360°: `0` = thuận (PWM dải 800–1500, 800 = nhanh nhất); `1` = ngược (PWM dải 1500–2200). |
 | `SA_DOS_LOG` | 30 | Int8 | **0** | 0 | 1 | Bật (1) in log trạng thái dosing motor ra console GCS theo chu kỳ `SA_DOS_LOG_MS`. |
 | `SA_DOS_LOG_MS` | 31 | Int16 | **1000** | 100 | 60000 | Chu kỳ in log dosing motor ra console (ms). Chỉ hoạt động khi `SA_DOS_LOG=1`. |
+| `SA_DOS_MODE` | 36 | Int8 | **0** | 0 | 1 | **0** = tốc độ cố định (công thức cũ). **1** = tốc độ tỉ lệ theo vận tốc + mission — xem công thức bên dưới. |
+
+**SA_DOS_MODE — hai cách tính tốc độ động cơ:**
+
+```
+SA_DOS_MODE = 0 (mặc định):
+    offset_us = SA_DOS_SP × 50.0 / SA_DOS_RATE                  (cố định, không phụ thuộc thời gian)
+
+SA_DOS_MODE = 1:
+    dos_gpm  = (SA_DOS_SP × speed × 60) / mission_dist          (gam/phút mục tiêu)
+    offset_us = dos_gpm × 50.0 / SA_DOS_RATE
+    → phân bổ đều SA_DOS_SP (gam) trên toàn quãng đường mission.
+    Điều kiện: phải có mission (≥2 waypoint) VÀ tốc độ ≥ 0.05 m/s.
+    Không đạt điều kiện → motor DỪNG (PWM=1500) + STATUSTEXT cảnh báo mỗi 5s.
+
+Áp dụng offset_us vào hướng quay (như cũ):
+    SA_DOS_REV = 0 (thuận):   pwm = constrain(1500 − offset_us,  800, 1500)
+    SA_DOS_REV = 1 (ngược):   pwm = constrain(1500 + offset_us, 1500, 2200)
+```
 
 ---
 
@@ -168,17 +213,6 @@ Dữ liệu pH được tích lũy theo ngày (cần GPS time):
 - Mode 2 dùng `sim_speed` thay vì `AP::ahrs().groundspeed()` — có thể test tính toán target flow mà không cần di chuyển.
 - **Tắt `SA_SIM` (= 0) trước khi deploy thực tế** — để đọc lại giá trị cảm biến thật.
 
-**Công thức tính PWM động cơ:**
-
-```
-offset_us = SA_DOS_SP × 50.0 / SA_DOS_RATE
-
-SA_DOS_REV = 0 (thuận):   pwm = constrain(1500 − offset_us,  800, 1500)
-SA_DOS_REV = 1 (ngược):   pwm = constrain(1500 + offset_us, 1500, 2200)
-
-Khi tắt (RC ≤ 1500):  pwm = 1500  (servo dừng)
-```
-
 **Điều kiện servo bắt buộc để motor được phép chạy:**
 
 ```
@@ -190,6 +224,21 @@ SERVOx_MAX      = 2200
 Sai bất kỳ 1 trong 4 → firmware KHÔNG xuất PWM động cơ
                       → cảnh báo STATUSTEXT mỗi 5 giây
 ```
+
+---
+
+### 2.5 Mở rộng: Flow Pin / Tank Volume / Flow Mode (slots 33-35)
+
+| Param (tên đầy đủ) | Slot | Kiểu | Mặc định | Min | Max | Mô tả |
+|---|---|---|---|---|---|---|
+| `SA_FLOW_PIN` | 33 | Int16 | **55** | 1 | 200 | Số chân GPIO kết nối tín hiệu cảm biến lưu lượng YF-S402B. Đổi theo board (vd Pixhawk4 có thể khác CubeBlack). |
+| `SA_TANK_VOL` | 34 | Float | **0.0** | 0 | 2000 | Dung tích tank (lít). `=0` tắt cả hai chức năng dùng tank: công thức mode 1 và cảnh báo mode 2. |
+| `SA_FLOW_MODE` | 35 | Int8 | **0** | 0 | 1 | Nguồn setpoint mode 1: **0**=`SA_FLOW_SP` trực tiếp, **1**=công thức tank+mission (xem 2.1). |
+
+**Lưu ý:**
+- `SA_FLOW_PIN` chỉ đọc lúc `init()` (lúc boot) — đổi giá trị cần **reboot** flight controller để có hiệu lực.
+- `SA_TANK_VOL` được dùng chung cho cả mode 1 (`SA_FLOW_MODE=1`) và mode 2 (cảnh báo) — không cần đặt riêng cho mỗi mode.
+- Mission distance (`mission_dist`) được tính từ `AP_Mission` (tổng khoảng cách các waypoint NAV_WAYPOINT/LOITER đã upload), cache lại và chỉ tính lại khi số lượng lệnh mission thay đổi.
 
 ---
 
@@ -383,6 +432,15 @@ SERVO<m>_TRIM     = 1500
 SERVO<m>_MAX      = 2200
 SA_DOS_SP      = <gam>       # lượng thức ăn muốn cấp
 SA_DOS_RATE    = <ratio>     # gam ứng với 50µs lệch
+SA_DOS_MODE    = 0|1         # 0=cố định (mặc định), 1=tỉ lệ theo speed+mission
+
+# ---- Tùy chọn: phân bổ theo tank + mission (mode 1 / dosing mode 1) ----
+SA_TANK_VOL    = <lít>       # dung tích tank, 0 = tắt
+SA_FLOW_MODE   = 0|1         # mode 1: 0=SA_FLOW_SP trực tiếp, 1=công thức tank+mission
+# (phải upload mission lên FC trước khi dùng SA_FLOW_MODE=1 / SA_DOS_MODE=1)
+
+# ---- Tùy chọn: đổi chân GPIO cảm biến flow (đổi board) ----
+SA_FLOW_PIN    = 55          # mặc định 55, đổi nếu board khác CubeBlack — cần REBOOT
 
 # ---- MAVLink stream ----
 MAV1_EXTRA3    = 2           # 2 Hz stream SA_DATA về GCS
@@ -396,7 +454,7 @@ Tất cả cảnh báo gửi qua `gcs().send_text()` → hiển thị trong **Me
 
 | Nội dung STATUSTEXT | Mức | Ý nghĩa |
 |---|---|---|
-| `ShoesAgtech: IRQ attach failed` | CRITICAL | Không gắn được IRQ GPIO 55 cho cảm biến flow |
+| `ShoesAgtech: IRQ attach failed` | CRITICAL | Không gắn được IRQ GPIO `SA_FLOW_PIN` cho cảm biến flow |
 | `ShoesAgtech: Flow sensor ready` | INFO | Khởi tạo flow sensor thành công |
 | `SA: SERVO<n>_FUNCTION=<x> must be 0(None)!` | WARNING | Kênh bơm chưa đặt FUNCTION=0. Lặp lại mỗi 5s. |
 | `SA: SERVO<n> OK Min:<x> Trim:<y> Max:<z>` | INFO | Bơm cấu hình đúng, in ra min/trim/max |
@@ -418,6 +476,15 @@ Tất cả cảnh báo gửi qua `gcs().send_text()` → hiển thị trong **Me
 | `[WM] Alk:<x>dKH <y>mg/L dPH:<z> [FULL/MORN/AFT/PREV/NODATA]` | INFO | Console log kiềm + chất lượng slot |
 | `[WM] Ngay moi: slot reset. ...` | INFO | Reset slot khi sang ngày mới (GPS time) |
 | `[WM] Chua co GPS time, kiem tinh theo pH tuc thoi` | WARNING | Không có GPS → không phân slot được |
+| `SA FM1: chua co mission (dist=<x>m) - bom dung` | WARNING | Mode 1 + `SA_FLOW_MODE=1`: chưa upload mission. `flow_target=0`, lặp mỗi 5s. |
+| `SA FM1: toc do qua thap (<x>m/s) - bom dung` | WARNING | Mode 1 + `SA_FLOW_MODE=1`: xe đứng yên (speed<0.05m/s). `flow_target=0`, lặp mỗi 5s. |
+| `[FLOW] FM1 dist:<x>m spd:<y>m/s tank:<z>L` | INFO | Console log bổ sung khi mode 1 + `SA_FLOW_MODE=1` (cùng chu kỳ `SA_FLOW_LOG`) |
+| `SA: Tank du ~<x>m (<y>L @<z>L/min)` | INFO | Mode 2, `SA_TANK_VOL>0`: ước tính quãng đường còn bơm được ở tốc độ/flow hiện tại. Lặp mỗi 30s. |
+| `SA DOS1: chua co mission (dist=<x>m) - motor dung` | WARNING | Dosing + `SA_DOS_MODE=1`: chưa upload mission. Motor dừng (PWM=1500), lặp mỗi 5s. |
+| `SA DOS1: toc do qua thap (<x>m/s) - motor dung` | WARNING | Dosing + `SA_DOS_MODE=1`: xe đứng yên. Motor dừng (PWM=1500), lặp mỗi 5s. |
+
+> Khi `SA_SIM=1`, các log `[FLOW]` và `[WM]` được thêm tiền tố `[SIM]` (ví dụ
+> `[SIM][FLOW]`, `[SIM][WM]`) để phân biệt dữ liệu giả lập với dữ liệu thật.
 
 ---
 
@@ -428,7 +495,8 @@ Tất cả cảnh báo gửi qua `gcs().send_text()` → hiển thị trong **Me
 ```
 Dải hoạt động: 0.3 – 6 L/min
 Giao tiếp:     GPIO, xung Hall Effect
-Pin firmware:  GPIO 55 (interrupt RISING edge)
+Pin firmware:  GPIO SA_FLOW_PIN (mặc định 55, interrupt RISING edge)
+               Đổi qua tham số — cần REBOOT để có hiệu lực (chỉ đọc lúc init()).
 Noise floor:   0.01 L/min (dưới ngưỡng này ép về 0)
 Hệ số mặc định: 3874.5 pulses/Litre (chỉnh qua SA_CAL_FAC)
 ```
