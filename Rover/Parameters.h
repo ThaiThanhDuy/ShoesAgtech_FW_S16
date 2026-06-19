@@ -233,6 +233,32 @@ public:
 
     k_param_vehicle = 257, // vehicle common block of parameters
     k_param__gcs = 258,
+
+    // Shoes_Agtech: them k_param cho Pitch Safety mode manual
+    //
+    k_param_safe_pitch_down = 268,
+    k_param_safe_pitch_up = 269,
+    k_param_safe_pitch_accel = 270,
+
+    //
+    // === MANUAL MODE PITCH SAFETY ===
+    //
+    k_param_man_pitch_en = 279,
+    k_param_man_pitch_scale = 280,
+    k_param_man_pitch_delay = 281,
+
+    //
+    // === AUTO MODE PITCH SAFETY ===
+    //
+    k_param_auto_pitch_en = 282,
+    k_param_auto_pitch_scale = 283,
+    k_param_auto_pitch_delay = 284,
+
+    //
+    // === AUTO MODE PID AUTO-TUNE ANALYZER ===
+    //
+    k_param_auto_tune = 285,
+
   };
 
   AP_Int16 format_version;
@@ -275,7 +301,25 @@ public:
   AP_Int8 mode4;
   AP_Int8 mode5;
   AP_Int8 mode6;
+  // Shoes_Agtech: tham so tuy bien - Pitch Safety / BST Boost / Rail Mode (S30)
 
+  // === SHARED PITCH SAFETY THRESHOLDS ===
+  AP_Float safe_pitch_down;  // Gioi han goc chui mui (deg)
+  AP_Float safe_pitch_up;    // Gioi han goc ngua mui (deg)
+  AP_Float safe_pitch_accel; // Gioi han gia toc goc pitch sau LPF (deg/s^2)
+
+  // === MANUAL MODE PITCH SAFETY ===
+  AP_Int8 man_pitch_en;     // 0: Disable, 1: Enable
+  AP_Int8 man_pitch_scale;  // Ti le giam toc khi pitch nguy hiem (%)
+  AP_Int16 man_pitch_delay; // Thoi gian tre phuc hoi (ms)
+
+  // === AUTO MODE PITCH SAFETY ===
+  AP_Int8 auto_pitch_en;     // 0: Disable, 1: Enable
+  AP_Int8 auto_pitch_scale;  // Ti le giam toc do (target_speed) khi pitch nguy hiem (%)
+  AP_Int16 auto_pitch_delay; // Thoi gian tre phuc hoi (ms)
+
+  // === AUTO MODE PID AUTO-TUNE ANALYZER ===
+  AP_Int8 auto_tune; // 0: Disable, 1: Enable - thu thap + recommend PID 1 chu ky Auto
   Parameters() {}
 };
 

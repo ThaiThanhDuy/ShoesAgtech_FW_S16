@@ -1,4 +1,5 @@
 #include "Rover.h"
+#include <stdio.h>
 
 #define AUTO_GUIDED_SEND_TARGET_MS 1000
 
@@ -40,10 +41,16 @@ void ModeAuto::_exit()
     if (mission.state() == AP_Mission::MISSION_RUNNING) {
         mission.stop();
     }
+
+    // Shoes_Agtech: doi mode khac ket thuc 1 chu ky AUTO_TUNE (neu dang chay)
+    _autotune_finish();
 }
 
 void ModeAuto::update()
 {
+    // Shoes_Agtech: AUTO_TUNE - bat dau/ket thuc/thu thap chi so on dinh
+    _autotune_poll();
+
     // check if mission exists (due to being cleared while disarmed in AUTO,
     // if no mission, then stop...needs mode change out of AUTO, mission load,
     // and change back to AUTO to run a mission at this point
@@ -153,6 +160,77 @@ void ModeAuto::calc_throttle(float target_speed, bool avoidance_enabled)
         stop_vehicle();
         return;
     }
+
+    // Shoes_Agtech: AUTO_TUNE - lay mau sai so toc do TRUOC khi Pitch Safety
+    // co the lam giam target_speed (tranh lam lech ket qua recommend)
+    _autotune_sample_speed(target_speed);
+
+    // --- Shoes_Agtech: Pitch Safety (Auto) - bat/tat qua AUTO_PITCH_EN ---
+    if (rover.g.auto_pitch_en.get() == 1) {
+        const uint32_t now_ms = AP_HAL::millis();
+        const float pitch_deg = degrees(rover.ahrs.get_pitch_rad());
+        const float current_pitch_rate_rads = rover.ahrs.get_gyro().y;
+
+        float raw_pitch_accel_degs2 = 0.0f;
+        if (rover.G_Dt > 0.0001f) {
+            raw_pitch_accel_degs2 =
+                degrees(current_pitch_rate_rads - _last_pitch_rate_rads) / rover.G_Dt;
+        }
+        _last_pitch_rate_rads = current_pitch_rate_rads;
+
+        const float lpf_alpha =
+            constrain_float(rover.G_Dt / (0.04f + rover.G_Dt), 0.05f, 1.0f);
+        _filtered_pitch_accel_degs2 =
+            (lpf_alpha * raw_pitch_accel_degs2) +
+            ((1.0f - lpf_alpha) * _filtered_pitch_accel_degs2);
+
+        const float safe_pitch_down_limit = -fabsf(g.safe_pitch_down.get());
+        const float safe_pitch_up_limit = fabsf(g.safe_pitch_up.get());
+        const float safe_pitch_accel_limit = fabsf(rover.g.safe_pitch_accel.get());
+
+        const bool is_angle_bad = (pitch_deg < safe_pitch_down_limit) ||
+                                  (pitch_deg > safe_pitch_up_limit);
+        const bool is_inertia_bad =
+            (fabsf(_filtered_pitch_accel_degs2) > safe_pitch_accel_limit);
+        const bool is_pitch_bad = is_angle_bad || is_inertia_bad;
+
+        const float pitch_scale =
+            constrain_float(rover.g.auto_pitch_scale.get() * 0.01f, 0.0f, 1.0f);
+
+        if (is_pitch_bad) {
+            target_speed *= pitch_scale;
+            _pitch_safe_start_ms = 0U;
+            if (!_pitch_warning_sent) {
+                gcs().send_text(
+                    MAV_SEVERITY_CRITICAL,
+                    "[AUTO] PITCH DANGER! Ang:%.1fdeg Acc:%.1fdeg/s2 -> x%.0f%%",
+                    static_cast<double>(pitch_deg),
+                    static_cast<double>(_filtered_pitch_accel_degs2),
+                    static_cast<double>(rover.g.auto_pitch_scale.get()));
+                _pitch_warning_sent = true;
+            }
+        } else if (_pitch_warning_sent) {
+            if (_pitch_safe_start_ms == 0U) {
+                _pitch_safe_start_ms = now_ms;
+            }
+            const uint32_t recovery_delay_ms =
+                static_cast<uint32_t>(MAX(rover.g.auto_pitch_delay.get(), 0));
+            if (now_ms - _pitch_safe_start_ms >= recovery_delay_ms) {
+                gcs().send_text(MAV_SEVERITY_WARNING, "[AUTO] Pitch Safe - Resuming");
+                _pitch_warning_sent = false;
+                _pitch_safe_start_ms = 0U;
+            } else {
+                target_speed *= pitch_scale;
+            }
+        }
+    } else {
+        _last_pitch_rate_rads = 0.0f;
+        _filtered_pitch_accel_degs2 = 0.0f;
+        _pitch_warning_sent = false;
+        _pitch_safe_start_ms = 0U;
+    }
+    // --- Pitch Safety END ---
+
     Mode::calc_throttle(target_speed, avoidance_enabled);
 }
 
@@ -1055,3 +1133,216 @@ bool ModeAuto::verify_nav_script_time()
     return false;
 }
 #endif
+
+// =============================================================
+// [Shoes_Agtech] AUTO_TUNE - PID stability analyzer
+//
+// 1 chu ky: bat dau khi Arm trong Auto Mode (AUTO_TUNE=1), ket thuc khi
+// Disarm HOAC doi sang mode khac. Thu thap cross-track error (XTE) va sai
+// so toc do trong suot chu ky, ket hop voi gia tri PID dang cai (ATC_STR_RAT_*,
+// ATC_SPEED_*) de in 1 dong STATUSTEXT recommend. KHONG tu dong ghi de tham so
+// - nguoi van hanh tu quyet dinh ap dung qua GCS.
+// =============================================================
+
+// goi moi vong lap trong update(): xu ly bat dau/ket thuc + thu thap XTE
+void ModeAuto::_autotune_poll()
+{
+    if (g.auto_tune.get() != 1) {
+        if (_autotune_running) {
+            // tat AUTO_TUNE giua chu ky -> huy, khong in recommend
+            _autotune_running = false;
+        }
+        return;
+    }
+
+    const bool armed = hal.util->get_soft_armed();
+
+    if (!_autotune_running) {
+        if (armed) {
+            _autotune_start();
+        }
+        return;
+    }
+
+    // dang chay: disarm la dieu kien ket thuc chu ky
+    if (!armed) {
+        _autotune_finish();
+        return;
+    }
+
+    // thu thap cross-track error (m)
+    const float xte = crosstrack_error();
+    _autotune_xte_sum += xte;
+    _autotune_xte_sum_sq += xte * xte;
+    _autotune_xte_max = MAX(_autotune_xte_max, fabsf(xte));
+    _autotune_sample_count++;
+
+    // dao dong: dem so lan doi dau XTE, deadband 0.05m de bo qua nhieu
+    const float xte_deadband = 0.05f;
+    if (fabsf(xte) > xte_deadband && fabsf(_autotune_xte_last) > xte_deadband &&
+        ((xte > 0.0f) != (_autotune_xte_last > 0.0f))) {
+        _autotune_osc_count++;
+    }
+    _autotune_xte_last = xte;
+}
+
+void ModeAuto::_autotune_start()
+{
+    _autotune_running = true;
+    _autotune_start_ms = AP_HAL::millis();
+    _autotune_sample_count = 0;
+    _autotune_xte_sum = 0.0f;
+    _autotune_xte_sum_sq = 0.0f;
+    _autotune_xte_max = 0.0f;
+    _autotune_xte_last = 0.0f;
+    _autotune_osc_count = 0;
+    _autotune_speed_sample_count = 0;
+    _autotune_speed_err_sum = 0.0f;
+    _autotune_speed_err_sum_sq = 0.0f;
+    _autotune_speed_err_last = 0.0f;
+    _autotune_speed_osc_count = 0;
+    gcs().send_text(MAV_SEVERITY_INFO, "[ATUNE] Bat dau thu thap chi so Auto");
+}
+
+// goi tu calc_throttle() voi target_speed GOC (truoc khi Pitch Safety scale)
+void ModeAuto::_autotune_sample_speed(float target_speed)
+{
+    if (!_autotune_running) {
+        return;
+    }
+    const float speed_err = target_speed - ahrs.groundspeed();
+    _autotune_speed_err_sum += speed_err;
+    _autotune_speed_err_sum_sq += speed_err * speed_err;
+    _autotune_speed_sample_count++;
+
+    // dao dong toc do: dem so lan doi dau, deadband 0.05m/s
+    const float speed_deadband = 0.05f;
+    if (fabsf(speed_err) > speed_deadband &&
+        fabsf(_autotune_speed_err_last) > speed_deadband &&
+        ((speed_err > 0.0f) != (_autotune_speed_err_last > 0.0f))) {
+        _autotune_speed_osc_count++;
+    }
+    _autotune_speed_err_last = speed_err;
+}
+
+// ket thuc chu ky: phan tich + in 1 dong recommend, khong ghi de tham so
+void ModeAuto::_autotune_finish()
+{
+    if (!_autotune_running) {
+        return;
+    }
+    _autotune_running = false;
+
+    if (_autotune_sample_count < 10) {
+        gcs().send_text(MAV_SEVERITY_WARNING,
+                        "[ATUNE] Chu ky qua ngan, khong du du lieu de recommend");
+        return;
+    }
+
+    const float duration_s = (AP_HAL::millis() - _autotune_start_ms) * 0.001f;
+    const float xte_mean = _autotune_xte_sum / _autotune_sample_count;
+    const float xte_rms = sqrtf(_autotune_xte_sum_sq / _autotune_sample_count);
+    const float osc_hz = (duration_s > 0.0f) ? (_autotune_osc_count / duration_s) : 0.0f;
+    const float speed_mean = (_autotune_speed_sample_count > 0)
+        ? (_autotune_speed_err_sum / _autotune_speed_sample_count) : 0.0f;
+    const float speed_rms = (_autotune_speed_sample_count > 0)
+        ? sqrtf(_autotune_speed_err_sum_sq / _autotune_speed_sample_count) : 0.0f;
+    const float speed_osc_hz = (duration_s > 0.0f)
+        ? (_autotune_speed_osc_count / duration_s) : 0.0f;
+
+    AC_PID &str_pid = g2.attitude_control.get_steering_rate_pid();
+    AC_PID &spd_pid = g2.attitude_control.get_throttle_speed_pid();
+
+    const float cur_str_p  = str_pid.kP().get();
+    const float cur_str_i  = str_pid.kI().get();
+    const float cur_str_d  = str_pid.kD().get();
+    const float cur_str_ff = str_pid.ff().get();
+    const float cur_spd_p  = spd_pid.kP().get();
+    const float cur_spd_d  = spd_pid.kD().get();
+    const float cur_spd_ff = spd_pid.ff().get();
+
+    float rec_str_p  = cur_str_p;
+    float rec_str_i  = cur_str_i;
+    float rec_str_d  = cur_str_d;
+    float rec_str_ff = cur_str_ff;
+    float rec_spd_p  = cur_spd_p;
+    float rec_spd_d  = cur_spd_d;
+    float rec_spd_ff = cur_spd_ff;
+
+    // Co flag rieng cho moi gain - tranh so sanh truc tiep so float (-Werror=float-equal)
+    bool str_p_changed  = false;
+    bool str_i_changed  = false;
+    bool str_d_changed  = false;
+    bool str_ff_changed = false;
+    bool spd_p_changed  = false;
+    bool spd_d_changed  = false;
+    bool spd_ff_changed = false;
+
+    const float OSC_HZ_THRESHOLD    = 0.3f;
+    const float XTE_RMS_THRESHOLD   = 0.3f;  // m
+    const float XTE_BIAS_THRESHOLD  = 0.15f; // m - lech 1 phia khong dao dong
+    const float SPD_RMS_THRESHOLD   = 0.3f;  // m/s
+    const float SPD_BIAS_THRESHOLD  = 0.15f; // m/s
+
+    // ---- Steering: P/D theo dao dong, I theo do lech 1 phia, FF theo do tre ----
+    if (osc_hz > OSC_HZ_THRESHOLD) {
+        // dao dong nhieu -> P qua cao, D qua thap; I cung giam vi co the gop phan windup
+        rec_str_p = cur_str_p * 0.8f;
+        rec_str_d = cur_str_d * 1.2f;
+        rec_str_i = cur_str_i * 0.8f;
+        str_p_changed = true;
+        str_d_changed = true;
+        str_i_changed = true;
+    } else if (xte_rms > XTE_RMS_THRESHOLD) {
+        // bam duong kem, khong dao dong -> phan hoi qua cham
+        rec_str_p  = cur_str_p * 1.2f;
+        rec_str_ff = cur_str_ff * 1.1f;
+        str_p_changed  = true;
+        str_ff_changed = true;
+    }
+    if (osc_hz <= OSC_HZ_THRESHOLD && fabsf(xte_mean) > XTE_BIAS_THRESHOLD) {
+        // lech 1 phia ben deu, khong dao dong -> I chua du bu sai so tinh
+        rec_str_i = cur_str_i * 1.3f;
+        str_i_changed = true;
+    }
+
+    // ---- Speed: P/D theo dao dong, FF theo do lech 1 phia tai tocdo on dinh ----
+    if (speed_osc_hz > OSC_HZ_THRESHOLD) {
+        rec_spd_p = cur_spd_p * 0.8f;
+        rec_spd_d = cur_spd_d * 1.2f;
+        spd_p_changed = true;
+        spd_d_changed = true;
+    } else if (speed_rms > SPD_RMS_THRESHOLD) {
+        rec_spd_p = cur_spd_p * 1.2f;
+        spd_p_changed = true;
+    }
+    if (speed_osc_hz <= OSC_HZ_THRESHOLD && fabsf(speed_mean) > SPD_BIAS_THRESHOLD) {
+        // speed_err = target - actual: duong = chay cham hon muc tieu -> tang FF
+        rec_spd_ff = (speed_mean > 0.0f) ? (cur_spd_ff * 1.1f) : (cur_spd_ff * 0.9f);
+        spd_ff_changed = true;
+    }
+
+    // Chi in cac gain THAY DOI - bo qua gain giu nguyen, khong in chi so tho
+    char msg[150];
+    int len = snprintf(msg, sizeof(msg), "[ATUNE]");
+    bool changed = false;
+
+    auto append = [&](const char *name, float rec) {
+        len += snprintf(msg + len, sizeof(msg) - (size_t)len, " %s:%.3f", name, (double)rec);
+        changed = true;
+    };
+
+    if (str_p_changed)  { append("STR_P",  rec_str_p); }
+    if (str_i_changed)  { append("STR_I",  rec_str_i); }
+    if (str_d_changed)  { append("STR_D",  rec_str_d); }
+    if (str_ff_changed) { append("STR_FF", rec_str_ff); }
+    if (spd_p_changed)  { append("SPD_P",  rec_spd_p); }
+    if (spd_d_changed)  { append("SPD_D",  rec_spd_d); }
+    if (spd_ff_changed) { append("SPD_FF", rec_spd_ff); }
+
+    if (!changed) {
+        gcs().send_text(MAV_SEVERITY_INFO, "[ATUNE] On dinh - khong can chinh PID");
+    } else {
+        gcs().send_text(MAV_SEVERITY_INFO, "%s", msg);
+    }
+}

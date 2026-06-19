@@ -233,6 +233,107 @@ const AP_Param::Info Rover::var_info[] = {
     // @Description: Driving mode for switch position 6 (1750 to 2049)
     GSCALAR(mode6, "MODE6", (int8_t)Mode::Number::MANUAL),
 
+    // =========================================================
+    // === SHARED PITCH SAFETY THRESHOLDS
+    // ===   Dung chung cho Manual
+    // =========================================================
+
+    // @Param: SAFE_PITCH_DN
+    // @DisplayName: Safe Pitch Down Limit
+    // @Description: Nguong goc chui mui an toan (nhap gia tri duong)
+    // @Range: 0 45
+    // @Units: deg
+    // @User: Standard
+    GSCALAR(safe_pitch_down, "SAFE_PITCH_DN", 10.0f),
+
+    // @Param: SAFE_PITCH_UP
+    // @DisplayName: Safe Pitch Up Limit
+    // @Description: Nguong goc ngua mui an toan
+    // @Range: 0 45
+    // @Units: deg
+    // @User: Standard
+    GSCALAR(safe_pitch_up, "SAFE_PITCH_UP", 10.0f),
+
+    // @Param: SAFE_PITCH_ACCEL
+    // @DisplayName: Safe Pitch Angular Acceleration Limit
+    // @Description: Gioi han gia toc goc Pitch sau khi loc nhieu LPF ~4Hz
+    // @Range: 30.0 300.0
+    // @Units: deg/s/s
+    // @Increment: 5.0
+    // @User: Standard
+    GSCALAR(safe_pitch_accel, "SAFE_PITCH_ACCEL", 120.0f),
+
+    // =========================================================
+    // === MANUAL MODE — PITCH SAFETY
+    // =========================================================
+
+    // @Param: MAN_PITCH_EN
+    // @DisplayName: Manual Pitch Safety Enable
+    // @Description: Kich hoat giam toc khi Pitch vuot nguong trong Manual Mode
+    // @Values: 0:Disabled, 1:Enabled
+    // @User: Standard
+    GSCALAR(man_pitch_en, "MAN_PITCH_EN", 1),
+
+    // @Param: MAN_PITCH_SCL
+    // @DisplayName: Manual Pitch Throttle Scale
+    // @Description: Ti le (%) ga con lai khi vi pham Pitch trong Manual Mode
+    // @Range: 10 100
+    // @Units: %
+    // @User: Advanced
+    GSCALAR(man_pitch_scale, "MAN_PITCH_SCL", 50),
+
+    // @Param: MAN_PITCH_DLY
+    // @DisplayName: Manual Pitch Recovery Delay
+    // @Description: Thoi gian tre (ms) duy tri giam ga sau khi Pitch on dinh
+    // tro lai trong Manual Mode
+    // @Range: 0 5000
+    // @Units: ms
+    // @User: Advanced
+    GSCALAR(man_pitch_delay, "MAN_PITCH_DLY", 2000),
+
+    // =========================================================
+    // === AUTO MODE — PITCH SAFETY
+    // =========================================================
+
+    // @Param: AUTO_PITCH_EN
+    // @DisplayName: Auto Pitch Safety Enable
+    // @Description: Kich hoat giam target_speed khi Pitch vuot nguong trong Auto Mode
+    // @Values: 0:Disabled, 1:Enabled
+    // @User: Standard
+    GSCALAR(auto_pitch_en, "AUTO_PITCH_EN", 1),
+
+    // @Param: AUTO_PITCH_SCL
+    // @DisplayName: Auto Pitch Speed Scale
+    // @Description: Ti le (%) target_speed con lai khi vi pham Pitch trong Auto Mode
+    // @Range: 10 100
+    // @Units: %
+    // @User: Advanced
+    GSCALAR(auto_pitch_scale, "AUTO_PITCH_SCL", 50),
+
+    // @Param: AUTO_PITCH_DLY
+    // @DisplayName: Auto Pitch Recovery Delay
+    // @Description: Thoi gian tre (ms) duy tri giam toc do sau khi Pitch on dinh
+    // tro lai trong Auto Mode
+    // @Range: 0 5000
+    // @Units: ms
+    // @User: Advanced
+    GSCALAR(auto_pitch_delay, "AUTO_PITCH_DLY", 2000),
+
+    // =========================================================
+    // === AUTO MODE — PID AUTO-TUNE ANALYZER
+    // =========================================================
+
+    // @Param: AUTO_TUNE
+    // @DisplayName: Auto Mode PID Tuning Analyzer
+    // @Description: Khi bat (1): bat dau thu thap chi so on dinh (cross-track
+    // error, dao dong, sai so toc do) tu luc Arm trong Auto Mode, ket thuc
+    // khi Disarm hoac doi sang mode khac. Ket thuc 1 chu ky se in 1 dong
+    // STATUSTEXT recommend gia tri ATC_STR_RAT_P/D va ATC_SPEED_P moi, KHONG
+    // tu dong ghi de tham so hien tai.
+    // @Values: 0:Disabled, 1:Enabled
+    // @User: Advanced
+    GSCALAR(auto_tune, "AUTO_TUNE", 0),
+
     // variables not in the g class which contain EEPROM saved variables
 
     // @Group: COMPASS_
