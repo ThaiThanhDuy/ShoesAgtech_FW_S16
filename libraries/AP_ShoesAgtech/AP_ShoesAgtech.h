@@ -149,6 +149,7 @@ private:
   uint16_t _mission_ncmds;       // num_commands() when distance was last cached
   uint32_t _tank_warn_ms;        // last time tank distance warning was printed
   bool     _arm_dist_warned;     // true sau khi da canh bao dist>dist_max lan nay (reset khi disarm)
+  bool     _was_armed;           // trang thai arm chu ki truoc (de phat hien canh ARM)
   // [/AP_ShoesAgtech]
   float    _pid_integral;
   float    _pid_output_lpf;
@@ -223,6 +224,7 @@ private:
   void     _write_pump_pwm(uint16_t pwm);
   float    _compute_visin_target(float r);
   float    _get_spray_speed(void);
+  void     _print_fm1_arm_status(float r);
 
   // [AP_ShoesAgtech] Private methods — dosing motor
   void     _check_dosing_config(void);

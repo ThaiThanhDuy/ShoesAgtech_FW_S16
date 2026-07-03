@@ -375,6 +375,7 @@ AP_ShoesAgtech::AP_ShoesAgtech()
       // [AP_ShoesAgtech] mission distance cache + tank monitor
       _mission_dist_m(0.0f), _mission_ncmds(0), _tank_warn_ms(0),
       _arm_dist_warned(false),
+      _was_armed(false),
       // [/AP_ShoesAgtech]
       _pid_integral(0.0f), _pid_output_lpf(0.0f), _pid_last_ms(0),
       _last_pump_chan(-1),
@@ -524,10 +525,22 @@ void AP_ShoesAgtech::update(void) {
 
   _update_spray_mode();
 
+  bool now_armed = hal.util->get_soft_armed();
+
+  // ARM edge: in trang thai FM1 mot lan khi arm, bat ke SA_FLOW_LOG
+  if (now_armed && !_was_armed) {
+    if (_flow_mode.get() == 1 && _tank_vol.get() > 0.0f &&
+        (_spray_mode == 1 || _spray_mode == 2)) {
+      float r = (_spray_mode == 2) ? _mix_cnt.get() : _mix_std.get();
+      _print_fm1_arm_status(r);
+    }
+  }
+
   // Khi disarm: reset one-shot warning de lan arm tiep theo canh bao lai
-  if (!hal.util->get_soft_armed()) {
+  if (!now_armed) {
     _arm_dist_warned = false;
   }
+  _was_armed = now_armed;
 
   switch (_spray_mode) {
 
@@ -563,6 +576,12 @@ void AP_ShoesAgtech::update(void) {
     if (_flow_mode.get() == 1 && _tank_vol.get() > 0.0f) {
       // FLOW_MODE=1: cong thuc L/ha × vi sinh ratio (MIX_STD)
       _flow_target = _compute_visin_target(_mix_std.get());
+      if (_flow_target < 0.01f) {
+        // dieu kien khong dat (mission/dist/speed/q1): force min ngay, bo qua PID
+        SRV_Channel *ch1 = SRV_Channels::srv_channel((uint8_t)(_pump_chan.get() - 1));
+        if (ch1 != nullptr) { _write_pump_pwm(ch1->get_output_min()); }
+        break;
+      }
     } else {
       // FLOW_MODE=0: setpoint truc tiep tu SA_FLOW_SP
       _flow_target = _flow_setpoint.get();
@@ -586,6 +605,12 @@ void AP_ShoesAgtech::update(void) {
     if (_flow_mode.get() == 1 && _tank_vol.get() > 0.0f) {
       // FLOW_MODE=1: cong thuc L/ha × vi sinh ratio (MIX_CNT)
       _flow_target = _compute_visin_target(_mix_cnt.get());
+      if (_flow_target < 0.01f) {
+        // dieu kien khong dat: force min ngay, bo qua PID
+        SRV_Channel *ch2 = SRV_Channels::srv_channel((uint8_t)(_pump_chan.get() - 1));
+        if (ch2 != nullptr) { _write_pump_pwm(ch2->get_output_min()); }
+        break;
+      }
     } else {
       // FLOW_MODE=0: setpoint × ti le MIX_CNT/MIX_STD (giu tong luong ra boom)
       float ratio = (_mix_std.get() > 0.01f) ? (_mix_cnt.get() / _mix_std.get()) : 1.0f;
@@ -1332,6 +1357,66 @@ float AP_ShoesAgtech::_get_spray_speed(void) {
   return AP::ahrs().groundspeed();
 }
 // [/AP_ShoesAgtech]
+
+// =============================================================
+// _print_fm1_arm_status — in trang thai FLOW_MODE=1 khi ARM (bat ke FLOW_LOG).
+// Goi mot lan moi ARM session khi spray_mode = 1 hoac 2.
+// Kiem tra: mission, dist_max, speed, q1 range.
+// =============================================================
+void AP_ShoesAgtech::_print_fm1_arm_status(float r)
+{
+  r = constrain_float(r, 0.01f, 1.0f);
+  float dist = _get_mission_dist();
+
+  // Check 1: co mission khong?
+  if (dist <= 1.0f) {
+    gcs().send_text(MAV_SEVERITY_WARNING,
+                    "SA FM1: chua co mission - bom se dung");
+    return;
+  }
+
+  // Check 2: khoang cach mission co qua dai khong?
+  float denom = r * _app_rate.get() * _boom_width.get();
+  if (denom < 0.001f) {
+    gcs().send_text(MAV_SEVERITY_WARNING,
+                    "SA FM1: APP_RATE/BOOM_W = 0 - kiem tra param");
+    return;
+  }
+  float dist_max = _tank_vol.get() * 10000.0f / denom;
+  if (dist > dist_max) {
+    gcs().send_text(MAV_SEVERITY_WARNING,
+                    "SA FM1: mission %.0fm > dmax %.0fm - ve lai mission ngan hon",
+                    (double)dist, (double)dist_max);
+    return;
+  }
+
+  // Check 3: van toc + preview q1
+  float speed = _get_spray_speed();
+  if (speed <= 0.1f) {
+    gcs().send_text(MAV_SEVERITY_INFO,
+                    "SA FM1 READY: r=%.2f miss=%.0fm/%.0fm | van toc=0 bom cho xe chay",
+                    (double)r, (double)dist, (double)dist_max);
+    return;
+  }
+
+  float q1 = r * _app_rate.get() * speed * _boom_width.get() * 0.006f;
+  if (q1 < 0.3f) {
+    gcs().send_text(MAV_SEVERITY_WARNING,
+                    "SA FM1: q1=%.2fL/min < 0.3 @%.1fm/s - tang APP_RATE hoac FLOW_VEL",
+                    (double)q1, (double)speed);
+    return;
+  }
+  if (q1 > 2.0f) {
+    gcs().send_text(MAV_SEVERITY_WARNING,
+                    "SA FM1: q1=%.2fL/min > 2.0 @%.1fm/s - giam APP_RATE hoac FLOW_VEL",
+                    (double)q1, (double)speed);
+    return;
+  }
+
+  gcs().send_text(MAV_SEVERITY_INFO,
+                  "SA FM1 READY: r=%.2f miss=%.0fm dmax=%.0fm q1=%.2fL/min @%.1fm/s",
+                  (double)r, (double)dist, (double)dist_max, (double)q1, (double)speed);
+}
 
 // =============================================================
 // [AP_ShoesAgtech] VISIN TARGET — FLOW_MODE=1 (nac giua/cao)
