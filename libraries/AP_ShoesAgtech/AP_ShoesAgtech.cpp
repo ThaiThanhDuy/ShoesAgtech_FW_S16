@@ -338,7 +338,7 @@ const AP_Param::GroupInfo AP_ShoesAgtech::var_info[] = {
     //   Dung trong FLOW_MODE=0: setpoint chinh la SA_FLOW_SP (khong can ratio).
     //   dist_max = TANK_VOL * 10000 / (MIX_STD * APP_RATE * BOOM).
     // @Range: 0.01 1.0
-    // @Increment: 0.01
+    // @Increment: 0.001
     // @User: Standard
     AP_GROUPINFO("MIX_STD", 37, AP_ShoesAgtech, _mix_std, 0.35f),
 
@@ -349,7 +349,7 @@ const AP_Param::GroupInfo AP_ShoesAgtech::var_info[] = {
     //   MIX_STD trong cong thuc. FLOW_MODE=0: flow_target = SA_FLOW_SP *
     //   (MIX_CNT / MIX_STD) de giu tong luong ra boom giong nac giua.
     // @Range: 0.01 1.0
-    // @Increment: 0.01
+    // @Increment: 0.001
     // @User: Standard
     AP_GROUPINFO("MIX_CNT", 38, AP_ShoesAgtech, _mix_cnt, 0.50f),
     // [/AP_ShoesAgtech]
@@ -1424,7 +1424,7 @@ void AP_ShoesAgtech::_print_fm1_arm_status(float r)
   float    vi_used = q1 * (eta_s / 60.0f);
 
   gcs().send_text(MAV_SEVERITY_INFO,
-                  "SA FM1 OK: r=%.2f q1=%.2fL/ph miss=%.0fm dmax=%.0fm ~%um%02us vi~%.1fL",
+                  "SA FM1 OK: r=%.2f q1=%.2fL/ph miss=%.0fm dmax=%.0fm ~%lup:%02lus vi~%.1fL",
                   (double)r, (double)q1,
                   (double)dist, (double)dist_max,
                   eta_min, eta_sec, (double)vi_used);
