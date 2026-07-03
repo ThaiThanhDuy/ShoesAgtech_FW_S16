@@ -330,6 +330,40 @@ const AP_Param::GroupInfo AP_ShoesAgtech::var_info[] = {
     AP_GROUPINFO("FLOW_MODE", 35, AP_ShoesAgtech, _flow_mode, 0),
     // [/AP_ShoesAgtech]
 
+    // [AP_ShoesAgtech] Vi sinh mixing ratio by RC field condition (slots 37-38)
+    // @Param: MIX_STD
+    // @DisplayName: Vi sinh ratio — nac giua (Mac dinh van)
+    // @Description: Ti le vi sinh trong tong luong phun khi chon nac giua RC.
+    //   Dung trong FLOW_MODE=1: q1_target = MIX_STD * APP_RATE * speed * BOOM * 0.006.
+    //   Dung trong FLOW_MODE=0: setpoint chinh la SA_FLOW_SP (khong can ratio).
+    //   dist_max = TANK_VOL * 10000 / (MIX_STD * APP_RATE * BOOM).
+    // @Range: 0.01 1.0
+    // @User: Standard
+    AP_GROUPINFO("MIX_STD", 37, AP_ShoesAgtech, _mix_std, 0.35f),
+
+    // @Param: MIX_CNT
+    // @DisplayName: Vi sinh ratio — nac cao (Chong nghet van)
+    // @Description: Ti le vi sinh trong tong luong phun khi chon nac cao RC
+    //   (van vi sinh mo nhieu hon, chong nghet). FLOW_MODE=1: dung MIX_CNT thay
+    //   MIX_STD trong cong thuc. FLOW_MODE=0: flow_target = SA_FLOW_SP *
+    //   (MIX_CNT / MIX_STD) de giu tong luong ra boom giong nac giua.
+    // @Range: 0.01 1.0
+    // @User: Standard
+    AP_GROUPINFO("MIX_CNT", 38, AP_ShoesAgtech, _mix_cnt, 0.50f),
+    // [/AP_ShoesAgtech]
+
+    // [AP_ShoesAgtech] Override speed for FLOW_MODE=1 calibration (slot 39)
+    // @Param: FLOW_VEL
+    // @DisplayName: Override speed for FLOW_MODE=1 (m/s)
+    // @Description: 0 = dung van toc that tu GPS/AHRS. > 0 = ep van toc bang gia
+    //   tri nay (m/s) de tinh q1_target va dist_max — dung calib FLOW_MODE=1 khi
+    //   xe dung yen. Khong anh huong khi SA_SIM=1 (SA_SIM uu tien hon FLOW_VEL).
+    // @Range: 0 10
+    // @Units: m/s
+    // @User: Standard
+    AP_GROUPINFO("FLOW_VEL", 39, AP_ShoesAgtech, _flow_vel, 0.0f),
+    // [/AP_ShoesAgtech]
+
     AP_GROUPEND};
 
 AP_ShoesAgtech::AP_ShoesAgtech()
@@ -340,6 +374,7 @@ AP_ShoesAgtech::AP_ShoesAgtech()
       _sim_speed(0.0f),
       // [AP_ShoesAgtech] mission distance cache + tank monitor
       _mission_dist_m(0.0f), _mission_ncmds(0), _tank_warn_ms(0),
+      _arm_dist_warned(false),
       // [/AP_ShoesAgtech]
       _pid_integral(0.0f), _pid_output_lpf(0.0f), _pid_last_ms(0),
       _last_pump_chan(-1),
@@ -489,6 +524,11 @@ void AP_ShoesAgtech::update(void) {
 
   _update_spray_mode();
 
+  // Khi disarm: reset one-shot warning de lan arm tiep theo canh bao lai
+  if (!hal.util->get_soft_armed()) {
+    _arm_dist_warned = false;
+  }
+
   switch (_spray_mode) {
 
   case 0: {
@@ -510,73 +550,61 @@ void AP_ShoesAgtech::update(void) {
   }
 
   case 1: {
-    // ---- MODE 1: FLOW PID ----
-    // [AP_ShoesAgtech] SA_FLOW_MODE selects setpoint source
-    if (_flow_mode.get() == 0 || _tank_vol.get() <= 0.0f) {
-      // FLOW_MODE 0 (hoặc tank chưa cài): setpoint trực tiếp từ SA_FLOW_SP
-      _flow_target = _flow_setpoint.get();
-    } else {
-      // FLOW_MODE 1: flow = (tank_vol × speed × 60) / mission_dist
-      float mission_dist = _get_mission_dist();
-      float speed_ms = (_simulation.get() > 0) ? _sim_speed : AP::ahrs().groundspeed();
-      if (mission_dist > 1.0f && speed_ms >= 0.05f) {
-        _flow_target = constrain_float(
-            (_tank_vol.get() * speed_ms * 60.0f) / mission_dist, 0.0f, 200.0f);
-      } else {
-        // FLOW_MODE=1: không đạt điều kiện → dừng bơm (0) và cảnh báo mỗi 5s
-        _flow_target = 0.0f;
-        if (now - _tank_warn_ms >= 5000U) {
-          _tank_warn_ms = now;
-          if (mission_dist <= 1.0f) {
-            gcs().send_text(MAV_SEVERITY_WARNING,
-                            "SA FM1: chua co mission (dist=%.1fm) - bom dung",
-                            (double)mission_dist);
-          } else {
-            gcs().send_text(MAV_SEVERITY_WARNING,
-                            "SA FM1: toc do qua thap (%.2fm/s) - bom dung",
-                            (double)speed_ms);
-          }
-        }
-      }
+    // ---- MODE 1: FLOW PID (nac giua — MIX_STD / Mac dinh van) ----
+    // Yeu cau: vehicle phai duoc ARM truoc khi bom hoat dong
+    if (!hal.util->get_soft_armed()) {
+      _flow_target = 0.0f;
+      _pid_integral = 0.0f;
+      _pid_output_lpf = 0.0f;
+      SRV_Channel *ch1 = SRV_Channels::srv_channel((uint8_t)(_pump_chan.get() - 1));
+      if (ch1 != nullptr) { _write_pump_pwm(ch1->get_output_min()); }
+      break;
     }
-    // [/AP_ShoesAgtech]
+    if (_flow_mode.get() == 1 && _tank_vol.get() > 0.0f) {
+      // FLOW_MODE=1: cong thuc L/ha × vi sinh ratio (MIX_STD)
+      _flow_target = _compute_visin_target(_mix_std.get());
+    } else {
+      // FLOW_MODE=0: setpoint truc tiep tu SA_FLOW_SP
+      _flow_target = _flow_setpoint.get();
+    }
     _pump_pwm = _run_flow_pid(_flow_target, dt_pid);
     _write_pump_pwm(_pump_pwm);
     break;
   }
 
   case 2: {
-    // ---- MODE 2: AUTO RATE — L/ha × speed × boom → target ----
-    float speed_ms = (_simulation.get() > 0) ? _sim_speed : AP::ahrs().groundspeed();
-    if (speed_ms < 0.1f) {
-      // Stopped: release override, reset integral
+    // ---- MODE 2: FLOW PID (nac cao — MIX_CNT / Chong nghet van) ----
+    // Yeu cau: vehicle phai duoc ARM truoc khi bom hoat dong
+    if (!hal.util->get_soft_armed()) {
       _flow_target = 0.0f;
       _pid_integral = 0.0f;
       _pid_output_lpf = 0.0f;
-      // Write min to stop pump while stationary
-      SRV_Channel *ch =
-          SRV_Channels::srv_channel((uint8_t)(_pump_chan.get() - 1));
-      if (ch != nullptr) {
-        _write_pump_pwm(ch->get_output_min());
-      }
+      SRV_Channel *ch2 = SRV_Channels::srv_channel((uint8_t)(_pump_chan.get() - 1));
+      if (ch2 != nullptr) { _write_pump_pwm(ch2->get_output_min()); }
+      break;
+    }
+    if (_flow_mode.get() == 1 && _tank_vol.get() > 0.0f) {
+      // FLOW_MODE=1: cong thuc L/ha × vi sinh ratio (MIX_CNT)
+      _flow_target = _compute_visin_target(_mix_cnt.get());
     } else {
-      _flow_target = _app_rate.get() * speed_ms * _boom_width.get() * 0.006f;
-      _pump_pwm = _run_flow_pid(_flow_target, dt_pid);
-      _write_pump_pwm(_pump_pwm);
-      // [AP_ShoesAgtech] Tank monitor: cảnh báo khoảng cách còn bơm được (mỗi 30s)
+      // FLOW_MODE=0: setpoint × ti le MIX_CNT/MIX_STD (giu tong luong ra boom)
+      float ratio = (_mix_std.get() > 0.01f) ? (_mix_cnt.get() / _mix_std.get()) : 1.0f;
+      _flow_target = constrain_float(_flow_setpoint.get() * ratio, 0.0f, 200.0f);
+      // Tank monitor: uoc tinh khoang cach con bom duoc (moi 30s)
       if (_tank_vol.get() > 0.0f && _flow_target > 0.01f) {
-        uint32_t now_w = AP_HAL::millis();
-        if (now_w - _tank_warn_ms >= 30000U) {
-          _tank_warn_ms = now_w;
-          float dist_m = (_tank_vol.get() / _flow_target) * speed_ms * 60.0f;
+        float speed_ms2 = _get_spray_speed();
+        if (speed_ms2 > 0.01f && now - _tank_warn_ms >= 30000U) {
+          _tank_warn_ms = now;
+          float dist_m = (_tank_vol.get() / _flow_target) * speed_ms2 * 60.0f;
           gcs().send_text(MAV_SEVERITY_INFO,
                           "SA: Tank du ~%.0fm (%.1fL @%.1fL/min)",
                           (double)dist_m, (double)_tank_vol.get(),
                           (double)_flow_target);
         }
       }
-      // [/AP_ShoesAgtech]
     }
+    _pump_pwm = _run_flow_pid(_flow_target, dt_pid);
+    _write_pump_pwm(_pump_pwm);
     break;
   }
 
@@ -594,14 +622,17 @@ void AP_ShoesAgtech::update(void) {
                     flow_pfx, (unsigned)_spray_mode, (double)_flow_target,
                     (double)_flow_rate_filtered, (double)_flow_rate_avg,
                     (unsigned)_pump_pwm);
-    // Khi mode 1 + FLOW_MODE=1: in thêm thông tin công thức
-    if (_spray_mode == 1 && _flow_mode.get() == 1 && _tank_vol.get() > 0.0f) {
+    // Khi nac giua/cao + FLOW_MODE=1: in them thong tin cong thuc
+    if ((_spray_mode == 1 || _spray_mode == 2) &&
+        _flow_mode.get() == 1 && _tank_vol.get() > 0.0f) {
+      float r     = (_spray_mode == 2) ? _mix_cnt.get() : _mix_std.get();
       float mdist = _get_mission_dist();
-      float spd   = (_simulation.get() > 0) ? _sim_speed : AP::ahrs().groundspeed();
+      float spd   = _get_spray_speed();
+      float dv    = r * _app_rate.get() * _boom_width.get();
+      float dmax  = (dv > 0.001f) ? (_tank_vol.get() * 10000.0f / dv) : 0.0f;
       gcs().send_text(MAV_SEVERITY_INFO,
-                      "%s FM1 dist:%.0fm spd:%.2fm/s tank:%.0fL",
-                      flow_pfx, (double)mdist, (double)spd,
-                      (double)_tank_vol.get());
+                      "%s FM1 r:%.2f miss:%.0fm dmax:%.0fm spd:%.2fm/s",
+                      flow_pfx, (double)r, (double)mdist, (double)dmax, (double)spd);
     }
   }
 }
@@ -652,8 +683,8 @@ void AP_ShoesAgtech::_check_pump_config(void) {
 
 // RC → SPRAY MODE
 //   Nấc 1 (PWM < 1300) : mode 0 — passthrough, không can thiệp
-//   Nấc 2 (1300-1700)  : mode 1 — PID bám SA_FLOW_SP
-//   Nấc 3 (PWM > 1700) : mode 2 — auto L/ha
+//   Nấc 2 (1300-1700)  : mode 1 — FLOW PID, tỉ lệ SA_MIX_STD (Mặc định van)
+//   Nấc 3 (PWM > 1700) : mode 2 — FLOW PID, tỉ lệ SA_MIX_CNT (Chống nghẹt van)
 // =============================================================
 void AP_ShoesAgtech::_update_spray_mode(void) {
   uint8_t idx = (uint8_t)constrain_int16(_rc_chan.get() - 1, 0, 15);
@@ -1283,6 +1314,110 @@ void AP_ShoesAgtech::_run_simulation(void) {
   // Keep ph_has_data() returning true
   _ph_last_good_ms = now;
 }
+
+// =============================================================
+// [AP_ShoesAgtech] SPRAY SPEED — uu tien: SA_SIM > SA_FLOW_VEL > AHRS
+// SA_SIM=1       : dung _sim_speed (sin wave, dung cho test man hinh)
+// SA_FLOW_VEL>0  : dung gia tri co dinh (calib FLOW_MODE=1 khi xe dung yen)
+// Default (=0)   : dung van toc that tu AP::ahrs().groundspeed()
+// =============================================================
+float AP_ShoesAgtech::_get_spray_speed(void) {
+  if (_simulation.get() > 0) {
+    return _sim_speed;
+  }
+  float vel = _flow_vel.get();
+  if (vel > 0.0f) {
+    return vel;
+  }
+  return AP::ahrs().groundspeed();
+}
+// [/AP_ShoesAgtech]
+
+// =============================================================
+// [AP_ShoesAgtech] VISIN TARGET — FLOW_MODE=1 (nac giua/cao)
+//
+// Tinh luu luong vi sinh target (L/min) theo cong thuc L/ha × ratio.
+// Tat ca kiem tra xuat hien truoc khi chay PID:
+//   1. Mission: dist <= 1m → warning + stop
+//   2. dist_max: tank_vol × 10000 / (r × APP_RATE × BOOM) < mission_dist → stop
+//   3. Speed:   < 0.1 m/s → stop (khong canh bao, chi reset PID)
+//   4. Range:   q1 ∉ [0.3, 6.0] L/min → warning + stop (cam bien YF-S402B)
+// Canh bao throttle chung qua _tank_warn_ms (5s min giua hai lan).
+// =============================================================
+float AP_ShoesAgtech::_compute_visin_target(float r) {
+  uint32_t now = AP_HAL::millis();
+  r = constrain_float(r, 0.01f, 1.0f);
+
+  float speed_ms = _get_spray_speed();
+  float dist = _get_mission_dist();
+
+  // Kiem tra 1: mission da upload?
+  if (dist <= 1.0f) {
+    _pid_integral = 0.0f;
+    _pid_output_lpf = 0.0f;
+    if (now - _tank_warn_ms >= 5000U) {
+      _tank_warn_ms = now;
+      gcs().send_text(MAV_SEVERITY_WARNING,
+                      "SA FM1: chua co mission - bom dung");
+    }
+    return 0.0f;
+  }
+
+  // Kiem tra 2: mission phai <= dist_max de vi sinh vua het khi ket thuc
+  float denom = r * _app_rate.get() * _boom_width.get();
+  if (denom < 0.001f) {
+    return 0.0f;
+  }
+  float dist_max = _tank_vol.get() * 10000.0f / denom;
+  if (dist > dist_max) {
+    _pid_integral = 0.0f;
+    _pid_output_lpf = 0.0f;
+    if (!_arm_dist_warned) {
+      _arm_dist_warned = true;
+      gcs().send_text(MAV_SEVERITY_WARNING,
+                      "SA FM1: mission %.0fm > dist_max %.0fm - ve lai mission ngan hon",
+                      (double)dist, (double)dist_max);
+    }
+    return 0.0f;
+  }
+
+  // Kiem tra 3: toc do
+  if (speed_ms < 0.1f) {
+    _pid_integral = 0.0f;
+    _pid_output_lpf = 0.0f;
+    return 0.0f;
+  }
+
+  // Tinh q1_target (L/min)
+  float q1 = r * _app_rate.get() * speed_ms * _boom_width.get() * 0.006f;
+
+  // Kiem tra 4: dai cam bien YF-S402B (0.3–6 L/min)
+  if (q1 < 0.3f) {
+    _pid_integral = 0.0f;
+    _pid_output_lpf = 0.0f;
+    if (now - _tank_warn_ms >= 5000U) {
+      _tank_warn_ms = now;
+      gcs().send_text(MAV_SEVERITY_WARNING,
+                      "SA FM1: Q visin %.2fL/min < 0.3 - tang mission_dist hoac giam speed",
+                      (double)q1);
+    }
+    return 0.0f;
+  }
+  if (q1 > 6.0f) {
+    _pid_integral = 0.0f;
+    _pid_output_lpf = 0.0f;
+    if (now - _tank_warn_ms >= 5000U) {
+      _tank_warn_ms = now;
+      gcs().send_text(MAV_SEVERITY_WARNING,
+                      "SA FM1: Q visin %.2fL/min > 6.0 - giam mission_dist hoac tang speed",
+                      (double)q1);
+    }
+    return 0.0f;
+  }
+
+  return constrain_float(q1, 0.0f, 200.0f);
+}
+// [/AP_ShoesAgtech]
 
 // =============================================================
 // MISSION DISTANCE — SA_FLOW_MODE = 1 (mode 1) + mode 2 monitor

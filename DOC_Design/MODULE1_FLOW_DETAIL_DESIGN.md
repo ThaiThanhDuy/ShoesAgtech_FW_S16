@@ -38,11 +38,18 @@ update() [10 Hz — ArduPilot scheduler]
     │
     └──► switch(_spray_mode)
               mode 0 ──► _write_pump_pwm(RC_passthrough)
-              mode 1 ──► _get_mission_dist()
-                         _run_flow_pid(flow_target, dt)
-                         └──► return pwm  ──► _write_pump_pwm(pwm)
-              mode 2 ──► _run_flow_pid(flow_target, dt)
-                         └──► return pwm  ──► _write_pump_pwm(pwm)
+              mode 1 ──► [FLOW_MODE=0] flow_target = SA_FLOW_SP
+              (nấc giữa)  [FLOW_MODE=1] _compute_visin_target(SA_MIX_STD)
+                              └──► _get_mission_dist()
+                                   kiểm tra mission / dist_max / speed / sensor range
+                          _run_flow_pid(flow_target, dt)
+                          └──► return pwm  ──► _write_pump_pwm(pwm)
+              mode 2 ──► [FLOW_MODE=0] flow_target = SA_FLOW_SP × (MIX_CNT/MIX_STD)
+              (nấc cao)  [FLOW_MODE=1] _compute_visin_target(SA_MIX_CNT)
+                              └──► _get_mission_dist()
+                                   kiểm tra mission / dist_max / speed / sensor range
+                          _run_flow_pid(flow_target, dt)
+                          └──► return pwm  ──► _write_pump_pwm(pwm)
 ```
 
 ### 1.2 Mô tả từng hàm
@@ -88,7 +95,7 @@ update() [10 Hz — ArduPilot scheduler]
   5. Tính flow rate (nếu Δt ≥ 100ms): đọc `_pulse_count`, tính raw L/min → EMA → MA
   6. Tính dt PID (clamp 0 < dt ≤ 1s)
   7. Gọi `_update_spray_mode()`
-  8. Switch theo `_spray_mode`: xuất PWM bơm
+  8. Switch theo `_spray_mode`: mode 1 kiểm tra `SA_SPRAY_MODE` trước khi chọn setpoint
   9. Console log nếu SA_FLOW_LOG=1
 - **Đầu ra / Return:** `void` — side effects: `_flow_rate_filtered`, `_flow_rate_avg`, `_pump_pwm`, `_flow_target`
 
@@ -115,8 +122,23 @@ update() [10 Hz — ArduPilot scheduler]
 - **Xử lý:**
   1. Đọc PWM kênh `SA_RC_CHAN - 1` (0-indexed)
   2. Nếu PWM=0 (mất tín hiệu) → giữ nguyên mode cũ, return
-  3. PWM < 1300 → mode 0; 1300–1699 → mode 1; ≥ 1700 → mode 2
+  3. PWM < 1300 → mode 0 (passthrough); 1300–1699 → mode 1 (nấc giữa, MIX_STD); ≥ 1700 → mode 2 (nấc cao, MIX_CNT)
 - **Đầu ra / Return:** `void` — cập nhật `_spray_mode`
+
+---
+
+**`_compute_visin_target(float r) → float`**
+- **Được gọi bởi:** `update()` (mode 1 và mode 2 khi `FLOW_MODE=1 && TANK_VOL>0`)
+- **Đầu vào:** `r` — tỉ lệ vi sinh trong tổng lưu lượng (0.01–1.0)
+- **Xử lý (theo thứ tự ưu tiên):**
+  1. `dist = _get_mission_dist()` — nếu ≤ 1m → warning + return 0
+  2. `dist_max = SA_TANK_VOL × 10000 / (r × SA_APP_RATE × SA_BOOM_W)` — nếu `dist > dist_max` → warning + return 0
+  3. `speed < 0.1 m/s` → reset PI, return 0 (không cảnh báo)
+  4. `q1 = r × SA_APP_RATE × speed × SA_BOOM_W × 0.006` (L/min)
+  5. `q1 < 0.3` hoặc `q1 > 6.0` (dãy YF-S402B) → warning + return 0
+  6. Trả về `q1`
+- **Đầu ra / Return:** `float` — lưu lượng vi sinh target (L/min); 0 nếu bất kỳ điều kiện nào không đạt
+- **Ghi chú:** Warnings dùng chung timer `_tank_warn_ms`, throttle 5s giữa các lần in.
 
 ---
 
@@ -202,8 +224,10 @@ update() [10 Hz — ArduPilot scheduler]
 | `SA_LOG_FL_MS` | 22 | Int16 | 1000 | 100 | 60000 | Chu kỳ console log lưu lượng (ms). |
 | `SA_SIM` | 32 | Int8 | 0 | 0 | 1 | Chế độ giả lập: 1=inject dữ liệu sin thay cảm biến thật. |
 | `SA_FLOW_PIN` | 33 | Int16 | 55 | 1 | 200 | Chân GPIO cảm biến. **Chỉ đọc khi init() — cần reboot khi thay đổi.** |
-| `SA_TANK_VOL` | 34 | Float | 0.0 | 0 | 2000 | Dung tích tank (L). `=0` tắt công thức mode 1 FLOW_MODE=1 và cảnh báo mode 2. |
-| `SA_FLOW_MODE` | 35 | Int8 | 0 | 0 | 1 | Nguồn setpoint mode 1: **0**=`SA_FLOW_SP`, **1**=công thức tank+mission. |
+| `SA_TANK_VOL` | 34 | Float | 0.0 | 0 | 2000 | Dung tích tank vi sinh (L). `=0` tắt FLOW_MODE=1. Dùng tính `dist_max`. |
+| `SA_FLOW_MODE` | 35 | Int8 | 0 | 0 | 1 | Nguồn setpoint: **0**=`SA_FLOW_SP` trực tiếp, **1**=công thức L/ha × vi sinh ratio. |
+| `SA_MIX_STD` | 37 | Float | 0.35 | 0.01 | 1.0 | Tỉ lệ vi sinh nấc giữa (Mặc định van). FLOW_MODE=1: `q1 = MIX_STD × APP_RATE × speed × BOOM × 0.006`. FLOW_MODE=0: setpoint = SA_FLOW_SP. |
+| `SA_MIX_CNT` | 38 | Float | 0.50 | 0.01 | 1.0 | Tỉ lệ vi sinh nấc cao (Chống nghẹt van, mở van nhiều hơn). FLOW_MODE=1: dùng MIX_CNT thay MIX_STD. FLOW_MODE=0: `flow_target = SA_FLOW_SP × (MIX_CNT/MIX_STD)`. |
 
 > **Param chỉ có hiệu lực sau reboot:** `SA_FLOW_PIN`
 
@@ -244,30 +268,55 @@ _flow_rate_avg = sum / count  (count tăng dần đến 10)
 **Chọn mode từ RC:**
 ```
 rc_pwm = RC_Channels::get_radio_in(SA_RC_CHAN − 1)
-rc_pwm < 1300    →  mode 0 (PASSTHROUGH)
-1300 ≤ rc_pwm < 1700 →  mode 1 (FLOW PID)
-rc_pwm ≥ 1700   →  mode 2 (AUTO RATE)
+rc_pwm < 1300        →  mode 0 (PASSTHROUGH — nấc thấp)
+1300 ≤ rc_pwm < 1700 →  mode 1 (FLOW PID, tỉ lệ MIX_STD — nấc giữa / Mặc định van)
+rc_pwm ≥ 1700        →  mode 2 (FLOW PID, tỉ lệ MIX_CNT — nấc cao / Chống nghẹt van)
 rc_pwm = 0 (mất tín hiệu) →  giữ mode cũ
 ```
 
-**Tính flow_target (mode 1):**
+**Tính flow_target (mode 1 — nấc giữa):**
 ```
 SA_FLOW_MODE=0 hoặc SA_TANK_VOL=0:
-    flow_target = SA_FLOW_SP
+    flow_target = SA_FLOW_SP  (setpoint trực tiếp)
 
 SA_FLOW_MODE=1 và SA_TANK_VOL>0:
-    Điều kiện đủ: mission_dist > 1.0m VÀ speed ≥ 0.05 m/s
-    flow_target = constrain((SA_TANK_VOL × speed × 60) / mission_dist, 0, 200)
-
-    Không đủ điều kiện: flow_target = 0.0 + STATUSTEXT mỗi 5s
+    flow_target = _compute_visin_target(SA_MIX_STD)
+    (xem luồng _compute_visin_target bên dưới)
 ```
 
-**Tính flow_target (mode 2):**
+**Tính flow_target (mode 2 — nấc cao):**
 ```
-speed < 0.1 m/s → flow_target = 0, reset PI integral, xuất MIN
-speed ≥ 0.1 m/s:
-    flow_target = SA_APP_RATE × speed × SA_BOOM_W × 0.006
-    (nguồn gốc: L/ha × m/s × m × 60s/min ÷ 10000m²/ha = 0.006)
+SA_FLOW_MODE=0 hoặc SA_TANK_VOL=0:
+    ratio = SA_MIX_CNT / SA_MIX_STD   (nếu MIX_STD ≤ 0.01 → ratio = 1.0)
+    flow_target = constrain(SA_FLOW_SP × ratio, 0, 200)
+    Ý nghĩa: giữ nguyên tổng lưu lượng ra boom, tăng phần vi sinh theo tỉ lệ van
+    Tank monitor: ước tính khoảng cách còn bơm được, in mỗi 30s nếu speed > 0
+
+SA_FLOW_MODE=1 và SA_TANK_VOL>0:
+    flow_target = _compute_visin_target(SA_MIX_CNT)
+    (xem luồng _compute_visin_target bên dưới)
+```
+
+**Luồng `_compute_visin_target(r)`:**
+```
+Đầu vào: r = tỉ lệ vi sinh (MIX_STD hoặc MIX_CNT, clamp 0.01–1.0)
+
+1. dist = _get_mission_dist()
+   dist ≤ 1m → reset PI, cảnh báo "chua co mission", return 0
+
+2. denom = r × SA_APP_RATE × SA_BOOM_W
+   denom < 0.001 → return 0 (params chưa cài)
+   dist_max = SA_TANK_VOL × 10000 / denom  (m)
+   dist > dist_max → reset PI, cảnh báo "tank chi du Xm", return 0
+
+3. speed < 0.1 m/s → reset PI, return 0  (xe dừng, không cảnh báo)
+
+4. q1 = r × SA_APP_RATE × speed × SA_BOOM_W × 0.006  (L/min)
+   q1 < 0.3 → cảnh báo "Q visin Xm/L < 0.3", return 0
+   q1 > 6.0 → cảnh báo "Q visin XL/min > 6.0", return 0
+
+5. return constrain(q1, 0, 200)
+   → đây là setpoint cho _run_flow_pid()
 ```
 
 **PI controller:**
@@ -321,8 +370,8 @@ Format string: "Qff"
 Trigger: mỗi SA_LOG_FL_MS ms khi SA_FLOW_LOG=1
 Format:  [FLOW] M<n> Tgt:<target> Act:<flow_rate> Avg:<flow_avg> PWM:<pump_pwm>
 
-Khi SA_FLOW_MODE=1 & điều kiện đạt (cùng chu kỳ):
-         [FLOW] FM1 dist:<dist>m spd:<speed>m/s tank:<tank_vol>L
+Khi mode 1 hoặc mode 2 + FLOW_MODE=1 + TANK_VOL>0 (cùng chu kỳ):
+         [FLOW] FM1 r:<ratio> miss:<dist>m dmax:<dist_max>m spd:<speed>m/s
 
 SA_SIM=1: tiền tố [SIM][FLOW] thay vì [FLOW]
 ```
@@ -335,9 +384,11 @@ SA_SIM=1: tiền tố [SIM][FLOW] thay vì [FLOW]
 | `ShoesAgtech: Flow sensor ready` | INFO | GPIO attach thành công | 1 lần init |
 | `SA: SERVO<n>_FUNCTION=<x> must be 0(None)!` | WARNING | Sai FUNCTION | Mỗi 5s |
 | `SA: SERVO<n> OK Min:<x> Trim:<y> Max:<z>` | INFO | Config đúng | 1 lần (khi vừa đúng) |
-| `SA FM1: chua co mission (dist=<x>m) - bom dung` | WARNING | FLOW_MODE=1, dist ≤ 1m | Mỗi 5s |
-| `SA FM1: toc do qua thap (<x>m/s) - bom dung` | WARNING | FLOW_MODE=1, speed < 0.05 | Mỗi 5s |
-| `SA: Tank du ~<x>m (<y>L @<z>L/min)` | INFO | Mode 2, TANK_VOL>0 | Mỗi 30s |
+| `SA FM1: chua co mission - bom dung` | WARNING | FLOW_MODE=1, dist ≤ 1m | Mỗi 5s |
+| `SA FM1: tank chi du <x>m, mission <y>m - giam mission_dist` | WARNING | FLOW_MODE=1, dist > dist_max | Mỗi 5s |
+| `SA FM1: Q visin <x>L/min < 0.3 - tang mission_dist hoac giam speed` | WARNING | FLOW_MODE=1, q1 < 0.3 | Mỗi 5s |
+| `SA FM1: Q visin <x>L/min > 6.0 - giam mission_dist hoac tang speed` | WARNING | FLOW_MODE=1, q1 > 6.0 | Mỗi 5s |
+| `SA: Tank du ~<x>m (<y>L @<z>L/min)` | INFO | Mode 2 FLOW_MODE=0, TANK_VOL>0 | Mỗi 30s |
 
 ---
 
@@ -383,10 +434,11 @@ FC config:
 
 | Điểm | Basic Design dự kiến | Thực tế đã làm | Lý do |
 |---|---|---|---|
-| Mode 1, FLOW_MODE=1, SA_TANK_VOL=0 | Không đề cập | Tự fallback về SA_FLOW_SP (hành vi giống FLOW_MODE=0) | Tránh bơm dừng đột ngột khi chưa cài tank_vol |
-| Anti-windup PI | Đề cập giữ khi chạm trần/sàn | Clamp integral `±(range/(2×I_gain))` | Chuẩn hóa theo dải PWM thực tế |
-| Mode 2, xe dừng | Bơm dừng | Xuất `ch->get_output_min()` (không hardcode 800) | Tôn trọng SERVOx_MIN của người dùng |
-| Cảnh báo tank mode 2 | Mỗi 30s | Mỗi 30s ✓ | Implement đúng |
+| FLOW_MODE=1, TANK_VOL=0 | Không đề cập | Fallback về SA_FLOW_SP | Tránh bơm dừng khi chưa cài tank |
+| Anti-windup PI | Clamp khi chạm trần/sàn | Clamp integral `±(range/(2×I_gain))` | Chuẩn hóa theo dải PWM thực tế |
+| Mode 2 (nấc cao), FLOW_MODE=0, xe dừng | Không đề cập rõ | Tank monitor mỗi 30s nếu speed > 0 | Giúp người dùng ước tính quãng đường còn lại |
+| Điều kiện van (Chống nghẹt / Mặc định) | Basic Design Case 9–10, param SA_SPRAY_MODE | **Tích hợp vào nấc RC**: nấc giữa = MIX_STD, nấc cao = MIX_CNT. SA_SPRAY_MODE và SA_SP_PCT được thay thế | Loại bỏ param riêng cho điều kiện van; người dùng chọn trực tiếp bằng tay RC |
+| FLOW_MODE=1 nấc cao | Không đề cập | Dùng SA_MIX_CNT: dist_max nhỏ hơn → cảnh báo sớm hơn do vi sinh nhiều hơn | Chống nghẹt = mở van vi sinh nhiều → hết tank nhanh hơn → dist_max ngắn hơn |
 
 ---
 

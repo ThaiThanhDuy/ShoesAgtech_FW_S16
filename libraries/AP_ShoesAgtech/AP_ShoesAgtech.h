@@ -19,9 +19,9 @@ public:
   bool     is_enabled(void)         const { return _enable_flag.get() > 0; }
 
   // Spray control getters (for logging)
-  uint8_t  get_spray_mode(void)     const { return _spray_mode; }
-  uint16_t get_pump_pwm(void)       const { return _pump_pwm; }
-  float    get_flow_target(void)    const { return _flow_target; }
+  uint8_t  get_spray_mode(void)       const { return _spray_mode; }
+  uint16_t get_pump_pwm(void)         const { return _pump_pwm; }
+  float    get_flow_target(void)      const { return _flow_target; }
 
   // [AP_ShoesAgtech] Dosing motor getters (for logging)
   uint16_t get_dosing_pwm(void)     const { return _dos_pwm; }
@@ -110,6 +110,15 @@ private:
   AP_Int8  _flow_mode;   // SA_FLOW_MODE 0=direct setpoint, 1=tank+mission formula
   // [/AP_ShoesAgtech]
 
+  // [AP_ShoesAgtech] Parameters: vi sinh mixing ratio by field condition (slots 37-38)
+  AP_Float _mix_std;  // SA_MIX_STD  ti le vi sinh nac giua (Mac dinh van), default 0.35
+  AP_Float _mix_cnt;  // SA_MIX_CNT  ti le vi sinh nac cao (Chong nghet van), default 0.50
+  // [/AP_ShoesAgtech]
+
+  // [AP_ShoesAgtech] Parameter: override speed for FLOW_MODE=1 calibration (slot 39)
+  AP_Float _flow_vel; // SA_FLOW_VEL  0=dung van toc that, >0=dung gia tri nay (m/s)
+  // [/AP_ShoesAgtech]
+
   // ---- Flow sensor state — YF-S402B (0.3–6 L/min) ----
   uint32_t _last_timestamp_ms;
   uint32_t _last_pulse_snapshot;
@@ -139,6 +148,7 @@ private:
   float    _mission_dist_m;      // cached total mission distance (m)
   uint16_t _mission_ncmds;       // num_commands() when distance was last cached
   uint32_t _tank_warn_ms;        // last time tank distance warning was printed
+  bool     _arm_dist_warned;     // true sau khi da canh bao dist>dist_max lan nay (reset khi disarm)
   // [/AP_ShoesAgtech]
   float    _pid_integral;
   float    _pid_output_lpf;
@@ -211,6 +221,8 @@ private:
   void     _check_pump_config(void);
   uint16_t _run_flow_pid(float target_lmin, float dt);
   void     _write_pump_pwm(uint16_t pwm);
+  float    _compute_visin_target(float r);
+  float    _get_spray_speed(void);
 
   // [AP_ShoesAgtech] Private methods — dosing motor
   void     _check_dosing_config(void);

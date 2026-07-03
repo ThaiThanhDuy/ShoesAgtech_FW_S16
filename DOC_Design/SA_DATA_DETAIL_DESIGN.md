@@ -240,7 +240,7 @@ while True:
     { "index": 11, "name": "SlotStatus", "units": "",       "decimals": 0 },
     { "index": 12, "name": "DosSP",      "units": "g",      "decimals": 0 },
     { "index": 13, "name": "DosRate",    "units": "g/50µs", "decimals": 1 },
-    { "index": 14, "name": "DosPWM",     "units": "µs",     "decimals": 0 }
+    { "index": 14, "name": "DosPWM",      "units": "µs",     "decimals": 0 }
   ]
 }
 ```

@@ -60,7 +60,7 @@ Dùng khi: phun thuốc, phun nước, phun phân bón trên đồng/ao — cầ
 ## 5. Flow hoạt động
 
 ```
-Người lái gạt nút RC chọn chế độ phun
+Người lái gạt nút RC chọn chế độ phun + điều kiện van ruộng
     ↓
 Cảm biến đếm xung liên tục → hệ thống tính lưu lượng thực (L/min)
     ↓
@@ -68,11 +68,16 @@ Cảm biến đếm xung liên tục → hệ thống tính lưu lượng thực
 │  Nấc thấp → Chế độ 0 (LÁI TAY)                               │
 │    Tín hiệu joystick thứ 2 truyền thẳng ra bơm                │
 │                                                                │
-│  Nấc giữa → Chế độ 1 (TỰ ĐỘNG LƯU LƯỢNG)                    │
-│    Bộ điều khiển tăng/giảm bơm để bám lưu lượng mục tiêu     │
+│  Nấc giữa → PID bám lưu lượng vi sinh (van Mặc định)         │
+│    SA_FLOW_MODE=0: bám SA_FLOW_SP (người dùng calib tay)      │
+│    SA_FLOW_MODE=1: bám công thức L/ha × SA_MIX_STD            │
+│                    có kiểm tra khoảng cách tank còn đủ không   │
 │                                                                │
-│  Nấc cao → Chế độ 2 (TỰ ĐỘNG DIỆN TÍCH)                      │
-│    Hệ thống tự tính lưu lượng cần theo tốc độ + độ rộng boom │
+│  Nấc cao → PID bám lưu lượng vi sinh (van Chống nghẹt)        │
+│    SA_FLOW_MODE=0: bám SA_FLOW_SP × (SA_MIX_CNT/SA_MIX_STD)  │
+│                    (van mở thêm → setpoint vi sinh tăng tỉ lệ) │
+│    SA_FLOW_MODE=1: bám công thức L/ha × SA_MIX_CNT            │
+│                    có kiểm tra khoảng cách tank còn đủ không   │
 └────────────────────────────────────────────────────────────────┘
     ↓
 Tín hiệu điều khiển gửi đến bơm
@@ -90,46 +95,46 @@ Dữ liệu lưu lượng + trạng thái bơm gửi lên GCS liên tục
 - **Hành vi hệ thống:** Tín hiệu joystick thứ 2 truyền thẳng đến bơm, hệ thống không can thiệp
 - **Output người dùng thấy:** Bơm phản hồi trực tiếp với tay lái; GCS hiển thị Mode=0, lưu lượng thực đọc liên tục nhưng không điều khiển
 
-### Case 2: Chế độ 1 — Tự động bám lưu lượng, setpoint cố định
+### Case 2: Nấc giữa, SA_FLOW_MODE=0 — bám setpoint cố định (Mặc định van)
 
-- **Điều kiện:** Nút RC ở nấc giữa + đặt chế độ "setpoint cố định"
-- **Hành vi hệ thống:** Bơm tự tăng/giảm để giữ lưu lượng đúng bằng giá trị cài đặt trước
-- **Output người dùng thấy:** Lưu lượng ổn định về giá trị đặt; GCS hiển thị Mode=1, lưu lượng thực và mục tiêu
+- **Điều kiện:** Nút RC ở nấc giữa + SA_FLOW_MODE=0
+- **Hành vi hệ thống:** Bơm tự tăng/giảm để giữ lưu lượng vi sinh đúng bằng SA_FLOW_SP; van ruộng đang ở vị trí Mặc định (người dùng chỉnh tay khi lắp đặt)
+- **Output người dùng thấy:** Lưu lượng ổn định về SA_FLOW_SP; GCS hiển thị Mode=1, lưu lượng thực và mục tiêu
 
-### Case 3: Chế độ 1 — Tự động phân bổ đều theo tank + tuyến đường
+### Case 3: Nấc giữa, SA_FLOW_MODE=1 — L/ha công thức + kiểm tra tank
 
-- **Điều kiện:** Nút RC ở nấc giữa + đặt chế độ "tank + mission" + đã upload tuyến đường + xe đang chạy
-- **Hành vi hệ thống:** Tự tính lưu lượng cần để phân bổ đều toàn bộ lượng nước trong tank trên tuyến đường đã đặt
-- **Output người dùng thấy:** Lưu lượng tăng/giảm theo tốc độ xe; GCS cập nhật lưu lượng đang áp dụng
+- **Điều kiện:** Nút RC ở nấc giữa + SA_FLOW_MODE=1 + đã upload tuyến đường + xe đang chạy
+- **Hành vi hệ thống:** Tự tính lưu lượng vi sinh theo `SA_MIX_STD × SA_APP_RATE × speed × SA_BOOM_W × 0.006`. Kiểm tra tank đủ cho cả mission trước khi bơm.
+- **Output người dùng thấy:** Lưu lượng tăng/giảm theo tốc độ xe; GCS hiển thị r, dist_max và dist mỗi SA_LOG_FL_MS
 
-### Case 4: Chế độ 1 (tank + mission) — Chưa có tuyến đường hoặc xe đứng yên
+### Case 4: Nấc giữa hoặc cao, FLOW_MODE=1 — không đủ điều kiện bơm
 
-- **Điều kiện:** Đặt chế độ tank+mission nhưng chưa upload tuyến đường LÊN FC, hoặc xe không di chuyển
-- **Hành vi hệ thống:** Bơm DỪNG hoàn toàn — không tự chuyển sang tốc độ cố định
-- **Output người dùng thấy:** Bơm dừng; cảnh báo xuất hiện trên màn hình GCS giải thích lý do
+- **Điều kiện:** FLOW_MODE=1 nhưng: chưa upload mission / tank không đủ cho mission / xe đứng yên / lưu lượng ngoài dải 0.3–6 L/min
+- **Hành vi hệ thống:** Bơm DỪNG hoàn toàn + cảnh báo GCS giải thích lý do cụ thể
+- **Output người dùng thấy:** Bơm dừng; GCS hiển thị một trong các cảnh báo: "chua co mission", "tank chi du Xm", "Q visin X < 0.3", "Q visin X > 6.0"
 
-### Case 5: Chế độ 2 — Tự động theo diện tích, xe đang chạy
+### Case 5: Nấc cao, SA_FLOW_MODE=0 — bám setpoint Chống nghẹt
 
-- **Điều kiện:** Nút RC ở nấc cao nhất + xe đang di chuyển
-- **Hành vi hệ thống:** Lưu lượng tự tăng khi xe chạy nhanh, giảm khi xe chạy chậm để phun đều trên mỗi mét vuông
-- **Output người dùng thấy:** GCS hiển thị Mode=2; bơm hoạt động theo tốc độ xe
+- **Điều kiện:** Nút RC ở nấc cao + SA_FLOW_MODE=0; van vi sinh mở thêm so với nấc giữa (van Chống nghẹt)
+- **Hành vi hệ thống:** Setpoint vi sinh tăng theo tỉ lệ SA_MIX_CNT/SA_MIX_STD so với SA_FLOW_SP, giữ nguyên tổng lưu lượng ra boom
+- **Output người dùng thấy:** GCS hiển thị Mode=2, setpoint cao hơn nấc giữa (VD: SP=2.0, MIX_CNT/MIX_STD=0.50/0.35=1.43 → target=2.86 L/min)
 
-### Case 6: Chế độ 2 — Xe dừng
+### Case 6: Nấc cao, SA_FLOW_MODE=1 — L/ha công thức + MIX_CNT
 
-- **Điều kiện:** Mode 2, xe dừng lại
-- **Hành vi hệ thống:** Bơm tự dừng ngay để tránh phun tập trung vào một điểm
-- **Output người dùng thấy:** Bơm dừng ngay khi xe dừng; khởi động lại khi xe chạy
+- **Điều kiện:** Nút RC ở nấc cao + SA_FLOW_MODE=1 + xe đang chạy
+- **Hành vi hệ thống:** Dùng SA_MIX_CNT (cao hơn MIX_STD) → dist_max ngắn hơn (hết tank nhanh hơn vì nhiều vi sinh hơn) → cảnh báo tank sớm hơn nấc giữa
+- **Output người dùng thấy:** Hoạt động như Case 3 nhưng dist_max nhỏ hơn; cảnh báo "tank chi du Xm" xuất hiện sớm hơn
 
-### Case 7: Cảnh báo sắp hết nước trong tank (mode 2)
+### Case 7: Cảnh báo ước tính tank (nấc cao, FLOW_MODE=0)
 
-- **Điều kiện:** Chế độ 2 + đã cài dung tích tank trong cài đặt
-- **Hành vi hệ thống:** Ước tính còn bơm được bao nhiêu mét đường nữa, thông báo định kỳ
-- **Output người dùng thấy:** Thông báo trên GCS mỗi 30 giây: "Tank còn ~Xm (YL @ ZL/min)"
+- **Điều kiện:** Nấc cao + SA_FLOW_MODE=0 + SA_TANK_VOL>0 + xe đang chạy
+- **Hành vi hệ thống:** Ước tính còn bơm được bao nhiêu mét đường nữa dựa trên setpoint vi sinh hiện tại + tốc độ xe, thông báo định kỳ
+- **Output người dùng thấy:** Thông báo GCS mỗi 30 giây: "Tank còn ~Xm (YL @ ZL/min)"
 
 ### Case 8: Chế độ thử nghiệm (SA_SIM=1)
 
 - **Điều kiện:** Bật chế độ giả lập trong cài đặt
-- **Hành vi hệ thống:** Cảm biến được thay bằng dữ liệu mô phỏng, không cần phần cứng thật
+- **Hành vi hệ thống:** Cảm biến được thay bằng dữ liệu mô phỏng sin, không cần phần cứng thật
 - **Output người dùng thấy:** GCS nhận dữ liệu dao động bình thường; console log có tiền tố [SIM]
 
 ---
