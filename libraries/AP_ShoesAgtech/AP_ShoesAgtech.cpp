@@ -338,6 +338,7 @@ const AP_Param::GroupInfo AP_ShoesAgtech::var_info[] = {
     //   Dung trong FLOW_MODE=0: setpoint chinh la SA_FLOW_SP (khong can ratio).
     //   dist_max = TANK_VOL * 10000 / (MIX_STD * APP_RATE * BOOM).
     // @Range: 0.01 1.0
+    // @Increment: 0.01
     // @User: Standard
     AP_GROUPINFO("MIX_STD", 37, AP_ShoesAgtech, _mix_std, 0.35f),
 
@@ -348,6 +349,7 @@ const AP_Param::GroupInfo AP_ShoesAgtech::var_info[] = {
     //   MIX_STD trong cong thuc. FLOW_MODE=0: flow_target = SA_FLOW_SP *
     //   (MIX_CNT / MIX_STD) de giu tong luong ra boom giong nac giua.
     // @Range: 0.01 1.0
+    // @Increment: 0.01
     // @User: Standard
     AP_GROUPINFO("MIX_CNT", 38, AP_ShoesAgtech, _mix_cnt, 0.50f),
     // [/AP_ShoesAgtech]
@@ -536,9 +538,11 @@ void AP_ShoesAgtech::update(void) {
     }
   }
 
-  // Khi disarm: reset one-shot warning de lan arm tiep theo canh bao lai
+  // Khi disarm: reset warning + cache mission de ARM tiep theo tinh lai khoang cach
   if (!now_armed) {
     _arm_dist_warned = false;
+    _mission_ncmds   = 0;
+    _mission_dist_m  = 0.0f;
   }
   _was_armed = now_armed;
 
@@ -1371,7 +1375,7 @@ void AP_ShoesAgtech::_print_fm1_arm_status(float r)
   // Check 1: co mission khong?
   if (dist <= 1.0f) {
     gcs().send_text(MAV_SEVERITY_WARNING,
-                    "SA FM1: chua co mission - bom se dung");
+                    "SA FM1: chưa có mission - bơm sẽ dừng");
     return;
   }
 
@@ -1379,13 +1383,13 @@ void AP_ShoesAgtech::_print_fm1_arm_status(float r)
   float denom = r * _app_rate.get() * _boom_width.get();
   if (denom < 0.001f) {
     gcs().send_text(MAV_SEVERITY_WARNING,
-                    "SA FM1: APP_RATE/BOOM_W = 0 - kiem tra param");
+                    "SA FM1: APP_RATE/BOOM_W = 0 - kiểm tra param");
     return;
   }
   float dist_max = _tank_vol.get() * 10000.0f / denom;
   if (dist > dist_max) {
     gcs().send_text(MAV_SEVERITY_WARNING,
-                    "SA FM1: mission %.0fm > dmax %.0fm - ve lai mission ngan hon",
+                    "SA FM1: mission %.0fm > dmax %.0fm - vẽ lại mission ngắn hơn",
                     (double)dist, (double)dist_max);
     return;
   }
@@ -1394,7 +1398,7 @@ void AP_ShoesAgtech::_print_fm1_arm_status(float r)
   float speed = _get_spray_speed();
   if (speed <= 0.1f) {
     gcs().send_text(MAV_SEVERITY_INFO,
-                    "SA FM1 READY: r=%.2f miss=%.0fm/%.0fm | van toc=0 bom cho xe chay",
+                    "SA FM1 SẴN SÀNG: r=%.2f miss=%.0fm/%.0fm | vận tốc=0 bơm chờ xe chạy",
                     (double)r, (double)dist, (double)dist_max);
     return;
   }
@@ -1402,20 +1406,28 @@ void AP_ShoesAgtech::_print_fm1_arm_status(float r)
   float q1 = r * _app_rate.get() * speed * _boom_width.get() * 0.006f;
   if (q1 < 0.3f) {
     gcs().send_text(MAV_SEVERITY_WARNING,
-                    "SA FM1: q1=%.2fL/min < 0.3 @%.1fm/s - tang APP_RATE hoac FLOW_VEL",
+                    "SA FM1: q1=%.2fL/ph < 0.3 @%.1fm/s - tăng APP_RATE hoặc FLOW_VEL",
                     (double)q1, (double)speed);
     return;
   }
   if (q1 > 2.0f) {
     gcs().send_text(MAV_SEVERITY_WARNING,
-                    "SA FM1: q1=%.2fL/min > 2.0 @%.1fm/s - giam APP_RATE hoac FLOW_VEL",
+                    "SA FM1: q1=%.2fL/ph > 2.0 @%.1fm/s - giảm APP_RATE hoặc FLOW_VEL",
                     (double)q1, (double)speed);
     return;
   }
 
+  // Thoi gian du kien chay het mission + luong vi sinh tieu thu
+  uint32_t eta_s   = (uint32_t)(dist / speed);
+  uint32_t eta_min = eta_s / 60U;
+  uint32_t eta_sec = eta_s % 60U;
+  float    vi_used = q1 * (eta_s / 60.0f);
+
   gcs().send_text(MAV_SEVERITY_INFO,
-                  "SA FM1 READY: r=%.2f miss=%.0fm dmax=%.0fm q1=%.2fL/min @%.1fm/s",
-                  (double)r, (double)dist, (double)dist_max, (double)q1, (double)speed);
+                  "SA FM1 OK: r=%.2f q1=%.2fL/ph miss=%.0fm dmax=%.0fm ~%um%02us vi~%.1fL",
+                  (double)r, (double)q1,
+                  (double)dist, (double)dist_max,
+                  eta_min, eta_sec, (double)vi_used);
 }
 
 // =============================================================
