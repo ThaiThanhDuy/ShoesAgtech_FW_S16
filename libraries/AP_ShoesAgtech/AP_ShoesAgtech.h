@@ -27,6 +27,7 @@ public:
   uint16_t get_dosing_pwm(void)     const { return _dos_pwm; }
   float    get_dosing_sp(void)      const { return _dos_sp.get(); }
   float    get_dosing_rate(void)    const { return _dos_rate.get(); }
+  int8_t   get_dosing_food(void)    const { return _dos_food.get(); }
   // [/AP_ShoesAgtech]
 
   // [AP_ShoesAgtech] pH sensor getters — Nengshi ASPS3801D-0.5M via Modbus RTU
@@ -95,6 +96,8 @@ private:
   AP_Int8  _dos_log_enable; // SA_DOS_LOG     console log enable cho dosing motor
   AP_Int16 _dos_log_ms;     // SA_DOS_LOG_MS  khoang thoi gian giua hai lan in log (ms, mac dinh 1000)
   AP_Int8  _dos_mode;       // SA_DOS_MODE    0=fixed PWM (cu), 1=variable theo speed+mission
+  AP_Int8  _dos_food;       // SA_DOS_FOOD    chon loai thuc an 1-7 (tuong ung SA_DOS_F1..F7)
+  AP_Float _dos_fr[7];      // SA_DOS_F1..F7  rate (g/50us) theo tung loai thuc an
   // [/AP_ShoesAgtech]
 
   // [AP_ShoesAgtech] Parameter: simulation mode (slot 32)

@@ -366,6 +366,59 @@ const AP_Param::GroupInfo AP_ShoesAgtech::var_info[] = {
     AP_GROUPINFO("FLOW_VEL", 39, AP_ShoesAgtech, _flow_vel, 0.0f),
     // [/AP_ShoesAgtech]
 
+    // [AP_ShoesAgtech] Dosing food type selector + per-type rate (slots 40-47)
+    // @Param: DOS_FOOD
+    // @DisplayName: Dosing food type selector (1-7)
+    // @Description: Chon loai thuc an dang dung. He thong se dung SA_DOS_Fx tuong
+    //   ung de tinh toc do motor. Moi loai thuc an co the co ti le quy doi khac nhau
+    //   do do nhot, khoi luong rieng khac nhau.
+    // @Range: 1 7
+    // @User: Standard
+    AP_GROUPINFO("DOS_FOOD", 40, AP_ShoesAgtech, _dos_food, 1),
+    // @Param: DOS_F1
+    // @DisplayName: Dosing rate food type 1 (g per 50us offset)
+    // @Range: 1 10000
+    // @Increment: 1
+    // @User: Standard
+    AP_GROUPINFO("DOS_F1",   41, AP_ShoesAgtech, _dos_fr[0], 100.0f),
+    // @Param: DOS_F2
+    // @DisplayName: Dosing rate food type 2 (g per 50us offset)
+    // @Range: 1 10000
+    // @Increment: 1
+    // @User: Standard
+    AP_GROUPINFO("DOS_F2",   42, AP_ShoesAgtech, _dos_fr[1], 100.0f),
+    // @Param: DOS_F3
+    // @DisplayName: Dosing rate food type 3 (g per 50us offset)
+    // @Range: 1 10000
+    // @Increment: 1
+    // @User: Standard
+    AP_GROUPINFO("DOS_F3",   43, AP_ShoesAgtech, _dos_fr[2], 100.0f),
+    // @Param: DOS_F4
+    // @DisplayName: Dosing rate food type 4 (g per 50us offset)
+    // @Range: 1 10000
+    // @Increment: 1
+    // @User: Standard
+    AP_GROUPINFO("DOS_F4",   44, AP_ShoesAgtech, _dos_fr[3], 100.0f),
+    // @Param: DOS_F5
+    // @DisplayName: Dosing rate food type 5 (g per 50us offset)
+    // @Range: 1 10000
+    // @Increment: 1
+    // @User: Standard
+    AP_GROUPINFO("DOS_F5",   45, AP_ShoesAgtech, _dos_fr[4], 100.0f),
+    // @Param: DOS_F6
+    // @DisplayName: Dosing rate food type 6 (g per 50us offset)
+    // @Range: 1 10000
+    // @Increment: 1
+    // @User: Standard
+    AP_GROUPINFO("DOS_F6",   46, AP_ShoesAgtech, _dos_fr[5], 100.0f),
+    // @Param: DOS_F7
+    // @DisplayName: Dosing rate food type 7 (g per 50us offset)
+    // @Range: 1 10000
+    // @Increment: 1
+    // @User: Standard
+    AP_GROUPINFO("DOS_F7",   47, AP_ShoesAgtech, _dos_fr[6], 100.0f),
+    // [/AP_ShoesAgtech]
+
     AP_GROUPEND};
 
 AP_ShoesAgtech::AP_ShoesAgtech()
@@ -877,41 +930,44 @@ void AP_ShoesAgtech::_update_dosing_motor(void) {
   }
 
   if (motor_on) {
-    float ratio = _dos_rate.get();
     float pwm_f = 1500.0f;
 
     if (_dos_mode.get() == 0) {
-      // ---- DOS_MODE 0: tốc độ cố định từ SA_DOS_SP/SA_DOS_RATE ----
-      float offset = (ratio > 0.0f) ? (_dos_sp.get() * 50.0f / ratio) : 0.0f;
+      // ---- DOS_MODE 0: calib — toc do co dinh dung SA_DOS_RATE ----
+      float ratio = _dos_rate.get();
+      if (ratio < 1.0f) { ratio = 1.0f; }
+      float offset = _dos_sp.get() * 50.0f / ratio;
       if (_dos_rev.get() == 0) {
         pwm_f = constrain_float(1500.0f - offset, 800.0f, 1500.0f);
       } else {
         pwm_f = constrain_float(1500.0f + offset, 1500.0f, 2200.0f);
       }
     } else {
-      // ---- DOS_MODE 1: tốc độ tỉ lệ theo speed + mission_dist ----
+      // ---- DOS_MODE 1: san xuat — dung SA_DOS_Fx theo SA_DOS_FOOD + mission ----
+      uint8_t food = (uint8_t)constrain_int16(_dos_food.get(), 1, 7) - 1;
+      float ratio  = _dos_fr[food].get();
+      if (ratio < 1.0f) { ratio = 1.0f; }
       float mission_dist = _get_mission_dist();
       float speed_ms = (_simulation.get() > 0) ? _sim_speed : AP::ahrs().groundspeed();
       if (mission_dist > 1.0f && speed_ms >= 0.05f) {
         float dos_gpm = (_dos_sp.get() * speed_ms * 60.0f) / mission_dist;
-        float offset  = (ratio > 0.0f) ? (dos_gpm * 50.0f / ratio) : 0.0f;
+        float offset  = dos_gpm * 50.0f / ratio;
         if (_dos_rev.get() == 0) {
           pwm_f = constrain_float(1500.0f - offset, 800.0f, 1500.0f);
         } else {
           pwm_f = constrain_float(1500.0f + offset, 1500.0f, 2200.0f);
         }
       } else {
-        // Không đủ điều kiện → dừng motor + cảnh báo mỗi 5s
         pwm_f = 1500.0f;
         if (now - _dos_warn_ms >= 5000U) {
           _dos_warn_ms = now;
           if (mission_dist <= 1.0f) {
             gcs().send_text(MAV_SEVERITY_WARNING,
-                            "SA DOS1: chua co mission (dist=%.1fm) - motor dung",
+                            "SA DOS1: chưa có mission (dist=%.1fm) - motor dừng",
                             (double)mission_dist);
           } else {
             gcs().send_text(MAV_SEVERITY_WARNING,
-                            "SA DOS1: toc do qua thap (%.2fm/s) - motor dung",
+                            "SA DOS1: tốc độ quá thấp (%.2fm/s) - motor dừng",
                             (double)speed_ms);
           }
         }
@@ -929,8 +985,9 @@ void AP_ShoesAgtech::_update_dosing_motor(void) {
   if (_dos_log_enable.get() > 0) {
     if (now - _dos_last_log_ms >= (uint32_t)_dos_log_ms.get()) {
       _dos_last_log_ms = now;
-      gcs().send_text(MAV_SEVERITY_INFO, "[DOS] SERVO%d %s SP:%.0fg PWM:%u",
-                      (int)_dos_chan.get(), motor_on ? "ON" : "OFF",
+      gcs().send_text(MAV_SEVERITY_INFO, "[DOS] F%d SERVO%d %s SP:%.0fg PWM:%u",
+                      (int)_dos_food.get(), (int)_dos_chan.get(),
+                      motor_on ? "ON" : "OFF",
                       (double)_dos_sp.get(), (unsigned)_dos_pwm);
     }
   }
@@ -1424,10 +1481,10 @@ void AP_ShoesAgtech::_print_fm1_arm_status(float r)
   float    vi_used = q1 * (eta_s / 60.0f);
 
   gcs().send_text(MAV_SEVERITY_INFO,
-                  "SA FM1 OK: r=%.2f q1=%.2fL/ph miss=%.0fm dmax=%.0fm ~%lup:%02lus vi~%.1fL",
+                  "SA FM1 OK: r=%.2f q1=%.2fL/ph miss=%.0fm dmax=%.0fm ~%um%02us vi~%.1fL",
                   (double)r, (double)q1,
                   (double)dist, (double)dist_max,
-                  eta_min, eta_sec, (double)vi_used);
+                  (unsigned)eta_min, (unsigned)eta_sec, (double)vi_used);
 }
 
 // =============================================================

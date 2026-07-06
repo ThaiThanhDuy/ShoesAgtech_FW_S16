@@ -268,6 +268,7 @@ void GCS_MAVLINK_Rover::send_water_depth() {
 //    [12] dos_sp        (gam, SA_DOS_SP)
 //    [13] dos_rate      (gam/50us, SA_DOS_RATE)
 //    [14] dos_pwm       (us)
+//    [15] dos_food      (1-7, SA_DOS_FOOD — loai thuc an dang chon)
 //
 // Hiển thị trong Mission Planner: Ctrl+F > MAVLink Inspector > DEBUG_FLOAT_ARRAY
 void GCS_MAVLINK_Rover::send_shoesagtech_debug_arrays() {
@@ -318,10 +319,11 @@ void GCS_MAVLINK_Rover::send_shoesagtech_debug_arrays() {
     data[11] = (float)sa.get_alk_slot_status();
   }
 
-  // ---- Module 3: Dosing motor [12..14] ----
+  // ---- Module 3: Dosing motor [12..15] ----
   data[12] = sa.get_dosing_sp();
   data[13] = sa.get_dosing_rate();
   data[14] = (float)sa.get_dosing_pwm();
+  data[15] = (float)sa.get_dosing_food();
 
   mavlink_msg_debug_float_array_send(chan, now_ms, data_name, 0, data);
 }
