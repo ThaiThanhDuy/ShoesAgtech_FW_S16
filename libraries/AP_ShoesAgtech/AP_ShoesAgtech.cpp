@@ -1,5 +1,6 @@
 #include "AP_ShoesAgtech.h"
 #include <AP_AHRS/AP_AHRS.h>
+#include <AP_GPS/AP_GPS.h>
 #include <AP_Math/AP_Math.h>
 #include <AP_Mission/AP_Mission.h>
 #include <AP_RTC/AP_RTC.h>
@@ -163,11 +164,9 @@ const AP_Param::GroupInfo AP_ShoesAgtech::var_info[] = {
 
     // @Param: PH_TZ
     // @DisplayName: Timezone offset (hours, UTC+N)
-    // @Description: Local time = UTC + PH_TZ. Vietnam is UTC+7 (default). Used
-    // to
-    //   classify pH readings into morning (05:00-11:59) and afternoon
-    //   (12:00-16:59)
-    //   slots for daily ΔpH-based alkalinity estimation.
+    // @Description: Local time = UTC + PH_TZ. Vietnam is UTC+7 (default). Dung
+    //   de phan loai doc pH vao slot sang [SA_PH_MS..SA_PH_ME] hoac slot chieu
+    //   [SA_PH_AS..SA_PH_AE] cho tinh kiem nuoc hang ngay.
     // @Range: -12 14
     // @User: Standard
     AP_GROUPINFO("PH_TZ", 21, AP_ShoesAgtech, _ph_tz, 7),
@@ -224,14 +223,15 @@ const AP_Param::GroupInfo AP_ShoesAgtech::var_info[] = {
     AP_GROUPINFO("DOS_RC", 26, AP_ShoesAgtech, _dos_rc, 8),
 
     // @Param: DOS_RATE
-    // @DisplayName: Dosing conversion ratio (gam ứng với 50us PWM lệch)
-    // @Description: Tỉ lệ quy đổi lượng thức ăn (gam) sang độ lệch PWM. Giá
-    //   trị là số gam tương ứng với 50us PWM lệch khỏi điểm dừng (1500). VD:
-    //   nhập 100 -> cứ 100g thì lệch 50us; nhập 200 -> cứ 200g thì lệch 50us
-    //   (tỉ lệ thấp hơn, motor đáp ứng "chậm" hơn theo SA_DOS_SP).
-    //   offset(us) = SA_DOS_SP * 50 / SA_DOS_RATE
-    // @Units: g
-    // @Range: 1 1000
+    // @DisplayName: Dosing volume rate - DOS_MODE=0 (mL per 50us PWM offset)
+    // @Description: The tich (mL) vit tai tong ra ung voi 50us PWM lech khoi
+    //   diem dung (1500). Day la thong so co hoc cua vit tai, khong phu thuoc
+    //   loai hat. VD: 100 -> 50us lech = 100mL tong ra.
+    //   Cong thuc (DOS_MODE=0):
+    //     offset(us) = SA_DOS_SP(g) * 50 / (SA_DOS_RATE(mL/50us) x SA_DOS_Dx(g/mL))
+    //   Backward compat: dat SA_DOS_D1..D7=1.0 -> offset = DOS_SP*50/DOS_RATE.
+    // @Units: mL
+    // @Range: 0.1 10000
     // @User: Standard
     AP_GROUPINFO("DOS_RATE", 27, AP_ShoesAgtech, _dos_rate, 100.0f),
 
@@ -277,7 +277,8 @@ const AP_Param::GroupInfo AP_ShoesAgtech::var_info[] = {
     // @Param: SIM
     // @DisplayName: Simulation mode
     // @Description: Khi bật (1), bỏ qua cảm biến thật và inject dữ liệu giả lập
-    //   có biến thiên hình sin để test hiển thị GCS và logic mode 1/2. Khi tắt (0)
+    //   có biến thiên hình sin để test hiển thị GCS và logic mode 1/2. Khi tắt
+    //   (0)
     //   quay về đọc sensor thật.
     // @Values: 0:Disabled,1:Enabled
     // @User: Standard
@@ -308,7 +309,8 @@ const AP_Param::GroupInfo AP_ShoesAgtech::var_info[] = {
     // @Description: Cách tính tốc độ động cơ định lượng khi RC bật:
     //   0 = tốc độ cố định từ SA_DOS_SP/SA_DOS_RATE (hành vi cũ).
     //   1 = tốc độ tỉ lệ theo vận tốc + tổng quãng đường mission:
-    //       offset = (SA_DOS_SP × speed × 60 / mission_dist) × 50 / SA_DOS_RATE.
+    //       offset = (SA_DOS_SP × speed × 60 / mission_dist) × 50 /
+    //       SA_DOS_RATE.
     //       Phân bổ SA_DOS_SP gam đều trên toàn tuyến đường.
     //       Khi không có mission hoặc speed < 0.05 m/s → dừng + cảnh báo.
     // @Values: 0:Fixed,1:MissionProportional
@@ -334,7 +336,8 @@ const AP_Param::GroupInfo AP_ShoesAgtech::var_info[] = {
     // @Param: MIX_STD
     // @DisplayName: Vi sinh ratio — nac giua (Mac dinh van)
     // @Description: Ti le vi sinh trong tong luong phun khi chon nac giua RC.
-    //   Dung trong FLOW_MODE=1: q1_target = MIX_STD * APP_RATE * speed * BOOM * 0.006.
+    //   Dung trong FLOW_MODE=1: q1_target = MIX_STD * APP_RATE * speed * BOOM *
+    //   0.006.
     //   Dung trong FLOW_MODE=0: setpoint chinh la SA_FLOW_SP (khong can ratio).
     //   dist_max = TANK_VOL * 10000 / (MIX_STD * APP_RATE * BOOM).
     // @Range: 0.01 1.0
@@ -357,9 +360,12 @@ const AP_Param::GroupInfo AP_ShoesAgtech::var_info[] = {
     // [AP_ShoesAgtech] Override speed for FLOW_MODE=1 calibration (slot 39)
     // @Param: FLOW_VEL
     // @DisplayName: Override speed for FLOW_MODE=1 (m/s)
-    // @Description: 0 = dung van toc that tu GPS/AHRS. > 0 = ep van toc bang gia
-    //   tri nay (m/s) de tinh q1_target va dist_max — dung calib FLOW_MODE=1 khi
-    //   xe dung yen. Khong anh huong khi SA_SIM=1 (SA_SIM uu tien hon FLOW_VEL).
+    // @Description: 0 = dung van toc that tu GPS/AHRS. > 0 = ep van toc bang
+    // gia
+    //   tri nay (m/s) de tinh q1_target va dist_max — dung calib FLOW_MODE=1
+    //   khi
+    //   xe dung yen. Khong anh huong khi SA_SIM=1 (SA_SIM uu tien hon
+    //   FLOW_VEL).
     // @Range: 0 10
     // @Units: m/s
     // @User: Standard
@@ -369,54 +375,150 @@ const AP_Param::GroupInfo AP_ShoesAgtech::var_info[] = {
     // [AP_ShoesAgtech] Dosing food type selector + per-type rate (slots 40-47)
     // @Param: DOS_FOOD
     // @DisplayName: Dosing food type selector (1-7)
-    // @Description: Chon loai thuc an dang dung. He thong se dung SA_DOS_Fx tuong
-    //   ung de tinh toc do motor. Moi loai thuc an co the co ti le quy doi khac nhau
+    // @Description: Chon loai thuc an dang dung. He thong se dung SA_DOS_Fx
+    // tuong
+    //   ung de tinh toc do motor. Moi loai thuc an co the co ti le quy doi khac
+    //   nhau
     //   do do nhot, khoi luong rieng khac nhau.
     // @Range: 1 7
     // @User: Standard
     AP_GROUPINFO("DOS_FOOD", 40, AP_ShoesAgtech, _dos_food, 1),
     // @Param: DOS_F1
-    // @DisplayName: Dosing rate food type 1 (g per 50us offset)
-    // @Range: 1 10000
-    // @Increment: 1
+    // @DisplayName: Dosing volume rate food type 1 - DOS_MODE=1 (mL per 50us offset)
+    // @Description: The tich (mL) vit tai tong ra ung voi 50us lech, loai thuc an 1.
+    //   Dung trong DOS_MODE=1 cung voi SA_DOS_D1 de tinh offset PWM.
+    // @Range: 0.1 10000
     // @User: Standard
-    AP_GROUPINFO("DOS_F1",   41, AP_ShoesAgtech, _dos_fr[0], 100.0f),
+    AP_GROUPINFO("DOS_F1", 41, AP_ShoesAgtech, _dos_fr[0], 100.0f),
     // @Param: DOS_F2
-    // @DisplayName: Dosing rate food type 2 (g per 50us offset)
-    // @Range: 1 10000
-    // @Increment: 1
+    // @DisplayName: Dosing volume rate food type 2 - DOS_MODE=1 (mL per 50us offset)
+    // @Range: 0.1 10000
     // @User: Standard
-    AP_GROUPINFO("DOS_F2",   42, AP_ShoesAgtech, _dos_fr[1], 100.0f),
+    AP_GROUPINFO("DOS_F2", 42, AP_ShoesAgtech, _dos_fr[1], 100.0f),
     // @Param: DOS_F3
-    // @DisplayName: Dosing rate food type 3 (g per 50us offset)
-    // @Range: 1 10000
-    // @Increment: 1
+    // @DisplayName: Dosing volume rate food type 3 - DOS_MODE=1 (mL per 50us offset)
+    // @Range: 0.1 10000
     // @User: Standard
-    AP_GROUPINFO("DOS_F3",   43, AP_ShoesAgtech, _dos_fr[2], 100.0f),
+    AP_GROUPINFO("DOS_F3", 43, AP_ShoesAgtech, _dos_fr[2], 100.0f),
     // @Param: DOS_F4
-    // @DisplayName: Dosing rate food type 4 (g per 50us offset)
-    // @Range: 1 10000
-    // @Increment: 1
+    // @DisplayName: Dosing volume rate food type 4 - DOS_MODE=1 (mL per 50us offset)
+    // @Range: 0.1 10000
     // @User: Standard
-    AP_GROUPINFO("DOS_F4",   44, AP_ShoesAgtech, _dos_fr[3], 100.0f),
+    AP_GROUPINFO("DOS_F4", 44, AP_ShoesAgtech, _dos_fr[3], 100.0f),
     // @Param: DOS_F5
-    // @DisplayName: Dosing rate food type 5 (g per 50us offset)
-    // @Range: 1 10000
-    // @Increment: 1
+    // @DisplayName: Dosing volume rate food type 5 - DOS_MODE=1 (mL per 50us offset)
+    // @Range: 0.1 10000
     // @User: Standard
-    AP_GROUPINFO("DOS_F5",   45, AP_ShoesAgtech, _dos_fr[4], 100.0f),
+    AP_GROUPINFO("DOS_F5", 45, AP_ShoesAgtech, _dos_fr[4], 100.0f),
     // @Param: DOS_F6
-    // @DisplayName: Dosing rate food type 6 (g per 50us offset)
-    // @Range: 1 10000
-    // @Increment: 1
+    // @DisplayName: Dosing volume rate food type 6 - DOS_MODE=1 (mL per 50us offset)
+    // @Range: 0.1 10000
     // @User: Standard
-    AP_GROUPINFO("DOS_F6",   46, AP_ShoesAgtech, _dos_fr[5], 100.0f),
+    AP_GROUPINFO("DOS_F6", 46, AP_ShoesAgtech, _dos_fr[5], 100.0f),
     // @Param: DOS_F7
-    // @DisplayName: Dosing rate food type 7 (g per 50us offset)
-    // @Range: 1 10000
-    // @Increment: 1
+    // @DisplayName: Dosing volume rate food type 7 - DOS_MODE=1 (mL per 50us offset)
+    // @Range: 0.1 10000
     // @User: Standard
-    AP_GROUPINFO("DOS_F7",   47, AP_ShoesAgtech, _dos_fr[6], 100.0f),
+    AP_GROUPINFO("DOS_F7", 47, AP_ShoesAgtech, _dos_fr[6], 100.0f),
+
+    // [AP_ShoesAgtech] Bulk density per food type (slots 48-54)
+    // offset(us) = SP(g) * 50 / (vol_rate(mL/50us) x density(g/mL))
+    // Mac dinh 1.0 g/mL -> tuong duong cong thuc cu khi DOS_RATE = g/50us.
+    // Do thuc te: do day 1L hat, can => chia cho 1000 = g/mL (khoi luong rieng xop).
+    // @Param: DOS_D1
+    // @DisplayName: Bulk density food type 1 (g/mL)
+    // @Range: 0.1 5.0
+    // @Increment: 0.01
+    // @User: Standard
+    AP_GROUPINFO("DOS_D1", 48, AP_ShoesAgtech, _dos_dr[0], 1.0f),
+    // @Param: DOS_D2
+    // @DisplayName: Bulk density food type 2 (g/mL)
+    // @Range: 0.1 5.0
+    // @Increment: 0.01
+    // @User: Standard
+    AP_GROUPINFO("DOS_D2", 49, AP_ShoesAgtech, _dos_dr[1], 1.0f),
+    // @Param: DOS_D3
+    // @DisplayName: Bulk density food type 3 (g/mL)
+    // @Range: 0.1 5.0
+    // @Increment: 0.01
+    // @User: Standard
+    AP_GROUPINFO("DOS_D3", 50, AP_ShoesAgtech, _dos_dr[2], 1.0f),
+    // @Param: DOS_D4
+    // @DisplayName: Bulk density food type 4 (g/mL)
+    // @Range: 0.1 5.0
+    // @Increment: 0.01
+    // @User: Standard
+    AP_GROUPINFO("DOS_D4", 51, AP_ShoesAgtech, _dos_dr[3], 1.0f),
+    // @Param: DOS_D5
+    // @DisplayName: Bulk density food type 5 (g/mL)
+    // @Range: 0.1 5.0
+    // @Increment: 0.01
+    // @User: Standard
+    AP_GROUPINFO("DOS_D5", 52, AP_ShoesAgtech, _dos_dr[4], 1.0f),
+    // @Param: DOS_D6
+    // @DisplayName: Bulk density food type 6 (g/mL)
+    // @Range: 0.1 5.0
+    // @Increment: 0.01
+    // @User: Standard
+    AP_GROUPINFO("DOS_D6", 53, AP_ShoesAgtech, _dos_dr[5], 1.0f),
+    // @Param: DOS_D7
+    // @DisplayName: Bulk density food type 7 (g/mL)
+    // @Range: 0.1 5.0
+    // @Increment: 0.01
+    // @User: Standard
+    AP_GROUPINFO("DOS_D7", 54, AP_ShoesAgtech, _dos_dr[6], 1.0f),
+    // [/AP_ShoesAgtech]
+
+    // [AP_ShoesAgtech] pH daily slot time windows (slots 55-58)
+    // Gio theo dinh dang 24h (0-24). Moc ket thuc = 24 nghia la het gio trong ngay.
+    // Readings ngoai ca hai cua so bi bo qua (khong cap nhat slot nao).
+    // @Param: PH_MS
+    // @DisplayName: pH morning slot start time (fractional hours, 0.0-23.99)
+    // @Description: Gio bat dau cua so sang. Dung so thap phan: 5.5 = 5h30, 6.0 = 6h00.
+    //   Doc pH trong khoang [PH_MS, PH_ME] -> cap nhat morning slot.
+    // @Range: 0 23.99
+    // @User: Standard
+    AP_GROUPINFO("PH_MS", 55, AP_ShoesAgtech, _ph_ms, 5.0f),
+    // @Param: PH_ME
+    // @DisplayName: pH morning slot end time (fractional hours, 0.0-24.0, inclusive)
+    // @Description: Gio ket thuc cua so sang. Dung so thap phan: 11.5 = 11h30, 11.0 = 11h00.
+    //   Gia tri tai thoi diem nay van duoc ghi nhan (<=). Dat =24.0 de chay den het ngay.
+    // @Range: 0 24
+    // @User: Standard
+    AP_GROUPINFO("PH_ME", 56, AP_ShoesAgtech, _ph_me, 11.0f),
+    // @Param: PH_AS
+    // @DisplayName: pH afternoon slot start time (fractional hours, 0.0-23.99)
+    // @Description: Gio bat dau cua so chieu. Dung so thap phan: 13.5 = 13h30, 12.0 = 12h00.
+    // @Range: 0 23.99
+    // @User: Standard
+    AP_GROUPINFO("PH_AS", 57, AP_ShoesAgtech, _ph_as, 12.0f),
+    // @Param: PH_AE
+    // @DisplayName: pH afternoon slot end time (fractional hours, 0.0-24.0, inclusive)
+    // @Description: Gio ket thuc cua so chieu. Dung so thap phan: 16.5 = 16h30, 16.0 = 16h00.
+    //   Gia tri tai thoi diem nay van duoc ghi nhan (<=). Dat =24.0 de chay den het ngay.
+    // @Range: 0 24
+    // @User: Standard
+    AP_GROUPINFO("PH_AE", 58, AP_ShoesAgtech, _ph_ae, 16.0f),
+
+    // @Param: PH_SAMP_D
+    // @DisplayName: pH sample distance (m)
+    // @Description: Khoang cach (m) giua cac diem lay mau pH doc theo tuyen duong.
+    //   Robot tu dong ghi mau PHSP khi di duoc du so met ke tu diem mau truoc.
+    //   Dat = 0 de tat tinh nang nay. Vi du: 8 -> lay mau moi 8m.
+    //   Nhan dang: WP_idx.sub (1.0=tai WP1, 1.1=8m sau WP1, 1.2=16m sau, 2.0=tai WP2).
+    // @Range: 0 500
+    // @Units: m
+    // @User: Standard
+    AP_GROUPINFO("PH_SAMP_D", 59, AP_ShoesAgtech, _ph_samp_dist, 0.0f),
+    // @Param: PH_POND_D
+    // @DisplayName: pH same-pond distance threshold (m)
+    // @Description: Khoang cach toi da (m) giua diem do sang va chieu de coi la
+    //   cung ao. Neu > nguong nay: bao canh bao khac ao, khong tinh kiem.
+    //   Tang len neu ao lon hoac robot di nhieu vong. Max 5000m.
+    // @Range: 10 5000
+    // @Units: m
+    // @User: Standard
+    AP_GROUPINFO("PH_POND_D", 60, AP_ShoesAgtech, _ph_pond_dist, 300.0f),
     // [/AP_ShoesAgtech]
 
     AP_GROUPEND};
@@ -425,16 +527,15 @@ AP_ShoesAgtech::AP_ShoesAgtech()
     : _last_timestamp_ms(0), _last_pulse_snapshot(0), _last_log_ms(0),
       _flow_rate_filtered(0.0f), _flow_rate_avg(0.0f), _is_initialized(false),
       _buffer_index(0), _buffer_sum(0.0f), _samples_count(0), _spray_mode(0),
-      _pump_pwm(0), _flow_target(0.0f),
-      _sim_speed(0.0f),
+      _pump_pwm(0), _flow_target(0.0f), _sim_speed(0.0f),
       // [AP_ShoesAgtech] mission distance cache + tank monitor
       _mission_dist_m(0.0f), _mission_ncmds(0), _tank_warn_ms(0),
-      _arm_dist_warned(false),
-      _was_armed(false),
+      _arm_dist_warned(false), _was_armed(false), _tank_empty_detected(false),
+      _tank_empty_ms(0),
       // [/AP_ShoesAgtech]
       _pid_integral(0.0f), _pid_output_lpf(0.0f), _pid_last_ms(0),
-      _last_pump_chan(-1),
-      _last_pump_func_val(-1), _pump_config_ok(false), _last_warn_ms(0),
+      _last_pump_chan(-1), _last_pump_func_val(-1), _pump_config_ok(false),
+      _last_warn_ms(0),
       // [AP_ShoesAgtech] dosing motor initial state
       _dos_pwm(1500), _dos_config_ok(false), _dos_warn_ms(0),
       _dos_was_ok(false), _dos_was_on(false), _dos_last_log_ms(0),
@@ -446,11 +547,19 @@ AP_ShoesAgtech::AP_ShoesAgtech()
       _ph_value_ma(0.0f), _ph_mv(0), _ph_temp(25.0f), _alk_dkh(0.0f),
       _alk_mgl(0.0f), _ph_buf_idx(0), _ph_buf_count(0), _ph_buf_sum(0.0f),
       // daily slot tracking
-      _ph_morn_val(0.0f), _ph_aft_val(0.0f), _ph_morn_valid(false),
+      _ph_morn_val(0.0f), _ph_morn_lat(0), _ph_morn_lng(0),
+      _ph_aft_val(0.0f), _ph_aft_lat(0), _ph_aft_lng(0),
+      _ph_morn_valid(false),
       _ph_aft_valid(false), _delta_ph(0.0f), _alk_today_dkh(0.0f),
       _alk_today_mgl(0.0f), _alk_prev_dkh(0.0f), _alk_prev_mgl(0.0f),
-      _alk_slot_status(4), _rtc_last_day(0), _slot_warn_ms(0)
-      // [/AP_ShoesAgtech]
+      _alk_slot_status(4), _alk_log_pending(false),
+      _rtc_last_day(0), _slot_warn_ms(0),
+      // distance-based sample point tracking
+      _ph_samp_wp_prev(0xFFFF), _ph_samp_sub_idx(0),
+      _ph_samp_ref_lat(0), _ph_samp_ref_lng(0),
+      _ph_samp_pending(false), _ph_samp_pend_wp(0), _ph_samp_pend_sub(0),
+      _ph_samp_pend_lat(0), _ph_samp_pend_lng(0)
+// [/AP_ShoesAgtech]
 {
   memset(_sample_buffer, 0, sizeof(_sample_buffer));
   // [AP_ShoesAgtech]
@@ -516,6 +625,10 @@ void AP_ShoesAgtech::update(void) {
   _update_dosing_motor();
   // [/AP_ShoesAgtech]
 
+  // [AP_ShoesAgtech] distance-based pH sample points (SA_PH_SAMP_D)
+  _ph_samp_update();
+  // [/AP_ShoesAgtech]
+
   uint32_t now = AP_HAL::millis();
   uint32_t delta_t_ms = now - _last_timestamp_ms;
 
@@ -532,8 +645,9 @@ void AP_ShoesAgtech::update(void) {
     _last_timestamp_ms = now;
 
     if (_simulation.get() > 0) {
-      // Simulation: _flow_rate_filtered/_flow_rate_avg already set by _run_simulation()
-      // Still need to advance the moving-average buffer with the simulated value
+      // Simulation: _flow_rate_filtered/_flow_rate_avg already set by
+      // _run_simulation() Still need to advance the moving-average buffer with
+      // the simulated value
       _buffer_sum -= _sample_buffer[_buffer_index];
       _sample_buffer[_buffer_index] = _flow_rate_filtered;
       _buffer_sum += _flow_rate_filtered;
@@ -591,11 +705,13 @@ void AP_ShoesAgtech::update(void) {
     }
   }
 
-  // Khi disarm: reset warning + cache mission de ARM tiep theo tinh lai khoang cach
+  // Khi disarm: reset warning + cache mission + tank-empty detector
   if (!now_armed) {
     _arm_dist_warned = false;
-    _mission_ncmds   = 0;
-    _mission_dist_m  = 0.0f;
+    _mission_ncmds = 0;
+    _mission_dist_m = 0.0f;
+    _tank_empty_detected = false;
+    _tank_empty_ms = 0;
   }
   _was_armed = now_armed;
 
@@ -626,17 +742,24 @@ void AP_ShoesAgtech::update(void) {
       _flow_target = 0.0f;
       _pid_integral = 0.0f;
       _pid_output_lpf = 0.0f;
-      SRV_Channel *ch1 = SRV_Channels::srv_channel((uint8_t)(_pump_chan.get() - 1));
-      if (ch1 != nullptr) { _write_pump_pwm(ch1->get_output_min()); }
+      SRV_Channel *ch1 =
+          SRV_Channels::srv_channel((uint8_t)(_pump_chan.get() - 1));
+      if (ch1 != nullptr) {
+        _write_pump_pwm(ch1->get_output_min());
+      }
       break;
     }
     if (_flow_mode.get() == 1 && _tank_vol.get() > 0.0f) {
       // FLOW_MODE=1: cong thuc L/ha × vi sinh ratio (MIX_STD)
       _flow_target = _compute_visin_target(_mix_std.get());
       if (_flow_target < 0.01f) {
-        // dieu kien khong dat (mission/dist/speed/q1): force min ngay, bo qua PID
-        SRV_Channel *ch1 = SRV_Channels::srv_channel((uint8_t)(_pump_chan.get() - 1));
-        if (ch1 != nullptr) { _write_pump_pwm(ch1->get_output_min()); }
+        // dieu kien khong dat (mission/dist/speed/q1): force min ngay, bo qua
+        // PID
+        SRV_Channel *ch1 =
+            SRV_Channels::srv_channel((uint8_t)(_pump_chan.get() - 1));
+        if (ch1 != nullptr) {
+          _write_pump_pwm(ch1->get_output_min());
+        }
         break;
       }
     } else {
@@ -655,8 +778,11 @@ void AP_ShoesAgtech::update(void) {
       _flow_target = 0.0f;
       _pid_integral = 0.0f;
       _pid_output_lpf = 0.0f;
-      SRV_Channel *ch2 = SRV_Channels::srv_channel((uint8_t)(_pump_chan.get() - 1));
-      if (ch2 != nullptr) { _write_pump_pwm(ch2->get_output_min()); }
+      SRV_Channel *ch2 =
+          SRV_Channels::srv_channel((uint8_t)(_pump_chan.get() - 1));
+      if (ch2 != nullptr) {
+        _write_pump_pwm(ch2->get_output_min());
+      }
       break;
     }
     if (_flow_mode.get() == 1 && _tank_vol.get() > 0.0f) {
@@ -664,24 +790,28 @@ void AP_ShoesAgtech::update(void) {
       _flow_target = _compute_visin_target(_mix_cnt.get());
       if (_flow_target < 0.01f) {
         // dieu kien khong dat: force min ngay, bo qua PID
-        SRV_Channel *ch2 = SRV_Channels::srv_channel((uint8_t)(_pump_chan.get() - 1));
-        if (ch2 != nullptr) { _write_pump_pwm(ch2->get_output_min()); }
+        SRV_Channel *ch2 =
+            SRV_Channels::srv_channel((uint8_t)(_pump_chan.get() - 1));
+        if (ch2 != nullptr) {
+          _write_pump_pwm(ch2->get_output_min());
+        }
         break;
       }
     } else {
       // FLOW_MODE=0: setpoint × ti le MIX_CNT/MIX_STD (giu tong luong ra boom)
-      float ratio = (_mix_std.get() > 0.01f) ? (_mix_cnt.get() / _mix_std.get()) : 1.0f;
-      _flow_target = constrain_float(_flow_setpoint.get() * ratio, 0.0f, 200.0f);
+      float ratio =
+          (_mix_std.get() > 0.01f) ? (_mix_cnt.get() / _mix_std.get()) : 1.0f;
+      _flow_target =
+          constrain_float(_flow_setpoint.get() * ratio, 0.0f, 200.0f);
       // Tank monitor: uoc tinh khoang cach con bom duoc (moi 30s)
       if (_tank_vol.get() > 0.0f && _flow_target > 0.01f) {
         float speed_ms2 = _get_spray_speed();
         if (speed_ms2 > 0.01f && now - _tank_warn_ms >= 30000U) {
           _tank_warn_ms = now;
           float dist_m = (_tank_vol.get() / _flow_target) * speed_ms2 * 60.0f;
-          gcs().send_text(MAV_SEVERITY_INFO,
-                          "SA: Tank du ~%.0fm (%.1fL @%.1fL/min)",
-                          (double)dist_m, (double)_tank_vol.get(),
-                          (double)_flow_target);
+          gcs().send_text(
+              MAV_SEVERITY_INFO, "SA: Tank đủ ~%.0fm (%.1fL @%.1fL/min)",
+              (double)dist_m, (double)_tank_vol.get(), (double)_flow_target);
         }
       }
     }
@@ -694,27 +824,60 @@ void AP_ShoesAgtech::update(void) {
     break;
   }
 
-  // ---- 3. FLOW CONSOLE LOG (SA_LOG_EN) ----
+  // ---- 3. PHAT HIEN THUNG HET VI SINH (ca FLOW_MODE=0 va 1) ----
+  // Khi thung can, bom hut khi → banh xe cam bien quay nhanh bat thuong
+  // → flow_rate_filtered dot ngot > 1.7 L/min du bom dang chay binh thuong.
+  // Chi chay khi spray_mode 1 hoac 2 (bom dang duoc dieu khien PID), va ARM.
+  // Nguong: 1.7 L/min lien tuc trong 3000ms → ket luan het thung, in 1 lan,
+  // dung bom.
+  if ((_spray_mode == 1 || _spray_mode == 2) && hal.util->get_soft_armed()) {
+    if (!_tank_empty_detected) {
+      if (_flow_rate_filtered > 1.7f) {
+        if (_tank_empty_ms == 0) {
+          _tank_empty_ms = now;
+        } else if (now - _tank_empty_ms >= 3000U) {
+          _tank_empty_detected = true;
+          gcs().send_text(
+              MAV_SEVERITY_CRITICAL,
+              "SA: THÙNG HẾT VI SINH - flow %.1fL/ph > 1.7 trong 3s",
+              (double)_flow_rate_filtered);
+        }
+      } else {
+        _tank_empty_ms = 0;
+      }
+    }
+  }
+
+  // ---- 5. FLOW CONSOLE LOG (SA_LOG_EN) ----
   if (_flow_log_enable.get() > 0 &&
       now - _last_log_ms >= (uint32_t)_flow_log_ms.get()) {
     _last_log_ms = now;
     const char *flow_pfx = (_simulation.get() > 0) ? "[SIM][FLOW]" : "[FLOW]";
     gcs().send_text(MAV_SEVERITY_INFO,
-                    "%s M%u Tgt:%.1f Act:%.1f Avg:%.1f PWM:%u",
-                    flow_pfx, (unsigned)_spray_mode, (double)_flow_target,
+                    "%s M%u Tgt:%.1f Act:%.1f Avg:%.1f PWM:%u", flow_pfx,
+                    (unsigned)_spray_mode, (double)_flow_target,
                     (double)_flow_rate_filtered, (double)_flow_rate_avg,
                     (unsigned)_pump_pwm);
-    // Khi nac giua/cao + FLOW_MODE=1: in them thong tin cong thuc
-    if ((_spray_mode == 1 || _spray_mode == 2) &&
-        _flow_mode.get() == 1 && _tank_vol.get() > 0.0f) {
-      float r     = (_spray_mode == 2) ? _mix_cnt.get() : _mix_std.get();
+    // Khi nac giua/cao + FLOW_MODE=1: in them thong tin cong thuc moi
+    // q1 = TANK_VOL * r * speed * 60 / mission_dist
+    // vi/run = TANK_VOL * r  (hang so)
+    // dmax = TANK_VOL * r * speed * 60 / 0.3  (thong tin, phu thuoc speed)
+    if ((_spray_mode == 1 || _spray_mode == 2) && _flow_mode.get() == 1 &&
+        _tank_vol.get() > 0.0f) {
+      float r = (_spray_mode == 2) ? _mix_cnt.get() : _mix_std.get();
       float mdist = _get_mission_dist();
-      float spd   = _get_spray_speed();
-      float dv    = r * _app_rate.get() * _boom_width.get();
-      float dmax  = (dv > 0.001f) ? (_tank_vol.get() * 10000.0f / dv) : 0.0f;
+      float spd = _get_spray_speed();
+      float vi_per_run = _tank_vol.get() * r;
+      float q1_now = (mdist > 1.0f && spd > 0.1f)
+                         ? (_tank_vol.get() * r * spd * 60.0f / mdist)
+                         : 0.0f;
+      float dmax =
+          (spd > 0.1f) ? (_tank_vol.get() * r * spd * 60.0f / 0.3f) : 0.0f;
       gcs().send_text(MAV_SEVERITY_INFO,
-                      "%s FM1 r:%.2f miss:%.0fm dmax:%.0fm spd:%.2fm/s",
-                      flow_pfx, (double)r, (double)mdist, (double)dmax, (double)spd);
+                      "%s FM1 r:%.2f q1:%.2fL/ph miss:%.0fm dmax:%.0fm "
+                      "spd:%.2fm/s vi/run:%.1fL",
+                      flow_pfx, (double)r, (double)q1_now, (double)mdist,
+                      (double)dmax, (double)spd, (double)vi_per_run);
     }
   }
 }
@@ -833,13 +996,21 @@ void AP_ShoesAgtech::_write_pump_pwm(uint16_t pwm) {
 // =============================================================
 // [AP_ShoesAgtech] DOSING MOTOR — vít tải thức ăn tôm, servo xoay liên tục 360°
 //
-// RC SA_DOS_RC bật/tắt: PWM > 1500 -> bật (quay theo SA_DOS_SP quy đổi qua tỉ
-// lệ SA_DOS_RATE), PWM <= 1500 (kể cả mất tín hiệu = 0) -> tắt, xuất 1500
-// (dừng).
+// RC SA_DOS_RC bật/tắt: PWM > 1500 -> bật, PWM <= 1500 (kể cả mất tín hiệu = 0)
+// -> tắt, xuất 1500 (dừng).
 //
 // Quy đổi lượng thức ăn (SA_DOS_SP, gam) -> độ lệch PWM:
-//   offset = SA_DOS_SP * 50 / SA_DOS_RATE
-//   (SA_DOS_RATE = số gam ứng với 50us lệch; vd RATE=100 -> 100g = 50us lệch)
+//   DOS_MODE=0 (toc do co dinh):
+//     vol_rate = SA_DOS_RATE          (mL / 50us — co hoc vit tai)
+//     density  = SA_DOS_Dx            (g/mL — khoi luong rieng hat, x = SA_DOS_FOOD)
+//     offset   = SA_DOS_SP * 50 / (vol_rate * density)
+//   DOS_MODE=1 (phan bo deu theo mission):
+//     vol_rate = SA_DOS_Fx            (mL / 50us — theo loai hat x)
+//     density  = SA_DOS_Dx            (g/mL)
+//     dos_gpm  = SA_DOS_SP * speed * 60 / mission_dist
+//     offset   = dos_gpm * 50 / (vol_rate * density)
+//
+// Backward compat: dat SA_DOS_D1..D7 = 1.0 (mac dinh) -> offset = SP*50/RATE
 //
 // Chiều quay theo SA_DOS_REV (servo 360°, 1500 = dừng):
 //   0 = thuận: pwm = constrain(1500 - offset,  800, 1500)  (800 = nhanh nhất)
@@ -872,7 +1043,7 @@ void AP_ShoesAgtech::_check_dosing_config(void) {
   if (_dos_config_ok) {
     if (!_dos_was_ok) {
       gcs().send_text(MAV_SEVERITY_INFO,
-                      "SA: SERVO%d setup thanh cong - dosing motor san sang",
+                      "SA: SERVO%d setup thành công - dosing motor sẵn sàng",
                       (int)chan);
     }
     _dos_was_ok = true;
@@ -887,25 +1058,25 @@ void AP_ShoesAgtech::_check_dosing_config(void) {
   _dos_warn_ms = now;
 
   if (!have_chan) {
-    gcs().send_text(MAV_SEVERITY_WARNING, "SA: SERVO%d khong ton tai",
+    gcs().send_text(MAV_SEVERITY_WARNING, "SA: SERVO%d không tồn tại",
                     (int)chan);
     return;
   }
   if (!func_ok) {
     gcs().send_text(MAV_SEVERITY_WARNING,
-                    "SA: SERVO%d FUNCTION=%d, can dat =0 (None)", (int)chan,
+                    "SA: SERVO%d FUNCTION=%d, cần đặt =0 (None)", (int)chan,
                     (int)func_val);
   }
   if (!min_ok) {
-    gcs().send_text(MAV_SEVERITY_WARNING, "SA: SERVO%d MIN=%u, can dat =800",
+    gcs().send_text(MAV_SEVERITY_WARNING, "SA: SERVO%d MIN=%u, cần đặt =800",
                     (int)chan, (unsigned)ch->get_output_min());
   }
   if (!trim_ok) {
-    gcs().send_text(MAV_SEVERITY_WARNING, "SA: SERVO%d TRIM=%u, can dat =1500",
+    gcs().send_text(MAV_SEVERITY_WARNING, "SA: SERVO%d TRIM=%u, cần đặt =1500",
                     (int)chan, (unsigned)ch->get_trim());
   }
   if (!max_ok) {
-    gcs().send_text(MAV_SEVERITY_WARNING, "SA: SERVO%d MAX=%u, can dat =2200",
+    gcs().send_text(MAV_SEVERITY_WARNING, "SA: SERVO%d MAX=%u, cần đặt =2200",
                     (int)chan, (unsigned)ch->get_output_max());
   }
 }
@@ -932,26 +1103,44 @@ void AP_ShoesAgtech::_update_dosing_motor(void) {
   if (motor_on) {
     float pwm_f = 1500.0f;
 
+    uint8_t food_idx = (uint8_t)constrain_int16(_dos_food.get(), 1, 7) - 1;
+
     if (_dos_mode.get() == 0) {
-      // ---- DOS_MODE 0: calib — toc do co dinh dung SA_DOS_RATE ----
-      float ratio = _dos_rate.get();
-      if (ratio < 1.0f) { ratio = 1.0f; }
-      float offset = _dos_sp.get() * 50.0f / ratio;
+      // ---- DOS_MODE 0: toc do co dinh ----
+      // offset = SP(g) * 50 / (SA_DOS_RATE(mL/50us) x SA_DOS_Dx(g/mL))
+      float vol_rate = _dos_rate.get();
+      if (vol_rate < 0.1f) {
+        vol_rate = 0.1f;
+      }
+      float density = _dos_dr[food_idx].get();
+      if (density < 0.01f) {
+        density = 0.01f;
+      }
+      float offset = _dos_sp.get() * 50.0f / (vol_rate * density);
       if (_dos_rev.get() == 0) {
         pwm_f = constrain_float(1500.0f - offset, 800.0f, 1500.0f);
       } else {
         pwm_f = constrain_float(1500.0f + offset, 1500.0f, 2200.0f);
       }
     } else {
-      // ---- DOS_MODE 1: san xuat — dung SA_DOS_Fx theo SA_DOS_FOOD + mission ----
-      uint8_t food = (uint8_t)constrain_int16(_dos_food.get(), 1, 7) - 1;
-      float ratio  = _dos_fr[food].get();
-      if (ratio < 1.0f) { ratio = 1.0f; }
+      // ---- DOS_MODE 1: phan bo deu theo mission ----
+      // dos_gpm = SP(g) * speed * 60 / mission_dist
+      // offset  = dos_gpm * 50 / (SA_DOS_Fx(mL/50us) x SA_DOS_Dx(g/mL))
+      float vol_rate1 = _dos_fr[food_idx].get();
+      if (vol_rate1 < 0.1f) {
+        vol_rate1 = 0.1f;
+      }
+      float density1 = _dos_dr[food_idx].get();
+      if (density1 < 0.01f) {
+        density1 = 0.01f;
+      }
+      float effective1 = vol_rate1 * density1;  // g/50us
       float mission_dist = _get_mission_dist();
-      float speed_ms = (_simulation.get() > 0) ? _sim_speed : AP::ahrs().groundspeed();
+      float speed_ms =
+          (_simulation.get() > 0) ? _sim_speed : AP::ahrs().groundspeed();
       if (mission_dist > 1.0f && speed_ms >= 0.05f) {
         float dos_gpm = (_dos_sp.get() * speed_ms * 60.0f) / mission_dist;
-        float offset  = dos_gpm * 50.0f / ratio;
+        float offset = dos_gpm * 50.0f / effective1;
         if (_dos_rev.get() == 0) {
           pwm_f = constrain_float(1500.0f - offset, 800.0f, 1500.0f);
         } else {
@@ -962,9 +1151,10 @@ void AP_ShoesAgtech::_update_dosing_motor(void) {
         if (now - _dos_warn_ms >= 5000U) {
           _dos_warn_ms = now;
           if (mission_dist <= 1.0f) {
-            gcs().send_text(MAV_SEVERITY_WARNING,
-                            "SA DOS1: chưa có mission (dist=%.1fm) - motor dừng",
-                            (double)mission_dist);
+            gcs().send_text(
+                MAV_SEVERITY_WARNING,
+                "SA DOS1: chưa có mission (dist=%.1fm) - motor dừng",
+                (double)mission_dist);
           } else {
             gcs().send_text(MAV_SEVERITY_WARNING,
                             "SA DOS1: tốc độ quá thấp (%.2fm/s) - motor dừng",
@@ -985,10 +1175,14 @@ void AP_ShoesAgtech::_update_dosing_motor(void) {
   if (_dos_log_enable.get() > 0) {
     if (now - _dos_last_log_ms >= (uint32_t)_dos_log_ms.get()) {
       _dos_last_log_ms = now;
-      gcs().send_text(MAV_SEVERITY_INFO, "[DOS] F%d SERVO%d %s SP:%.0fg PWM:%u",
-                      (int)_dos_food.get(), (int)_dos_chan.get(),
-                      motor_on ? "ON" : "OFF",
-                      (double)_dos_sp.get(), (unsigned)_dos_pwm);
+      uint8_t food_log = (uint8_t)constrain_int16(_dos_food.get(), 1, 7) - 1;
+      gcs().send_text(MAV_SEVERITY_INFO,
+                      "[DOS] M%d F%d SERVO%d %s SP:%.0fg D:%.2fg/mL PWM:%u",
+                      (int)_dos_mode.get(), (int)_dos_food.get(),
+                      (int)_dos_chan.get(), motor_on ? "ON" : "OFF",
+                      (double)_dos_sp.get(),
+                      (double)_dos_dr[food_log].get(),
+                      (unsigned)_dos_pwm);
     }
   }
 }
@@ -1099,11 +1293,11 @@ void AP_ShoesAgtech::_ph_update(void) {
         _ph_nodata_warn_ms = now;
         if (_ph_last_good_ms == 0) {
           gcs().send_text(MAV_SEVERITY_WARNING,
-                          "SA: pH sensor chua co du lieu - kiem tra day RS485");
+                          "SA: pH sensor chưa có dữ liệu - kiểm tra dây RS485");
         } else {
           gcs().send_text(
               MAV_SEVERITY_WARNING,
-              "SA: pH sensor mat ket noi (%.0fs) - kiem tra day RS485",
+              "SA: pH sensor mất kết nối (%.0fs) - kiểm tra dây RS485",
               (double)((now - _ph_last_good_ms) / 1000U));
         }
       }
@@ -1190,20 +1384,36 @@ void AP_ShoesAgtech::_ph_update(void) {
       break; // no data yet
     }
     const char *ph_pfx = (_simulation.get() > 0) ? "[SIM][WM]" : "[WM]";
-    gcs().send_text(MAV_SEVERITY_INFO, "%s pH:%.2f MA:%.2f Tmp:%.1fC mV:%d",
+    gcs().send_text(MAV_SEVERITY_INFO, "%s pH:%.2f MA:%.2f Tmp:%.1fC mV:%d [%s]",
                     ph_pfx, (double)_ph_value, (double)_ph_value_ma,
-                    (double)_ph_temp, (int)_ph_mv);
-    gcs().send_text(MAV_SEVERITY_INFO, "%s Alk:%.2fdKH %.1fmg/L dPH:%+.2f [%s]",
-                    ph_pfx, (double)_alk_dkh, (double)_alk_mgl,
-                    (double)_delta_ph, slot_tag);
+                    (double)_ph_temp, (int)_ph_mv, slot_tag);
+    if (_alk_slot_status == 0) {
+      gcs().send_text(MAV_SEVERITY_INFO, "%s Alk:%.2fdKH %.1fmg/L dPH:%+.2f",
+                      ph_pfx, (double)_alk_dkh, (double)_alk_mgl,
+                      (double)_delta_ph);
+    }
+    // In khung gio sang/chieu da quy doi sang HH:MM de xac nhan cai dat
+    {
+      float ms  = constrain_float(_ph_ms.get(),  0.0f, 23.99f);
+      float me  = constrain_float(_ph_me.get(),  0.0f, 24.0f);
+      float as_ = constrain_float(_ph_as.get(),  0.0f, 23.99f);
+      float ae  = constrain_float(_ph_ae.get(),  0.0f, 24.0f);
+      int ms_h = (int)ms,  ms_m = (int)((ms  - (int)ms)  * 60.0f + 0.5f);
+      int me_h = (int)me,  me_m = (int)((me  - (int)me)  * 60.0f + 0.5f);
+      int as_h = (int)as_, as_m = (int)((as_ - (int)as_) * 60.0f + 0.5f);
+      int ae_h = (int)ae,  ae_m = (int)((ae  - (int)ae)  * 60.0f + 0.5f);
+      gcs().send_text(MAV_SEVERITY_INFO,
+                      "%s Sang:%d:%02d-%d:%02d Chieu:%d:%02d-%d:%02d",
+                      ph_pfx, ms_h, ms_m, me_h, me_m, as_h, as_m, ae_h, ae_m);
+    }
   }
 }
 
 // =============================================================
 // [AP_ShoesAgtech] DAILY ΔpH SLOT TRACKING
 //
-// Classifies each pH reading into morning (05:00-11:59) or afternoon
-// (12:00-16:59) local time slots. At midnight resets today's slots and
+// Classifies each pH reading into morning [SA_PH_MS..SA_PH_ME] or afternoon
+// [SA_PH_AS..SA_PH_AE] local time slots. At midnight resets today's slots and
 // preserves yesterday's alkalinity as fallback.
 //
 // Alkalinity derivation priority:
@@ -1225,7 +1435,8 @@ void AP_ShoesAgtech::_ph_update_daily_slots(float ph_cal) {
     uint32_t utc_sec = (uint32_t)(utc_usec / 1000000ULL);
     uint32_t local_sec = utc_sec + (uint32_t)((int32_t)tz * 3600);
     uint32_t day_num = local_sec / 86400U;
-    uint32_t local_hour = (local_sec % 86400U) / 3600U;
+    // Fractional hours: 13.5 = 13:30, 5.0 = 05:00
+    float local_h = (float)(local_sec % 86400U) / 3600.0f;
 
     // New-day: fires on first GPS fix (0 → today) AND on midnight rollover
     if (day_num != _rtc_last_day) {
@@ -1236,64 +1447,110 @@ void AP_ShoesAgtech::_ph_update_daily_slots(float ph_cal) {
       _ph_morn_valid = false;
       _ph_aft_valid = false;
       _ph_morn_val = 0.0f;
+      _ph_morn_lat = 0;
+      _ph_morn_lng = 0;
       _ph_aft_val = 0.0f;
+      _ph_aft_lat = 0;
+      _ph_aft_lng = 0;
       _delta_ph = 0.0f;
       _alk_today_dkh = 0.0f;
       _alk_today_mgl = 0.0f;
+      _alk_log_pending = false;
       if (_alk_prev_dkh > 0.0f) {
         gcs().send_text(MAV_SEVERITY_INFO,
-                        "[WM] Ngay moi: slot reset. Kiem: du lieu hom qua");
+                        "[WM] Ngày mới - kiềm: dùng hôm qua");
       } else {
         gcs().send_text(MAV_SEVERITY_INFO,
-                        "[WM] Ngay moi: slot reset. Chua co du lieu kiem");
+                        "[WM] Ngày mới - chưa có dữ liệu kiềm");
       }
       _rtc_last_day = day_num;
     }
 
-    // Sang: 0h00–11h59 | Chieu: 12h00–23h59
-    if (local_hour < 12) {
+    // Doc GPS hien tai de luu vao slot
+    int32_t cur_lat = 0, cur_lng = 0;
+    const AP_GPS &gps_inst = AP::gps();
+    if (gps_inst.status(0) >= AP_GPS::GPS_OK_FIX_3D) {
+      const Location &loc = gps_inst.location(0);
+      cur_lat = loc.lat;
+      cur_lng = loc.lng;
+    }
+
+    // Phan loai theo cua so co the chinh (SA_PH_MS..SA_PH_ME, SA_PH_AS..SA_PH_AE)
+    // Dung so thap phan: 13.5 = 13:30, 5.0 = 05:00
+    float ms  = constrain_float(_ph_ms.get(),  0.0f, 23.99f);
+    float me  = constrain_float(_ph_me.get(),  0.0f, 24.0f);
+    float as_ = constrain_float(_ph_as.get(),  0.0f, 23.99f);
+    float ae  = constrain_float(_ph_ae.get(),  0.0f, 24.0f);
+
+    if (local_h >= ms && local_h <= me) {
       _ph_morn_val = ph_cal;
+      _ph_morn_lat = cur_lat;
+      _ph_morn_lng = cur_lng;
       _ph_morn_valid = true;
-    } else {
+    } else if (local_h >= as_ && local_h <= ae) {
       _ph_aft_val = ph_cal;
+      _ph_aft_lat = cur_lat;
+      _ph_aft_lng = cur_lng;
       _ph_aft_valid = true;
     }
+    // Ngoai ca hai cua so: bo qua, khong cap nhat slot nao
   }
 
-  // ---- Alkalinity calculation — always runs, with or without GPS time ----
+  // ---- Alkalinity calculation — only when FULL (both morning + afternoon slots) ----
   if (_ph_morn_valid && _ph_aft_valid) {
-    _delta_ph = _ph_aft_val - _ph_morn_val;
-    float kh_scaled = _ph_kh.get() *
-                      (1.0f + constrain_float(_delta_ph * 0.375f, -0.5f, 1.0f));
-    _alk_today_dkh = _ph_calc_alkalinity(_ph_morn_val, kh_scaled, _ph_temp);
-    _alk_today_mgl = _alk_today_dkh * 17.85f;
-    _alk_dkh = _alk_today_dkh;
-    _alk_mgl = _alk_today_mgl;
-    _alk_slot_status = 0;
+    // Kiem tra sang va chieu co cung ao khong (nguong SA_PH_POND_D met)
+    bool same_pond = true;
+    if (_ph_morn_lat != 0 && _ph_aft_lat != 0) {
+      // Xap xi khoang cach (chinh xac trong pham vi vai km)
+      const float DEG2M = 111320.0f;  // 1 degree lat = 111320m
+      float dlat_m = (_ph_aft_lat - _ph_morn_lat) * 1.0e-7f * DEG2M;
+      float coslat  = cosf((float)_ph_morn_lat * 1.0e-7f * DEG_TO_RAD);
+      float dlng_m  = (_ph_aft_lng - _ph_morn_lng) * 1.0e-7f * DEG2M * coslat;
+      float dist_m  = sqrtf(dlat_m * dlat_m + dlng_m * dlng_m);
+      float pond_thr = constrain_float(_ph_pond_dist.get(), 10.0f, 5000.0f);
+      if (dist_m > pond_thr) {
+        same_pond = false;
+        if (_ph_log_enable.get() > 0) {
+          gcs().send_text(MAV_SEVERITY_WARNING,
+              "[WM] Kiềm: khác ao %.0fm - bỏ qua", (double)dist_m);
+        }
+      }
+    }
+
+    if (same_pond) {
+      _delta_ph = _ph_aft_val - _ph_morn_val;
+      float kh_scaled = _ph_kh.get() *
+                        (1.0f + constrain_float(_delta_ph * 0.375f, -0.5f, 1.0f));
+      _alk_today_dkh = _ph_calc_alkalinity(_ph_morn_val, kh_scaled, _ph_temp);
+      _alk_today_mgl = _alk_today_dkh * 17.85f;
+      _alk_dkh = _alk_today_dkh;
+      _alk_mgl = _alk_today_mgl;
+      if (_alk_slot_status != 0) {
+        _alk_log_pending = true;  // first time reaching FULL today — trigger SD log
+      }
+      _alk_slot_status = 0;
+    } else {
+      // Khac ao — giu slot chiều nhưng không tính kiềm; chờ sang lần đo tiếp
+      _delta_ph = 0.0f;
+      _alk_slot_status = 2;  // treat as afternoon-only
+    }
   } else if (_ph_morn_valid) {
+    // Morning only — no alkalinity yet; wait for afternoon slot
     _delta_ph = 0.0f;
-    _alk_today_dkh = _ph_calc_alkalinity(_ph_morn_val, _ph_kh.get(), _ph_temp);
-    _alk_today_mgl = _alk_today_dkh * 17.85f;
-    _alk_dkh = _alk_today_dkh;
-    _alk_mgl = _alk_today_mgl;
     _alk_slot_status = 1;
   } else if (_ph_aft_valid) {
+    // Afternoon only — no alkalinity yet; wait for morning slot
     _delta_ph = 0.0f;
-    _alk_today_dkh = _ph_calc_alkalinity(_ph_aft_val, _ph_kh.get(), _ph_temp);
-    _alk_today_mgl = _alk_today_dkh * 17.85f;
-    _alk_dkh = _alk_today_dkh;
-    _alk_mgl = _alk_today_mgl;
     _alk_slot_status = 2;
   } else if (_alk_prev_dkh > 0.0f) {
-    // Yesterday's data still valid
+    // Yesterday's data as reference — not recalculated
     _alk_dkh = _alk_prev_dkh;
     _alk_mgl = _alk_prev_mgl;
     _alk_slot_status = 3;
   } else {
-    // No slotted data at all: single-point heuristic from current pH so display
-    // is not 0
-    _alk_dkh = _ph_calc_alkalinity(ph_cal, _ph_kh.get(), _ph_temp);
-    _alk_mgl = _alk_dkh * 17.85f;
+    // No data yet — alkalinity unavailable
+    _alk_dkh = 0.0f;
+    _alk_mgl = 0.0f;
     _alk_slot_status = 4;
   }
 
@@ -1302,20 +1559,19 @@ void AP_ShoesAgtech::_ph_update_daily_slots(float ph_cal) {
     _slot_warn_ms = now;
     if (!have_time) {
       gcs().send_text(MAV_SEVERITY_WARNING,
-                      "[WM] Chua co GPS time, kiem tinh theo pH tuc thoi");
+                      "[WM] Chưa GPS - kiềm tính pH tức thì");
     } else if (_alk_slot_status == 1) {
       gcs().send_text(MAV_SEVERITY_WARNING,
-                      "[WM] Kiem: chi co du lieu sang, cho du lieu chieu");
+                      "[WM] Kiềm: S:%.2f C:--", (double)_ph_morn_val);
     } else if (_alk_slot_status == 2) {
       gcs().send_text(MAV_SEVERITY_WARNING,
-                      "[WM] Kiem: chi co du lieu chieu, thieu du lieu sang");
+                      "[WM] Kiềm: S:-- C:%.2f", (double)_ph_aft_val);
     } else if (_alk_slot_status == 3) {
       gcs().send_text(MAV_SEVERITY_WARNING,
-                      "[WM] Kiem: dang dung du lieu hom qua");
+                      "[WM] Kiềm: đang dùng dữ liệu hôm qua");
     } else if (_alk_slot_status == 4) {
-      gcs().send_text(
-          MAV_SEVERITY_WARNING,
-          "[WM] Kiem: chua co du lieu slot (doi GPS hoac cho khung gio)");
+      gcs().send_text(MAV_SEVERITY_WARNING,
+                      "[WM] Kiềm: chưa có slot (đợi GPS/giờ)");
     }
   }
 }
@@ -1357,6 +1613,92 @@ float AP_ShoesAgtech::_ph_calc_alkalinity(float ph, float base_kh_dkh,
 }
 
 // =============================================================
+// DISTANCE-BASED pH SAMPLE POINTS (SA_PH_SAMP_D)
+//
+// Triggers a PHSP log entry each time the robot has moved at least
+// SA_PH_SAMP_D metres from the previous sample position.
+// When the mission waypoint index advances, a "WP arrival" sample
+// is logged with sub=0 and the sub counter resets.
+//
+// Naming: WP_idx.sub_idx  e.g. 1.0=WP1 arrival, 1.1=8m after, 2.0=WP2
+// Set SA_PH_SAMP_D=0 to disable.
+// =============================================================
+void AP_ShoesAgtech::_ph_samp_trigger(uint16_t wp, uint8_t sub,
+                                      int32_t lat, int32_t lng) {
+  _ph_samp_pend_wp  = wp;
+  _ph_samp_pend_sub = sub;
+  _ph_samp_pend_lat = lat;
+  _ph_samp_pend_lng = lng;
+  _ph_samp_pending  = true;
+  if (_ph_log_enable.get() > 0) {
+    gcs().send_text(MAV_SEVERITY_INFO,
+                    "[WM] Samp WP%u.%u pH:%.2f Tmp:%.1fC",
+                    (unsigned)wp, (unsigned)sub,
+                    (double)_ph_value_ma, (double)_ph_temp);
+  }
+}
+
+void AP_ShoesAgtech::_ph_samp_update(void) {
+  float interval_m = _ph_samp_dist.get();
+  if (interval_m < 0.5f) {
+    return;  // disabled
+  }
+  if (!ph_has_data()) {
+    return;  // no valid pH reading
+  }
+
+  // Require GPS fix
+  const AP_GPS &gps_inst = AP::gps();
+  if (gps_inst.status(0) < AP_GPS::GPS_OK_FIX_3D) {
+    return;
+  }
+  const Location &loc = gps_inst.location(0);
+  int32_t cur_lat = loc.lat;
+  int32_t cur_lng = loc.lng;
+
+  // Get current mission waypoint index
+  uint16_t wp_idx = 0;
+  AP_Mission *mission_ptr = AP::mission();
+  if (mission_ptr != nullptr) {
+    wp_idx = mission_ptr->get_current_nav_index();
+  }
+
+  // WP changed → sample at arrival point, reset sub counter
+  if (wp_idx != _ph_samp_wp_prev) {
+    _ph_samp_wp_prev  = wp_idx;
+    _ph_samp_sub_idx  = 1;  // next intermediate will be .1
+    _ph_samp_ref_lat  = cur_lat;
+    _ph_samp_ref_lng  = cur_lng;
+    _ph_samp_trigger(wp_idx, 0, cur_lat, cur_lng);
+    return;
+  }
+
+  // Initialise reference on first call after GPS fix
+  if (_ph_samp_ref_lat == 0 && _ph_samp_ref_lng == 0) {
+    _ph_samp_ref_lat = cur_lat;
+    _ph_samp_ref_lng = cur_lng;
+    return;
+  }
+
+  // Compute distance from last sample point (flat-Earth approx, valid < 10 km)
+  const float DEG2M = 111320.0f;
+  float dlat_m = (cur_lat - _ph_samp_ref_lat) * 1.0e-7f * DEG2M;
+  float coslat  = cosf((float)_ph_samp_ref_lat * 1.0e-7f * DEG_TO_RAD);
+  float dlng_m  = (cur_lng - _ph_samp_ref_lng) * 1.0e-7f * DEG2M * coslat;
+  float dist_m  = sqrtf(dlat_m * dlat_m + dlng_m * dlng_m);
+
+  if (dist_m >= interval_m) {
+    _ph_samp_trigger(wp_idx, _ph_samp_sub_idx, cur_lat, cur_lng);
+    _ph_samp_ref_lat = cur_lat;
+    _ph_samp_ref_lng = cur_lng;
+    _ph_samp_sub_idx++;
+    if (_ph_samp_sub_idx > 99) {
+      _ph_samp_sub_idx = 99;  // clamp to prevent overflow display
+    }
+  }
+}
+
+// =============================================================
 // SIMULATION — SA_SIM = 1
 // Generates sinusoidal fake sensor data so modes 1/2 and GCS
 // display can be verified without real hardware attached.
@@ -1367,38 +1709,35 @@ float AP_ShoesAgtech::_ph_calc_alkalinity(float ph, float base_kh_dkh,
 // =============================================================
 void AP_ShoesAgtech::_run_simulation(void) {
   uint32_t now = AP_HAL::millis();
-  float t = now * 0.001f;  // seconds since boot
+  float t = now * 0.001f; // seconds since boot
 
   // ---- Module 1: flow (2.5 ± 1.5 L/min, 20s period) ----
   _flow_rate_filtered = 2.5f + 1.5f * sinf(2.0f * M_PI * t / 20.0f);
 
   // ---- Module 1: simulated groundspeed (1.0 ± 0.8 m/s, 30s period) ----
-  _sim_speed = constrain_float(1.0f + 0.8f * sinf(2.0f * M_PI * t / 30.0f),
-                               0.1f, 2.0f);
+  _sim_speed =
+      constrain_float(1.0f + 0.8f * sinf(2.0f * M_PI * t / 30.0f), 0.1f, 2.0f);
 
   // ---- Module 2: pH sensor values ----
   // pH: 7.3 ± 0.4, 60s period
-  float ph_sim  = 7.3f + 0.4f * sinf(2.0f * M_PI * t / 60.0f);
+  float ph_sim = 7.3f + 0.4f * sinf(2.0f * M_PI * t / 60.0f);
   // Temperature: 28.0 ± 2.0°C, 120s period
   float temp_sim = 28.0f + 2.0f * sinf(2.0f * M_PI * t / 120.0f);
   // Electrode mV from Nernst: ~59.16 mV/pH unit relative to pH 7
   int16_t mv_sim = (int16_t)((7.0f - ph_sim) * 59.16f);
-  // Alkalinity: 4.0 ± 0.8 dKH, 90s period
-  float dkh_sim  = 4.0f + 0.8f * sinf(2.0f * M_PI * t / 90.0f);
-  float mgl_sim  = dkh_sim * 17.85f;
 
-  _ph_value          = ph_sim;
-  _ph_value_ema      = ph_sim;
-  _ph_value_ma       = ph_sim;
-  _ph_mv             = mv_sim;
-  _ph_temp           = temp_sim;
-  _alk_dkh           = dkh_sim;
-  _alk_mgl           = mgl_sim;
-  _delta_ph          = 0.0f;
-  _alk_slot_status   = 0;     // FULL so ph_has_data()-like checks pass
+  _ph_value     = ph_sim;
+  _ph_value_ema = ph_sim;
+  _ph_value_ma  = ph_sim;
+  _ph_mv        = mv_sim;
+  _ph_temp      = temp_sim;
 
   // Keep ph_has_data() returning true
   _ph_last_good_ms = now;
+
+  // Run full slot + alkalinity pipeline so PHAK/PHSP SD logging works in SITL.
+  // This overwrites _alk_dkh/mgl/delta_ph/_alk_slot_status with real computed values.
+  _ph_update_daily_slots(ph_sim);
 }
 
 // =============================================================
@@ -1422,10 +1761,11 @@ float AP_ShoesAgtech::_get_spray_speed(void) {
 // =============================================================
 // _print_fm1_arm_status — in trang thai FLOW_MODE=1 khi ARM (bat ke FLOW_LOG).
 // Goi mot lan moi ARM session khi spray_mode = 1 hoac 2.
-// Kiem tra: mission, dist_max, speed, q1 range.
+// Cong thuc moi: q1 = TANK_VOL * r * speed * 60 / mission_dist
+// vi_per_run = TANK_VOL * r  (hang so, khong phu thuoc speed/dist)
+// dist_max (thong tin): khoang cach toi da de q1 >= 0.3 tai van toc hien tai
 // =============================================================
-void AP_ShoesAgtech::_print_fm1_arm_status(float r)
-{
+void AP_ShoesAgtech::_print_fm1_arm_status(float r) {
   r = constrain_float(r, 0.01f, 1.0f);
   float dist = _get_mission_dist();
 
@@ -1436,66 +1776,64 @@ void AP_ShoesAgtech::_print_fm1_arm_status(float r)
     return;
   }
 
-  // Check 2: khoang cach mission co qua dai khong?
-  float denom = r * _app_rate.get() * _boom_width.get();
-  if (denom < 0.001f) {
-    gcs().send_text(MAV_SEVERITY_WARNING,
-                    "SA FM1: APP_RATE/BOOM_W = 0 - kiểm tra param");
-    return;
-  }
-  float dist_max = _tank_vol.get() * 10000.0f / denom;
-  if (dist > dist_max) {
-    gcs().send_text(MAV_SEVERITY_WARNING,
-                    "SA FM1: mission %.0fm > dmax %.0fm - vẽ lại mission ngắn hơn",
-                    (double)dist, (double)dist_max);
-    return;
-  }
+  // vi_per_run hang so: TANK_VOL * r (khong doi theo speed/dist)
+  float vi_per_run = _tank_vol.get() * r;
 
-  // Check 3: van toc + preview q1
+  // Check 2: van toc
   float speed = _get_spray_speed();
   if (speed <= 0.1f) {
     gcs().send_text(MAV_SEVERITY_INFO,
-                    "SA FM1 SẴN SÀNG: r=%.2f miss=%.0fm/%.0fm | vận tốc=0 bơm chờ xe chạy",
-                    (double)r, (double)dist, (double)dist_max);
+                    "SA FM1 SẴN SÀNG: r=%.2f miss=%.0fm vi/run=%.1fL | vận "
+                    "tốc=0 bơm chờ xe chạy",
+                    (double)r, (double)dist, (double)vi_per_run);
     return;
   }
 
-  float q1 = r * _app_rate.get() * speed * _boom_width.get() * 0.006f;
+  // Tinh q1 va dist_max theo cong thuc moi
+  float q1 = _tank_vol.get() * r * speed * 60.0f / dist;
+  // dist_max: khoang cach toi da de q1 >= 0.3 tai van toc hien tai
+  float dist_max = _tank_vol.get() * r * speed * 60.0f / 0.3f;
+
   if (q1 < 0.3f) {
     gcs().send_text(MAV_SEVERITY_WARNING,
-                    "SA FM1: q1=%.2fL/ph < 0.3 @%.1fm/s - tăng APP_RATE hoặc FLOW_VEL",
-                    (double)q1, (double)speed);
+                    "SA FM1: q1=%.2fL/ph < 0.3 @%.1fm/s dist=%.0fm - rút ngắn "
+                    "mission (dmax=%.0fm)",
+                    (double)q1, (double)speed, (double)dist, (double)dist_max);
     return;
   }
   if (q1 > 2.0f) {
+    // dist_min: khoang cach toi thieu de q1 <= 2.0
+    float dist_min = _tank_vol.get() * r * speed * 60.0f / 2.0f;
     gcs().send_text(MAV_SEVERITY_WARNING,
-                    "SA FM1: q1=%.2fL/ph > 2.0 @%.1fm/s - giảm APP_RATE hoặc FLOW_VEL",
-                    (double)q1, (double)speed);
+                    "SA FM1: q1=%.2fL/ph > 2.0 @%.1fm/s dist=%.0fm - kéo dài "
+                    "mission (dmin=%.0fm)",
+                    (double)q1, (double)speed, (double)dist, (double)dist_min);
     return;
   }
 
-  // Thoi gian du kien chay het mission + luong vi sinh tieu thu
-  uint32_t eta_s   = (uint32_t)(dist / speed);
+  uint32_t eta_s = (uint32_t)(dist / speed);
   uint32_t eta_min = eta_s / 60U;
   uint32_t eta_sec = eta_s % 60U;
-  float    vi_used = q1 * (eta_s / 60.0f);
 
   gcs().send_text(MAV_SEVERITY_INFO,
-                  "SA FM1 OK: r=%.2f q1=%.2fL/ph miss=%.0fm dmax=%.0fm ~%um%02us vi~%.1fL",
-                  (double)r, (double)q1,
-                  (double)dist, (double)dist_max,
-                  (unsigned)eta_min, (unsigned)eta_sec, (double)vi_used);
+                  "SA FM1 OK: r=%.2f q1=%.2fL/ph miss=%.0fm dmax=%.0fm "
+                  "~%um%02us vi/run=%.1fL",
+                  (double)r, (double)q1, (double)dist, (double)dist_max,
+                  (unsigned)eta_min, (unsigned)eta_sec, (double)vi_per_run);
 }
 
 // =============================================================
 // [AP_ShoesAgtech] VISIN TARGET — FLOW_MODE=1 (nac giua/cao)
 //
-// Tinh luu luong vi sinh target (L/min) theo cong thuc L/ha × ratio.
-// Tat ca kiem tra xuat hien truoc khi chay PID:
+// Cong thuc moi: q1 = TANK_VOL * r * speed * 60 / mission_dist
+//   → vi sinh duoc phan phoi deu tren toan tuyen, khong dung APP_RATE/BOOM_W.
+//   → vi_per_run = TANK_VOL * r  (hang so, khong doi theo speed/dist)
+// Kiem tra truoc khi chay PID:
 //   1. Mission: dist <= 1m → warning + stop
-//   2. dist_max: tank_vol × 10000 / (r × APP_RATE × BOOM) < mission_dist → stop
-//   3. Speed:   < 0.1 m/s → stop (khong canh bao, chi reset PID)
-//   4. Range:   q1 ∉ [0.3, 6.0] L/min → warning + stop (cam bien YF-S402B)
+//   2. Speed:   < 0.1 m/s → reset PID, stop (khong canh bao)
+//   3. Range:   q1 < 0.3 → mission qua dai hoac speed qua cham → warning + stop
+//              q1 > 2.0 → mission qua ngan hoac speed qua nhanh → warning +
+//              stop
 // Canh bao throttle chung qua _tank_warn_ms (5s min giua hai lan).
 // =============================================================
 float AP_ShoesAgtech::_compute_visin_target(float r) {
@@ -1512,59 +1850,43 @@ float AP_ShoesAgtech::_compute_visin_target(float r) {
     if (now - _tank_warn_ms >= 5000U) {
       _tank_warn_ms = now;
       gcs().send_text(MAV_SEVERITY_WARNING,
-                      "SA FM1: chua co mission - bom dung");
+                      "SA FM1: chưa có mission - bơm dừng");
     }
     return 0.0f;
   }
 
-  // Kiem tra 2: mission phai <= dist_max de vi sinh vua het khi ket thuc
-  float denom = r * _app_rate.get() * _boom_width.get();
-  if (denom < 0.001f) {
-    return 0.0f;
-  }
-  float dist_max = _tank_vol.get() * 10000.0f / denom;
-  if (dist > dist_max) {
-    _pid_integral = 0.0f;
-    _pid_output_lpf = 0.0f;
-    if (!_arm_dist_warned) {
-      _arm_dist_warned = true;
-      gcs().send_text(MAV_SEVERITY_WARNING,
-                      "SA FM1: mission %.0fm > dist_max %.0fm - ve lai mission ngan hon",
-                      (double)dist, (double)dist_max);
-    }
-    return 0.0f;
-  }
-
-  // Kiem tra 3: toc do
+  // Kiem tra 2: toc do
   if (speed_ms < 0.1f) {
     _pid_integral = 0.0f;
     _pid_output_lpf = 0.0f;
     return 0.0f;
   }
 
-  // Tinh q1_target (L/min)
-  float q1 = r * _app_rate.get() * speed_ms * _boom_width.get() * 0.006f;
+  // Tinh q1_target: phan phoi TANK_VOL*r deu tren mission_dist
+  float q1 = _tank_vol.get() * r * speed_ms * 60.0f / dist;
 
-  // Kiem tra 4: dai cam bien YF-S402B (0.3–6 L/min)
+  // Kiem tra 3: dai cam bien YF-S402B (0.3–2.0 L/min)
   if (q1 < 0.3f) {
     _pid_integral = 0.0f;
     _pid_output_lpf = 0.0f;
     if (now - _tank_warn_ms >= 5000U) {
       _tank_warn_ms = now;
-      gcs().send_text(MAV_SEVERITY_WARNING,
-                      "SA FM1: Q visin %.2fL/min < 0.3 - tang mission_dist hoac giam speed",
-                      (double)q1);
+      gcs().send_text(
+          MAV_SEVERITY_WARNING,
+          "SA FM1: q1=%.2fL/ph < 0.3 - rút ngắn mission hoặc tăng speed",
+          (double)q1);
     }
     return 0.0f;
   }
-  if (q1 > 6.0f) {
+  if (q1 > 2.0f) {
     _pid_integral = 0.0f;
     _pid_output_lpf = 0.0f;
     if (now - _tank_warn_ms >= 5000U) {
       _tank_warn_ms = now;
-      gcs().send_text(MAV_SEVERITY_WARNING,
-                      "SA FM1: Q visin %.2fL/min > 6.0 - giam mission_dist hoac tang speed",
-                      (double)q1);
+      gcs().send_text(
+          MAV_SEVERITY_WARNING,
+          "SA FM1: q1=%.2fL/ph > 2.0 - kéo dài mission hoặc giảm speed",
+          (double)q1);
     }
     return 0.0f;
   }
@@ -1605,8 +1927,7 @@ float AP_ShoesAgtech::_get_mission_dist(void) {
       continue;
     }
     // Only nav commands carry a meaningful location
-    if (cmd.id != MAV_CMD_NAV_WAYPOINT &&
-        cmd.id != MAV_CMD_NAV_LOITER_UNLIM &&
+    if (cmd.id != MAV_CMD_NAV_WAYPOINT && cmd.id != MAV_CMD_NAV_LOITER_UNLIM &&
         cmd.id != MAV_CMD_NAV_LOITER_TURNS &&
         cmd.id != MAV_CMD_NAV_LOITER_TIME &&
         cmd.id != MAV_CMD_NAV_SPLINE_WAYPOINT) {
@@ -1624,7 +1945,7 @@ float AP_ShoesAgtech::_get_mission_dist(void) {
   }
 
   _mission_dist_m = total;
-  _mission_ncmds  = n;
+  _mission_ncmds = n;
   return _mission_dist_m;
 }
 // [/AP_ShoesAgtech]

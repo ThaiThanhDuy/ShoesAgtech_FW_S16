@@ -20,9 +20,13 @@ enum LoggingParameters {
 
   // [AP_ShoesAgtech] Log message ID for flow sensor data (FLWD)
   LOG_FLOW_DATA_MSG,
-  // [/AP_ShoesAgtech]
-  // [AP_ShoesAgtech] Log message ID for pH sensor data (PHWD)
+
+  // [AP_ShoesAgtech] Log message ID for pH sensor data (PHWD) — realtime pH/temp/mV
   LOG_PH_DATA_MSG,
+  // [AP_ShoesAgtech] Log message ID for daily alkalinity (PHAK) — written once when FULL
+  LOG_PH_ALK_MSG,
+  // [AP_ShoesAgtech] Log message ID for distance-based pH sample points (PHSP)
+  LOG_PH_SAMP_MSG,
   // [/AP_ShoesAgtech]
 };
 

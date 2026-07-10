@@ -371,8 +371,12 @@ private:
   // [AP_ShoesAgtech] Log_Write_Flow_Realtime writes FLWD message to SD card
   void Log_Write_Flow_Realtime(void);
   // [/AP_ShoesAgtech]
-  // [AP_ShoesAgtech] Log_Write_Ph_Realtime writes PHWD message to SD card
+  // [AP_ShoesAgtech] Log_Write_Ph_Realtime writes PHWD message to SD card (pH/temp/mV realtime)
   void Log_Write_Ph_Realtime(void);
+  // [AP_ShoesAgtech] Log_Write_Ph_Alkalinity writes PHAK once per day when morning+afternoon slots both complete
+  void Log_Write_Ph_Alkalinity(void);
+  // [AP_ShoesAgtech] Log_Write_Ph_Sample writes PHSP on each distance-triggered sample point
+  void Log_Write_Ph_Sample(void);
   // [/AP_ShoesAgtech]
 #endif
 

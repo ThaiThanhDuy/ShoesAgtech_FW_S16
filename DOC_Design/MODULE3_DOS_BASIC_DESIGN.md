@@ -6,7 +6,7 @@
 > Người không biết lập trình cũng đọc được và hiểu hệ thống làm gì.
 
 **Dự án:** `ardupilot-jbdcan_testing_S16`
-**Ngày tạo:** 2026-05-01
+**Ngày tạo:** 2026-05-01 | **Cập nhật lần cuối:** 2026-07-09
 **Người viết:** ThaiThanhDuy
 **Trạng thái:** `[x] Draft   [ ] Review   [ ] Approved`
 
@@ -26,8 +26,6 @@
 
 ## 2. Mục đích
 
-> **Tính năng này giải quyết vấn đề gì? Ai cần nó? Dùng trong tình huống nào?**
-
 Module 3 điều khiển động cơ vít tải (servo 360°) để phân phối thức ăn tôm tự động khi robot di chuyển dọc theo ao.
 
 Người vận hành chỉ cần:
@@ -35,8 +33,10 @@ Người vận hành chỉ cần:
 2. Hệ thống tự tính tốc độ quay để phân bổ đúng lượng thức ăn đã đặt
 
 Hỗ trợ 2 chế độ:
-- **Tốc độ cố định**: Quay đều với tốc độ đặt sẵn
-- **Tỉ lệ theo tuyến đường**: Tự điều chỉnh tốc độ theo tốc độ xe để phân bổ đều theo quãng đường
+- **Tốc độ cố định (DOS_MODE=0)**: Quay đều với tốc độ đặt sẵn, không phụ thuộc tốc độ xe hay tuyến đường
+- **Tỉ lệ theo tuyến đường (DOS_MODE=1)**: Tự điều chỉnh tốc độ theo tốc độ xe để phân bổ đều toàn tuyến
+
+**Tính năng khối lượng riêng:** Hệ thống phân tách thông số cơ học vít tải (thể tích tống ra) với đặc tính hạt thức ăn (khối lượng riêng g/mL). Mỗi loại thức ăn có thể cài riêng, không cần calibrate lại vít tải khi đổi loại hạt.
 
 ---
 
@@ -70,18 +70,24 @@ Người lái nhấn nút RC để bật motor
     ↓
 Hệ thống kiểm tra cấu hình servo có đúng không
     ↓ Đúng
-Chọn chế độ tính tốc độ:
-┌─────────────────────────────────────────────────────────┐
-│ Chế độ 0 (tốc độ cố định):                             │
-│   Tính tốc độ motor từ lượng thức ăn và tỉ lệ cài sẵn │
-│                                                         │
-│ Chế độ 1 (tỉ lệ tuyến đường):                         │
-│   Tính tốc độ theo: lượng thức ăn + tốc độ xe         │
-│                     + tổng quãng đường tuyến đường      │
-│   Nếu xe chưa chạy hoặc chưa có tuyến → motor DỪNG    │
-└─────────────────────────────────────────────────────────┘
+Chọn loại thức ăn hiện tại (SA_DOS_FOOD = 1..7)
+    → Lấy thể tích vít tải (SA_DOS_RATE hoặc SA_DOS_Fx, mL/50us)
+    → Lấy khối lượng riêng hạt (SA_DOS_Dx, g/mL)
     ↓
-Tín hiệu PWM xuất ra motor theo chiều quay đã cài
+Chọn chế độ tính tốc độ:
+┌─────────────────────────────────────────────────────────────────────────┐
+│ Chế độ 0 (tốc độ cố định):                                             │
+│   offset(µs) = SA_DOS_SP(g) × 50 / (SA_DOS_RATE(mL/50us) × Dx(g/mL)) │
+│   Tốc độ motor không thay đổi theo vận tốc xe                           │
+│                                                                         │
+│ Chế độ 1 (tỉ lệ tuyến đường):                                         │
+│   dos_gpm = SA_DOS_SP(g) × speed × 60 / mission_dist                   │
+│   offset(µs) = dos_gpm × 50 / (SA_DOS_Fx(mL/50us) × Dx(g/mL))        │
+│   Xe nhanh → motor quay nhanh; xe chậm → motor quay chậm               │
+│   Nếu xe chưa chạy hoặc chưa có tuyến → motor DỪNG                    │
+└─────────────────────────────────────────────────────────────────────────┘
+    ↓
+Tín hiệu PWM xuất ra motor theo chiều quay đã cài (SA_DOS_REV)
     ↓
 Trạng thái motor gửi lên GCS
 ```
@@ -92,39 +98,45 @@ Trạng thái motor gửi lên GCS
 
 ### Case 1: Cấu hình servo chưa đúng
 
-- **Điều kiện:** Kênh servo chưa được cài 4 thông số bắt buộc theo hướng dẫn (giá trị min/trim/max và chức năng)
+- **Điều kiện:** Kênh servo chưa được cài 4 thông số bắt buộc (FUNCTION/MIN/TRIM/MAX)
 - **Hành vi hệ thống:** Motor KHÔNG chạy dù người lái đã bật nút RC; phát cảnh báo cụ thể điều kiện nào sai
-- **Output người dùng thấy:** Cảnh báo liên tục trên GCS mỗi 5 giây: "SERVO<n> FUNCTION=X, cần đặt =0 (None)" (hoặc MIN/TRIM/MAX tương tự); motor không phản hồi
+- **Output người dùng thấy:** Cảnh báo liên tục trên GCS mỗi 5 giây; motor không phản hồi
 
 ### Case 2: Nút RC tắt (hoặc mất tín hiệu RC)
 
 - **Điều kiện:** Nút RC ở trạng thái tắt (PWM ≤ 1500) hoặc mất tín hiệu remote
 - **Hành vi hệ thống:** Motor dừng ngay lập tức, giữ nguyên dừng
-- **Output người dùng thấy:** Thông báo "Dosing motor OFF" trên GCS; motor ngừng quay; GCS hiển thị PWM=1500
+- **Output người dùng thấy:** Thông báo "Dosing motor OFF"; motor ngừng quay; GCS hiển thị PWM=1500
 
 ### Case 3: Nút RC bật — Chế độ 0 (tốc độ cố định)
 
-- **Điều kiện:** Nút RC bật + chế độ tốc độ cố định + setpoint > 0
-- **Hành vi hệ thống:** Motor quay đều với tốc độ tính từ lượng thức ăn đặt sẵn và tỉ lệ chuyển đổi; theo đúng chiều quay đã cài
-- **Output người dùng thấy:** Thông báo "Dosing motor ON"; motor quay; GCS hiển thị PWM thực tế đang xuất
+- **Điều kiện:** Nút RC bật + DOS_MODE=0 + setpoint > 0
+- **Hành vi hệ thống:** Tính offset từ `SA_DOS_SP ÷ (SA_DOS_RATE × SA_DOS_Dx)` — motor quay đều. Khi đổi loại thức ăn (SA_DOS_FOOD), hệ thống tự dùng khối lượng riêng tương ứng (SA_DOS_D1..D7) mà không cần calibrate lại DOS_RATE
+- **Output người dùng thấy:** "Dosing motor ON"; GCS hiển thị PWM, setpoint, density của loại hạt đang dùng
 
 ### Case 4: Nút RC bật — Chế độ 1 (phân bổ theo tuyến đường) — đủ điều kiện
 
-- **Điều kiện:** Nút RC bật + chế độ tỉ lệ tuyến đường + đã upload tuyến đường + xe đang chạy
-- **Hành vi hệ thống:** Motor thay đổi tốc độ theo tốc độ xe để phân bổ đều lượng thức ăn đặt sẵn trên toàn tuyến đường
-- **Output người dùng thấy:** Motor quay nhanh hơn khi xe chạy nhanh và ngược lại; GCS hiển thị PWM thay đổi
+- **Điều kiện:** DOS_MODE=1 + đã upload tuyến đường + xe đang chạy
+- **Hành vi hệ thống:** Motor thay đổi tốc độ theo tốc độ xe để phân bổ đều `SA_DOS_SP` gam trên toàn tuyến đường. Xe nhanh → quay nhanh hơn, xe chậm → quay chậm hơn
+- **Output người dùng thấy:** Motor quay nhanh/chậm theo xe; GCS hiển thị PWM thay đổi
 
 ### Case 5: Nút RC bật — Chế độ 1 — Chưa có tuyến đường hoặc xe đứng yên
 
-- **Điều kiện:** Chế độ tỉ lệ tuyến đường nhưng chưa upload tuyến đường LÊN FC, hoặc xe không di chuyển
+- **Điều kiện:** DOS_MODE=1 nhưng chưa upload tuyến đường lên FC, hoặc xe không di chuyển
 - **Hành vi hệ thống:** Motor DỪNG — không fallback sang tốc độ cố định; phát cảnh báo
-- **Output người dùng thấy:** Motor dừng; cảnh báo trên GCS: "chưa có mission" hoặc "tốc độ quá thấp"
+- **Output người dùng thấy:** Motor dừng; cảnh báo "chua co mission" hoặc "toc do qua thap"
 
 ### Case 6: Setpoint = 0 gam
 
-- **Điều kiện:** Lượng thức ăn đặt bằng 0
-- **Hành vi hệ thống:** Motor không quay (offset PWM = 0 → dừng tại 1500µs)
+- **Điều kiện:** `SA_DOS_SP = 0`
+- **Hành vi hệ thống:** Motor không quay (offset = 0 → dừng tại 1500µs)
 - **Output người dùng thấy:** Motor dừng; GCS hiển thị PWM=1500
+
+### Case 7: Đổi loại thức ăn (SA_DOS_FOOD)
+
+- **Điều kiện:** Người dùng thay SA_DOS_FOOD từ 1 → 2 (hoặc bất kỳ)
+- **Hành vi hệ thống:** Hệ thống tự dùng SA_DOS_D2 (khối lượng riêng loại 2) và SA_DOS_F2 (thể tích loại 2, DOS_MODE=1). Không cần reboot, áp dụng ngay chu kỳ kế tiếp (100ms)
+- **Output người dùng thấy:** GCS log hiển thị `F<n>` và `D:<x>g/mL` cập nhật theo loại hạt mới
 
 ---
 

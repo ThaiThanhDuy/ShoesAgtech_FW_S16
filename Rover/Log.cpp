@@ -248,18 +248,16 @@ void Rover::Log_Write_Flow_Realtime(void) {
 }
 
 // [AP_ShoesAgtech] ---------------------------------------------------------
-// Binary log message PHWD: pH, moving-average pH, temperature, alkalinity, ΔpH
-// slot
+// Binary log message PHWD: realtime pH readings, temperature, electrode mV, GPS position
 struct PACKED log_PhData {
   LOG_PACKET_HEADER;
   uint64_t time_us;
-  float ph_raw;
-  float ph_ma;
-  float temp_c;
-  float alk_dkh;
-  float alk_mgl;
-  float delta_ph;
-  uint8_t slot_status; // 0=FULL 1=MORN 2=AFT 3=PREV 4=NODATA
+  float   ph_raw;  // calibrated pH (latest sample)
+  float   ph_ma;   // moving-average pH
+  float   temp_c;  // water temperature °C
+  int16_t mv;      // electrode millivolts (Nernst raw)
+  int32_t lat;     // GPS latitude  (degrees × 1e7); 0 = no fix
+  int32_t lng;     // GPS longitude (degrees × 1e7); 0 = no fix
 };
 
 void Rover::Log_Write_Ph_Realtime(void) {
@@ -269,16 +267,101 @@ void Rover::Log_Write_Ph_Realtime(void) {
   if (!g2.custom_nav.ph_is_enabled()) {
     return;
   }
+  int32_t lat = 0, lng = 0;
+  if (gps.status(0) >= AP_GPS::GPS_OK_FIX_3D) {
+    const Location loc = gps.location(0);
+    lat = loc.lat;
+    lng = loc.lng;
+  }
   struct log_PhData pkt = {
     LOG_PACKET_HEADER_INIT(LOG_PH_DATA_MSG),
     time_us : AP_HAL::micros64(),
-    ph_raw : g2.custom_nav.get_ph_raw(),
-    ph_ma : g2.custom_nav.get_ph(),
-    temp_c : g2.custom_nav.get_ph_temp(),
-    alk_dkh : g2.custom_nav.get_alk_dkh(),
-    alk_mgl : g2.custom_nav.get_alk_mgl(),
+    ph_raw  : g2.custom_nav.get_ph_raw(),
+    ph_ma   : g2.custom_nav.get_ph(),
+    temp_c  : g2.custom_nav.get_ph_temp(),
+    mv      : (int16_t)g2.custom_nav.get_ph_mv(),
+    lat     : lat,
+    lng     : lng
+  };
+  logger.WriteBlock(&pkt, sizeof(pkt));
+}
+
+// Binary log message PHAK: daily alkalinity — written ONCE per day when both
+// morning and afternoon pH slots are at the same pond (within 300m) and complete.
+// Alkalinity is derived from ΔpH (afternoon − morning) for best accuracy.
+// Lat/Lng record the pond position (morning slot GPS) for per-pond tracking.
+struct PACKED log_PhAlk {
+  LOG_PACKET_HEADER;
+  uint64_t time_us;
+  float   ph_morn;   // morning slot pH
+  float   ph_aft;    // afternoon slot pH
+  float   delta_ph;  // afternoon − morning
+  float   alk_dkh;   // alkalinity (dKH) derived from ΔpH
+  float   alk_mgl;   // alkalinity (mg/L CaCO3)
+  int32_t lat;       // pond GPS latitude  (morning slot, degrees × 1e7)
+  int32_t lng;       // pond GPS longitude (morning slot, degrees × 1e7)
+};
+
+void Rover::Log_Write_Ph_Alkalinity(void) {
+  if (!logger.logging_enabled()) {
+    return;
+  }
+  if (!g2.custom_nav.ph_is_enabled()) {
+    return;
+  }
+  if (!g2.custom_nav.consume_alk_log_pending()) {
+    return;
+  }
+  struct log_PhAlk pkt = {
+    LOG_PACKET_HEADER_INIT(LOG_PH_ALK_MSG),
+    time_us  : AP_HAL::micros64(),
+    ph_morn  : g2.custom_nav.get_ph_morn(),
+    ph_aft   : g2.custom_nav.get_ph_aft(),
     delta_ph : g2.custom_nav.get_delta_ph(),
-    slot_status : g2.custom_nav.get_alk_slot_status()
+    alk_dkh  : g2.custom_nav.get_alk_dkh(),
+    alk_mgl  : g2.custom_nav.get_alk_mgl(),
+    lat      : g2.custom_nav.get_ph_morn_lat(),
+    lng      : g2.custom_nav.get_ph_morn_lng()
+  };
+  logger.WriteBlock(&pkt, sizeof(pkt));
+}
+// Binary log message PHSP: distance-triggered pH sample point.
+// Written each time the robot travels SA_PH_SAMP_D metres, and on each WP arrival.
+// WP: mission waypoint index (integer segment).
+// Sub: sub-point index — 0=at WP, 1=first intermediate, 2=second, …
+// e.g. WP=1 Sub=0 → "WP1", WP=1 Sub=2 → "WP1.2", WP=2 Sub=0 → "WP2"
+struct PACKED log_PhSamp {
+  LOG_PACKET_HEADER;
+  uint64_t time_us;
+  uint16_t wp_idx;   // waypoint index
+  uint8_t  sub_idx;  // sub-point within segment (0=WP arrival)
+  float    ph_ma;    // moving-average pH at sample moment
+  float    temp_c;   // water temperature °C
+  int16_t  mv;       // electrode millivolts
+  int32_t  lat;      // GPS latitude  (degrees × 1e7)
+  int32_t  lng;      // GPS longitude (degrees × 1e7)
+};
+
+void Rover::Log_Write_Ph_Sample(void) {
+  if (!logger.logging_enabled()) {
+    return;
+  }
+  if (!g2.custom_nav.ph_is_enabled()) {
+    return;
+  }
+  if (!g2.custom_nav.consume_ph_samp_pending()) {
+    return;
+  }
+  struct log_PhSamp pkt = {
+    LOG_PACKET_HEADER_INIT(LOG_PH_SAMP_MSG),
+    time_us : AP_HAL::micros64(),
+    wp_idx  : g2.custom_nav.get_ph_samp_wp(),
+    sub_idx : g2.custom_nav.get_ph_samp_sub(),
+    ph_ma   : g2.custom_nav.get_ph(),
+    temp_c  : g2.custom_nav.get_ph_temp(),
+    mv      : (int16_t)g2.custom_nav.get_ph_mv(),
+    lat     : g2.custom_nav.get_ph_samp_lat(),
+    lng     : g2.custom_nav.get_ph_samp_lng()
   };
   logger.WriteBlock(&pkt, sizeof(pkt));
 }
@@ -377,18 +460,46 @@ const LogStructure Rover::log_structure[] = {
     // =================================================================
     // [AP_ShoesAgtech] PHWD log structure — pH sensor Nengshi ASPS3801D-0.5M
     // @LoggerMessage: PHWD
-    // @Description: pH sensor measurements (Modbus RTU RS485)
+    // @Description: pH sensor realtime measurements with GPS position
+    // @Field: TimeUS:  Time since system startup
+    // @Field: pHRaw:   Calibrated pH (latest sample)
+    // @Field: pHMA:    Moving-average pH
+    // @Field: Temp:    Water temperature (°C)
+    // @Field: mV:      Electrode millivolts (Nernst raw)
+    // @Field: Lat:     GPS latitude (degrees × 1e7; 0=no fix)
+    // @Field: Lng:     GPS longitude (degrees × 1e7; 0=no fix)
+    {LOG_PH_DATA_MSG, sizeof(log_PhData), "PHWD", "QfffhLL",
+     "TimeUS,pHRaw,pHMA,Temp,mV,Lat,Lng", "s----DU", "F----GG"},
+
+    // =================================================================
+    // [AP_ShoesAgtech] PHAK log structure — daily alkalinity from ΔpH + pond GPS
+    // @LoggerMessage: PHAK
+    // @Description: Daily alkalinity written once when morning+afternoon slots at same pond
     // @Field: TimeUS:   Time since system startup
-    // @Field: pHRaw:    Raw calibrated pH reading
-    // @Field: pHMA:     Moving average pH (10 samples)
-    // @Field: Temp:     Water temperature (°C)
-    // @Field: AlkDKH:   Estimated alkalinity (dKH)
-    // @Field: AlkMGL:   Estimated alkalinity (mg/L CaCO3)
-    // @Field: DeltapH:  Afternoon − morning pH swing today
-    // @Field: SlotSt:   Data quality: 0=FULL 1=MORN 2=AFT 3=PREV 4=NODATA
-    {LOG_PH_DATA_MSG, sizeof(log_PhData), "PHWD", "QffffffB",
-     "TimeUS,pHRaw,pHMA,Temp,AlkDKH,AlkMGL,DeltapH,SlotSt", "s-------",
-     "F-------"},
+    // @Field: pHMorn:   Morning slot pH
+    // @Field: pHAft:    Afternoon slot pH
+    // @Field: dPH:      Afternoon − morning pH swing
+    // @Field: AlkDKH:   Alkalinity derived from ΔpH (dKH)
+    // @Field: AlkMGL:   Alkalinity (mg/L CaCO3)
+    // @Field: Lat:      Pond GPS latitude  (morning slot position, degrees × 1e7)
+    // @Field: Lng:      Pond GPS longitude (morning slot position, degrees × 1e7)
+    {LOG_PH_ALK_MSG, sizeof(log_PhAlk), "PHAK", "QfffffLL",
+     "TimeUS,pHMorn,pHAft,dPH,AlkDKH,AlkMGL,Lat,Lng", "s-----DU", "F-----GG"},
+
+    // =================================================================
+    // [AP_ShoesAgtech] PHSP log structure — distance-based pH sample points
+    // @LoggerMessage: PHSP
+    // @Description: pH sample at each SA_PH_SAMP_D metre interval and WP arrival
+    // @Field: TimeUS:  Time since system startup
+    // @Field: WP:      Mission waypoint index (integer segment)
+    // @Field: Sub:     Sub-point index (0=WP arrival, 1=first intermediate, …)
+    // @Field: pHMA:    Moving-average pH at sample moment
+    // @Field: Temp:    Water temperature (°C)
+    // @Field: mV:      Electrode millivolts (Nernst raw)
+    // @Field: Lat:     GPS latitude  (degrees × 1e7)
+    // @Field: Lng:     GPS longitude (degrees × 1e7)
+    {LOG_PH_SAMP_MSG, sizeof(log_PhSamp), "PHSP", "QHBffhLL",
+     "TimeUS,WP,Sub,pHMA,Temp,mV,Lat,Lng", "s---O-DU", "F---0-GG"},
     // [/AP_ShoesAgtech]
 };
 

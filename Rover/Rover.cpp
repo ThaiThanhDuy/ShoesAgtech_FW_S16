@@ -528,6 +528,8 @@ void Rover::update_custom_flow(void) {
 #if HAL_LOGGING_ENABLED
   Log_Write_Flow_Realtime();    // write FLWD to SD card
   Log_Write_Ph_Realtime();      // write PHWD to SD card (skips if SA_PH_EN=0)
+  Log_Write_Ph_Alkalinity();    // write PHAK once per day when morning+afternoon slots FULL
+  Log_Write_Ph_Sample();        // write PHSP on each distance-triggered sample point
 #endif
 }
 // [/AP_ShoesAgtech] -------------------------------------------------------

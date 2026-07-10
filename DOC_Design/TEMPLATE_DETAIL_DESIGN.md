@@ -1,4 +1,5 @@
 # [Tên tính năng / Module]
+
 ## Detail Design Document
 
 > **Đây là tài liệu SAU KHI code + test + debug xong.**
@@ -9,8 +10,6 @@
 **Dự án:** `ardupilot-jbdcan_testing_S16`
 **File nguồn:** `[đường dẫn file chính đã code]`
 **Loại:** `[ ] Module mới   [ ] Bổ sung hệ thống   [ ] Sửa lỗi / thay đổi hành vi`
-**Tần suất update:** `[N Hz / event-driven / N ms]`
-**Ngày hoàn thành:** [YYYY-MM-DD]
 
 ---
 
@@ -58,36 +57,38 @@
 ---
 
 **`[TênHàm](param1: kiểu, param2: kiểu, ...)`**
+
 - **File:** `[path/to/file.cpp : dòng N]`
 - **Được gọi bởi:** `[hàm cha / scheduler / ISR]`
 - **Đầu vào:**
-  - `param1` — [ý nghĩa, đơn vị nếu có]
-  - `param2` — [ý nghĩa, đơn vị nếu có]
+    - `param1` — [ý nghĩa, đơn vị nếu có]
+    - `param2` — [ý nghĩa, đơn vị nếu có]
 - **Xử lý:**
-  1. [Bước 1: làm gì]
-  2. [Bước 2: làm gì]
-  3. [Điều kiện rẽ nhánh nếu có]
+    1. [Bước 1: làm gì]
+    2. [Bước 2: làm gì]
+    3. [Điều kiện rẽ nhánh nếu có]
 - **Đầu ra / Return:**
-  - `[kiểu trả về]` — [ý nghĩa, đơn vị]
-  - Hoặc: `void` — [side effect: cập nhật biến nào, gửi gì]
+    - `[kiểu trả về]` — [ý nghĩa, đơn vị]
+    - Hoặc: `void` — [side effect: cập nhật biến nào, gửi gì]
 - **Ghi chú:** [constraint đặc biệt, lý do thiết kế, bug đã fix]
 
 ---
 
 **`[TênHàm2](param: kiểu)`**
+
 - **File:** `[path/to/file.cpp : dòng N]`
 - **Được gọi bởi:** `[...]`
 - **Đầu vào:**
-  - `param` — [ý nghĩa]
+    - `param` — [ý nghĩa]
 - **Xử lý:**
-  1. [...]
+    1. [...]
 - **Đầu ra / Return:**
-  - `[...]`
+    - `[...]`
 - **Ghi chú:** [...]
 
 ---
 
-> *(Thêm block hàm nếu cần — một block cho mỗi hàm quan trọng)*
+> _(Thêm block hàm nếu cần — một block cho mỗi hàm quan trọng)_
 
 ---
 
@@ -96,9 +97,9 @@
 > Toàn bộ tham số cần cài đặt để tính năng này hoạt động.
 > Bao gồm cả tham số nâng cao và tham số ít thay đổi.
 
-| Tham số | Slot | Kiểu | Mặc định | Min | Max | Mô tả đầy đủ |
-|---|---|---|---|---|---|---|
-| `SA_XXXX` | N | Int8 / Float / Int16 | [val] | [min] | [max] | [đơn vị, ý nghĩa, ảnh hưởng khi thay đổi] |
+| Tham số   | Slot | Kiểu                 | Mặc định | Min   | Max   | Mô tả đầy đủ                              |
+| --------- | ---- | -------------------- | -------- | ----- | ----- | ----------------------------------------- |
+| `SA_XXXX` | N    | Int8 / Float / Int16 | [val]    | [min] | [max] | [đơn vị, ý nghĩa, ảnh hưởng khi thay đổi] |
 
 > **Param chỉ có hiệu lực sau reboot:** `[danh sách nếu có]`
 
@@ -124,6 +125,7 @@
 > Thuật toán / giao thức / logic điều khiển chính.
 
 **[Tên bước / giao thức]:**
+
 ```
 [Pseudocode hoặc công thức hoặc frame bytes]
 Đơn vị: [...]
@@ -141,9 +143,9 @@ Ví dụ:  input=... → output=...
 
 ### 4.1 MAVLink SA_DATA
 
-| Index | Tên field | Đơn vị | Điều kiện ghi | Mô tả + edge case |
-|---|---|---|---|---|
-| `data[N]` | `field_name` | [unit] | [Luôn / khi ...] | [mô tả đầy đủ] |
+| Index     | Tên field    | Đơn vị | Điều kiện ghi    | Mô tả + edge case |
+| --------- | ------------ | ------ | ---------------- | ----------------- |
+| `data[N]` | `field_name` | [unit] | [Luôn / khi ...] | [mô tả đầy đủ]    |
 
 ### 4.2 DataFlash Log
 
@@ -155,10 +157,10 @@ Format string: "[Qff / QffffffB / ...]"
 Điều kiện ghi: [luôn / SA_XX_LOG=1 / ...]
 ```
 
-| Field | Tên cột | Kiểu | Đơn vị | Mô tả |
-|---|---|---|---|---|
-| 1 | `TimeUS` | uint64_t (Q) | µs | `AP_HAL::micros64()` |
-| N | `[FieldName]` | [type] | [unit] | [mô tả] |
+| Field | Tên cột       | Kiểu         | Đơn vị | Mô tả                |
+| ----- | ------------- | ------------ | ------ | -------------------- |
+| 1     | `TimeUS`      | uint64_t (Q) | µs     | `AP_HAL::micros64()` |
+| N     | `[FieldName]` | [type]       | [unit] | [mô tả]              |
 
 ### 4.3 Console Log (GCS Messages)
 
@@ -171,8 +173,8 @@ Format:  [PREFIX] [nội dung với placeholder]
 
 ### 4.4 STATUSTEXT — Toàn bộ thông báo
 
-| Nội dung thông báo | Mức | Điều kiện | Tần suất |
-|---|---|---|---|
+| Nội dung thông báo                   | Mức                       | Điều kiện | Tần suất         |
+| ------------------------------------ | ------------------------- | --------- | ---------------- |
 | `[chuỗi đầy đủ với placeholder <x>]` | CRITICAL / WARNING / INFO | [khi nào] | [1 lần / mỗi Ns] |
 
 ---
@@ -212,14 +214,14 @@ FC config:
 > Ghi lại những điểm implementation thực tế khác so với Basic Design.
 > Nếu không có thay đổi → ghi "Implement đúng theo Basic Design."
 
-| Điểm khác biệt | Basic Design dự kiến | Thực tế đã làm | Lý do thay đổi |
-|---|---|---|---|
-| [Tên điểm] | [Dự kiến] | [Thực tế] | [Lý do kỹ thuật / constraint] |
+| Điểm khác biệt | Basic Design dự kiến | Thực tế đã làm | Lý do thay đổi                |
+| -------------- | -------------------- | -------------- | ----------------------------- |
+| [Tên điểm]     | [Dự kiến]            | [Thực tế]      | [Lý do kỹ thuật / constraint] |
 
 ---
 
 ## 8. Tài liệu liên quan [ALL]
 
-- [[Tên]_BASIC_DESIGN.md]([Tên]_BASIC_DESIGN.md) — yêu cầu và hành vi ban đầu
+- [[Tên]\_BASIC_DESIGN.md]([Tên]_BASIC_DESIGN.md) — yêu cầu và hành vi ban đầu
 - [SA_DATA_DETAIL_DESIGN.md](SA_DATA_DETAIL_DESIGN.md) — layout đầy đủ SA_DATA
 - [AP_SHOESAGTECH_REFERENCE.md](AP_SHOESAGTECH_REFERENCE.md) — tổng hợp toàn hệ thống

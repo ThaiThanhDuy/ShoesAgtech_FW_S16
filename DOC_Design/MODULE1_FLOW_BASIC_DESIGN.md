@@ -6,7 +6,7 @@
 > Người không biết lập trình cũng đọc được và hiểu hệ thống làm gì.
 
 **Dự án:** `ardupilot-jbdcan_testing_S16`
-**Ngày tạo:** 2026-05-01
+**Ngày tạo:** 2026-05-01 | **Cập nhật lần cuối:** 2026-07-08
 **Người viết:** ThaiThanhDuy
 **Trạng thái:** `[x] Draft   [ ] Review   [ ] Approved`
 
@@ -17,7 +17,7 @@
 ```
 [x] Tính năng mới hoàn toàn
 [ ] Bổ sung vào hệ thống có sẵn
-[ ] Sửa lỗi / thay đổi hành vi hiện tại
+[ ] Sửa lỗi / thay đổi hành vi
 ```
 
 > Thêm mới toàn bộ hệ thống điều khiển phun nước tự động dựa trên cảm biến lưu lượng — không có chức năng này trong ArduPilot gốc.
@@ -26,12 +26,10 @@
 
 ## 2. Mục đích
 
-> **Tính năng này giải quyết vấn đề gì? Ai cần nó? Dùng trong tình huống nào?**
+Module 1 điều khiển bơm phun vi sinh trên robot nông nghiệp.
+Người lái chỉ cần **chọn chế độ bằng một nút RC** — hệ thống tự đọc lưu lượng thực tế và điều chỉnh bơm để đạt mục tiêu.
 
-Module 1 điều khiển bơm phun nước/hóa chất trên robot nông nghiệp.
-Người lái chỉ cần **chọn chế độ bằng một nút RC** — hệ thống tự đọc lưu lượng thực tế và điều chỉnh bơm để đạt mục tiêu đặt trước.
-
-Dùng khi: phun thuốc, phun nước, phun phân bón trên đồng/ao — cần phun đều và đúng lượng theo diện tích hoặc thể tích tank.
+Dùng khi: phun vi sinh, thuốc, phân bón trên đồng/ao — cần phân phối đều và đúng lượng theo tuyến đường mission.
 
 ---
 
@@ -49,38 +47,42 @@ Dùng khi: phun thuốc, phun nước, phun phân bón trên đồng/ao — cầ
 
 ## 4. Phần cứng / Giao tiếp sử dụng
 
-| Thiết bị | Vai trò | Kết nối vào hệ thống qua | Ghi chú |
+| Thiết bị | Vai trò | Kết nối | Ghi chú |
 |---|---|---|---|
-| Cảm biến lưu lượng (YF-S402B) | Đo lưu lượng nước thực tế đang chạy qua ống | Chân GPIO của FC | Cần chọn đúng chân, cấu hình 1 lần lúc cài đặt |
-| Bơm (servo PWM 360°) | Bơm nước/hóa chất | Kênh servo của FC | Phải cài đúng theo hướng dẫn wiring, không dùng chức năng servo chuẩn |
-| Tay lái / Remote RC | Người lái chọn chế độ phun | Kênh RC riêng | Một kênh 3 nấc: nấc thấp/giữa/cao = 3 chế độ |
+| Cảm biến lưu lượng YF-S402B | Đo lưu lượng vi sinh thực tế | Chân GPIO của FC | Dải 0.3–2.0 L/min thực tế |
+| Bơm (servo PWM 360°) | Bơm vi sinh | Kênh servo của FC | Phải cài FUNCTION=0 |
+| Tay lái / Remote RC | Người lái chọn chế độ | Kênh RC 3 nấc | Nấc thấp / giữa / cao |
 
 ---
 
 ## 5. Flow hoạt động
 
 ```
-Người lái gạt nút RC chọn chế độ phun + điều kiện van ruộng
+Người lái gạt nút RC chọn chế độ phun
     ↓
 Cảm biến đếm xung liên tục → hệ thống tính lưu lượng thực (L/min)
     ↓
-┌────────────────────────────────────────────────────────────────┐
-│  Nấc thấp → Chế độ 0 (LÁI TAY)                               │
-│    Tín hiệu joystick thứ 2 truyền thẳng ra bơm                │
-│                                                                │
-│  Nấc giữa → PID bám lưu lượng vi sinh (van Mặc định)         │
-│    SA_FLOW_MODE=0: bám SA_FLOW_SP (người dùng calib tay)      │
-│    SA_FLOW_MODE=1: bám công thức L/ha × SA_MIX_STD            │
-│                    có kiểm tra khoảng cách tank còn đủ không   │
-│                                                                │
-│  Nấc cao → PID bám lưu lượng vi sinh (van Chống nghẹt)        │
-│    SA_FLOW_MODE=0: bám SA_FLOW_SP × (SA_MIX_CNT/SA_MIX_STD)  │
-│                    (van mở thêm → setpoint vi sinh tăng tỉ lệ) │
-│    SA_FLOW_MODE=1: bám công thức L/ha × SA_MIX_CNT            │
-│                    có kiểm tra khoảng cách tank còn đủ không   │
-└────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────┐
+│  Nấc thấp → Chế độ 0 (LÁI TAY)                                   │
+│    Tín hiệu joystick thứ 2 truyền thẳng ra bơm                    │
+│                                                                    │
+│  Nấc giữa → PID bám lưu lượng vi sinh (van Mặc định)             │
+│    SA_FLOW_MODE=0: bám SA_FLOW_SP (người dùng calib tay)          │
+│    SA_FLOW_MODE=1: bám công thức phân phối đều vi sinh            │
+│        q1 = TANK_VOL × SA_MIX_STD × vận_tốc × 60 / mission_dist  │
+│        → vi sinh phân phối đều toàn tuyến, luôn dùng đúng         │
+│           TANK_VOL × SA_MIX_STD lít mỗi lần chạy                  │
+│                                                                    │
+│  Nấc cao → PID bám lưu lượng vi sinh (van Chống nghẹt)            │
+│    SA_FLOW_MODE=0: bám SA_FLOW_SP × (SA_MIX_CNT/SA_MIX_STD)      │
+│    SA_FLOW_MODE=1: bám công thức với SA_MIX_CNT                   │
+│        q1 = TANK_VOL × SA_MIX_CNT × vận_tốc × 60 / mission_dist  │
+└────────────────────────────────────────────────────────────────────┘
     ↓
-Tín hiệu điều khiển gửi đến bơm
+Bơm điều chỉnh PWM theo PID
+    ↓
+Nếu phát hiện hút không khí (lưu lượng đột ngột > 1.7 L/min trong 3s)
+    → Cảnh báo CRITICAL "THÙNG HẾT VI SINH" (bơm vẫn tiếp tục)
     ↓
 Dữ liệu lưu lượng + trạng thái bơm gửi lên GCS liên tục
 ```
@@ -89,62 +91,69 @@ Dữ liệu lưu lượng + trạng thái bơm gửi lên GCS liên tục
 
 ## 6. Tất cả Case và Output
 
-### Case 1: Chế độ 0 — Lái tay (PASSTHROUGH)
+### Case 1 — Nấc thấp: Lái tay (PASSTHROUGH)
 
 - **Điều kiện:** Nút RC ở nấc thấp nhất
-- **Hành vi hệ thống:** Tín hiệu joystick thứ 2 truyền thẳng đến bơm, hệ thống không can thiệp
-- **Output người dùng thấy:** Bơm phản hồi trực tiếp với tay lái; GCS hiển thị Mode=0, lưu lượng thực đọc liên tục nhưng không điều khiển
+- **Hành vi:** Tín hiệu joystick thứ 2 truyền thẳng đến bơm, hệ thống không can thiệp
+- **Output GCS:** Mode=0, lưu lượng đọc liên tục nhưng không điều khiển
 
-### Case 2: Nấc giữa, SA_FLOW_MODE=0 — bám setpoint cố định (Mặc định van)
+### Case 2 — Nấc giữa, FLOW_MODE=0: bám setpoint cố định
 
 - **Điều kiện:** Nút RC ở nấc giữa + SA_FLOW_MODE=0
-- **Hành vi hệ thống:** Bơm tự tăng/giảm để giữ lưu lượng vi sinh đúng bằng SA_FLOW_SP; van ruộng đang ở vị trí Mặc định (người dùng chỉnh tay khi lắp đặt)
-- **Output người dùng thấy:** Lưu lượng ổn định về SA_FLOW_SP; GCS hiển thị Mode=1, lưu lượng thực và mục tiêu
+- **Hành vi:** Bơm tự tăng/giảm để giữ lưu lượng vi sinh đúng SA_FLOW_SP
+- **Output GCS:** Mode=1, lưu lượng thực và mục tiêu ổn định
 
-### Case 3: Nấc giữa, SA_FLOW_MODE=1 — L/ha công thức + kiểm tra tank
+### Case 3 — Nấc giữa, FLOW_MODE=1: phân phối vi sinh đều theo tuyến
 
-- **Điều kiện:** Nút RC ở nấc giữa + SA_FLOW_MODE=1 + đã upload tuyến đường + xe đang chạy
-- **Hành vi hệ thống:** Tự tính lưu lượng vi sinh theo `SA_MIX_STD × SA_APP_RATE × speed × SA_BOOM_W × 0.006`. Kiểm tra tank đủ cho cả mission trước khi bơm.
-- **Output người dùng thấy:** Lưu lượng tăng/giảm theo tốc độ xe; GCS hiển thị r, dist_max và dist mỗi SA_LOG_FL_MS
+- **Điều kiện:** RC nấc giữa + SA_FLOW_MODE=1 + đã upload mission + xe đang chạy
+- **Hành vi:** Tự tính lưu lượng theo công thức `q1 = TANK_VOL × SA_MIX_STD × speed × 60 / mission_dist`. Lưu lượng tăng khi xe đi nhanh, giảm khi xe đi chậm — đảm bảo luôn dùng hết đúng `TANK_VOL × SA_MIX_STD` lít mỗi lần chạy mission.
+- **Khi ARM:** GCS thông báo q1 ước tính, thời gian hoàn thành, lượng vi sinh sẽ dùng
+- **Output GCS:** Mode=1, q1 thực tế, dist_max (khoảng tối đa theo tốc độ hiện tại), vi/run
 
-### Case 4: Nấc giữa hoặc cao, FLOW_MODE=1 — không đủ điều kiện bơm
+### Case 4 — Nấc giữa hoặc cao, FLOW_MODE=1: không đủ điều kiện bơm
 
-- **Điều kiện:** FLOW_MODE=1 nhưng: chưa upload mission / tank không đủ cho mission / xe đứng yên / lưu lượng ngoài dải 0.3–6 L/min
-- **Hành vi hệ thống:** Bơm DỪNG hoàn toàn + cảnh báo GCS giải thích lý do cụ thể
-- **Output người dùng thấy:** Bơm dừng; GCS hiển thị một trong các cảnh báo: "chua co mission", "tank chi du Xm", "Q visin X < 0.3", "Q visin X > 6.0"
+- **Điều kiện:** FLOW_MODE=1 nhưng: chưa upload mission / xe đứng yên / q1 tính ra < 0.3 L/min (mission quá dài hoặc xe quá chậm) / q1 > 2.0 L/min (mission quá ngắn hoặc xe quá nhanh)
+- **Hành vi:** Bơm DỪNG + cảnh báo GCS giải thích lý do cụ thể
+- **Output GCS:** Cảnh báo kèm gợi ý sửa: "rút ngắn mission", "kéo dài mission", "chờ xe chạy"
 
-### Case 5: Nấc cao, SA_FLOW_MODE=0 — bám setpoint Chống nghẹt
+### Case 5 — Nấc cao, FLOW_MODE=0: setpoint Chống nghẹt
 
-- **Điều kiện:** Nút RC ở nấc cao + SA_FLOW_MODE=0; van vi sinh mở thêm so với nấc giữa (van Chống nghẹt)
-- **Hành vi hệ thống:** Setpoint vi sinh tăng theo tỉ lệ SA_MIX_CNT/SA_MIX_STD so với SA_FLOW_SP, giữ nguyên tổng lưu lượng ra boom
-- **Output người dùng thấy:** GCS hiển thị Mode=2, setpoint cao hơn nấc giữa (VD: SP=2.0, MIX_CNT/MIX_STD=0.50/0.35=1.43 → target=2.86 L/min)
+- **Điều kiện:** RC nấc cao + SA_FLOW_MODE=0
+- **Hành vi:** Setpoint vi sinh tăng theo tỉ lệ SA_MIX_CNT/SA_MIX_STD; van vi sinh giữ nguyên vị trí như nấc giữa, chỉ chỉnh van hồ
+- **Output GCS:** Mode=2, setpoint cao hơn nấc giữa
 
-### Case 6: Nấc cao, SA_FLOW_MODE=1 — L/ha công thức + MIX_CNT
+### Case 6 — Nấc cao, FLOW_MODE=1: phân phối vi sinh đều với MIX_CNT
 
-- **Điều kiện:** Nút RC ở nấc cao + SA_FLOW_MODE=1 + xe đang chạy
-- **Hành vi hệ thống:** Dùng SA_MIX_CNT (cao hơn MIX_STD) → dist_max ngắn hơn (hết tank nhanh hơn vì nhiều vi sinh hơn) → cảnh báo tank sớm hơn nấc giữa
-- **Output người dùng thấy:** Hoạt động như Case 3 nhưng dist_max nhỏ hơn; cảnh báo "tank chi du Xm" xuất hiện sớm hơn
+- **Điều kiện:** RC nấc cao + SA_FLOW_MODE=1 + xe đang chạy
+- **Hành vi:** Như Case 3 nhưng dùng SA_MIX_CNT → vi_per_run = TANK_VOL × MIX_CNT (lớn hơn nấc giữa)
+- **Output GCS:** vi/run cao hơn nấc giữa; dist_max ngắn hơn (cùng tốc độ)
 
-### Case 7: Cảnh báo ước tính tank (nấc cao, FLOW_MODE=0)
+### Case 7 — Cảnh báo khi ARM (FLOW_MODE=1)
 
-- **Điều kiện:** Nấc cao + SA_FLOW_MODE=0 + SA_TANK_VOL>0 + xe đang chạy
-- **Hành vi hệ thống:** Ước tính còn bơm được bao nhiêu mét đường nữa dựa trên setpoint vi sinh hiện tại + tốc độ xe, thông báo định kỳ
-- **Output người dùng thấy:** Thông báo GCS mỗi 30 giây: "Tank còn ~Xm (YL @ ZL/min)"
+- **Điều kiện:** Người lái ấn ARM khi spray_mode 1 hoặc 2 + FLOW_MODE=1
+- **Hành vi:** Hệ thống in một lần duy nhất thông tin dự báo cho lần chạy: q1 ước tính theo tốc độ hiện tại, thời gian dự kiến, lượng vi sinh sẽ dùng. Nếu có vấn đề (chưa có mission, q1 ngoài dải), in cảnh báo thay
+- **Disarm → ARM lại:** Thông báo được in lại từ đầu
 
-### Case 8: Chế độ thử nghiệm (SA_SIM=1)
+### Case 8 — Phát hiện hết thùng vi sinh (cả 2 FLOW_MODE)
 
-- **Điều kiện:** Bật chế độ giả lập trong cài đặt
-- **Hành vi hệ thống:** Cảm biến được thay bằng dữ liệu mô phỏng sin, không cần phần cứng thật
-- **Output người dùng thấy:** GCS nhận dữ liệu dao động bình thường; console log có tiền tố [SIM]
+- **Điều kiện:** Spray_mode 1 hoặc 2 + đang ARM + lưu lượng đột ngột > 1.7 L/min liên tục 3 giây
+- **Hành vi:** Bơm hút không khí khi thùng cạn → bánh xe cảm biến quay nhanh bất thường → lưu lượng đọc tăng vọt. Sau 3s liên tục → in cảnh báo CRITICAL 1 lần duy nhất. **Bơm KHÔNG dừng** (người lái tự quyết định)
+- **Output GCS:** `SA: THUNG HET VI SINH - flow X.XL/ph > 1.7 trong 3s`
+- **Reset:** Disarm → ARM lại → detector hoạt động bình thường trở lại
+
+### Case 9 — Chế độ giả lập (SA_SIM=1)
+
+- **Điều kiện:** Bật chế độ giả lập
+- **Hành vi:** Cảm biến được thay bằng dữ liệu mô phỏng sin, không cần phần cứng thật
+- **Output GCS:** Dữ liệu dao động; console log có tiền tố `[SIM]`
 
 ---
 
 ## 7. Những gì KHÔNG thay đổi
 
 - Hành vi điều hướng ArduPilot (navigation, waypoint, auto mode)
-- Các kênh RC không được cài cho module này
+- SA_APP_RATE và SA_BOOM_W vẫn còn trong param nhưng **không dùng trong FLOW_MODE=1** (chỉ dùng FLOW_MODE=0 tank monitor ở nấc cao)
 - Module pH (Module 2) và Dosing Motor (Module 3)
-- Toàn bộ cài đặt servo các kênh khác không liên quan
 - GCS hiển thị tất cả thông số khác của ArduRover
 
 ---
@@ -152,5 +161,5 @@ Dữ liệu lưu lượng + trạng thái bơm gửi lên GCS liên tục
 ## 8. Tài liệu liên quan
 
 - [MODULE1_FLOW_DETAIL_DESIGN.md](MODULE1_FLOW_DETAIL_DESIGN.md) — thuật toán, code flow, wiring đầy đủ
+- [MODULE1_FLOW_TEST_CASES.md](MODULE1_FLOW_TEST_CASES.md) — test cases với số đối ứng cụ thể
 - [SA_DATA_BASIC_DESIGN.md](SA_DATA_BASIC_DESIGN.md) — layout SA_DATA tổng thể
-- [AP_SHOESAGTECH_REFERENCE.md](AP_SHOESAGTECH_REFERENCE.md) — tổng hợp toàn hệ thống

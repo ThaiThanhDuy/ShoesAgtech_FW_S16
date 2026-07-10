@@ -35,6 +35,10 @@ public:
   float    get_ph_raw(void)          const { return _ph_value; }
   float    get_ph_temp(void)         const { return _ph_temp; }
   float    get_ph_mv(void)           const { return (float)_ph_mv; }
+  float    get_ph_morn(void)         const { return _ph_morn_val; }
+  float    get_ph_aft(void)          const { return _ph_aft_val; }
+  int32_t  get_ph_morn_lat(void)     const { return _ph_morn_lat; }
+  int32_t  get_ph_morn_lng(void)     const { return _ph_morn_lng; }
   float    get_alk_dkh(void)         const { return _alk_dkh; }
   float    get_alk_mgl(void)         const { return _alk_mgl; }
   float    get_delta_ph(void)        const { return _delta_ph; }
@@ -42,6 +46,22 @@ public:
   uint8_t  get_alk_slot_status(void) const { return _alk_slot_status; }
   bool     alk_is_yesterday(void)    const { return _alk_slot_status == 3; }
   bool     ph_is_enabled(void)       const { return _ph_en.get() > 0; }
+  // Returns true once per FULL transition — resets flag so SD log is written only once per day
+  bool     consume_alk_log_pending(void) {
+    if (!_alk_log_pending) return false;
+    _alk_log_pending = false;
+    return true;
+  }
+  // Returns true once per triggered sample point — resets flag; read getters before next update()
+  bool     consume_ph_samp_pending(void) {
+    if (!_ph_samp_pending) return false;
+    _ph_samp_pending = false;
+    return true;
+  }
+  uint16_t get_ph_samp_wp(void)  const { return _ph_samp_pend_wp; }
+  uint8_t  get_ph_samp_sub(void) const { return _ph_samp_pend_sub; }
+  int32_t  get_ph_samp_lat(void) const { return _ph_samp_pend_lat; }
+  int32_t  get_ph_samp_lng(void) const { return _ph_samp_pend_lng; }
   // true when the pH sensor has produced a valid Modbus frame within the
   // last SA_PH_TIMEOUT seconds (matches the "mất kết nối" threshold used
   // for the GCS warning)
@@ -72,7 +92,7 @@ private:
   AP_Float _app_rate;       // SA_APP_RATE  L/ha (mode 2)
   AP_Float _boom_width;     // SA_BOOM_W    boom width in metres (mode 2)
 
-  // [AP_ShoesAgtech] Parameters: pH sensor — Nengshi ASPS3801D-0.5M (slots 14-21)
+  // [AP_ShoesAgtech] Parameters: pH sensor — Nengshi ASPS3801D-0.5M (slots 14-21, 55-58)
   AP_Int8  _ph_en;          // SA_PH_EN     enable pH sensor
   AP_Int8  _ph_port;        // SA_PH_PORT   UART port number (matches SERIALx)
   AP_Float _ph_toff;        // SA_PH_TOFF   temperature offset °C
@@ -84,20 +104,27 @@ private:
   AP_Int16 _flow_log_ms;    // SA_LOG_FL_MS   flow console log interval (ms, default 1000)
   AP_Int16 _ph_log_ms;      // SA_LOG_PH_MS   pH console log interval (ms, default 2000)
   AP_Int16 _ph_timeout;     // SA_PH_TIMEOUT  pH "mat ket noi" timeout, seconds (default 1)
+  AP_Float _ph_ms;          // SA_PH_MS    gio bat dau slot sang  (0.0-23.99, default 5.0)  vd 5.5=5h30
+  AP_Float _ph_me;          // SA_PH_ME    gio ket thuc slot sang  (0.0-24.0,  default 11.0) vd 11.5=11h30
+  AP_Float _ph_as;          // SA_PH_AS    gio bat dau slot chieu (0.0-23.99, default 12.0) vd 13.5=13h30
+  AP_Float _ph_ae;          // SA_PH_AE    gio ket thuc slot chieu (0.0-24.0,  default 16.0) vd 16.5=16h30
+  AP_Float _ph_samp_dist;   // SA_PH_SAMP_D khoang cach lay mau (m), 0=tat
+  AP_Float _ph_pond_dist;   // SA_PH_POND_D nguong cung ao sang+chieu (m), default 300
   // [/AP_ShoesAgtech]
 
   // [AP_ShoesAgtech] Parameters: dosing motor (vit tai thuc an tom) — servo
-  // xoay lien tuc 360 do (slots 25-31)
+  // xoay lien tuc 360 do (slots 25-31, 36, 40-54)
   AP_Int8  _dos_chan;   // SA_DOS_CHAN   servo output channel (1-indexed)
   AP_Int8  _dos_rc;     // SA_DOS_RC     RC channel bat/tat motor (1-indexed, vd: nut B Skydroid T10 = 8)
-  AP_Float _dos_rate;   // SA_DOS_RATE   ti le quy doi: bao nhieu gam ung voi 50 xung PWM lech (vd 100 -> 100g=50us, 200 -> 200g=50us)
+  AP_Float _dos_rate;   // SA_DOS_RATE   the tich vit tai (mL/50us): bao nhieu mL ung voi 50us PWM lech
   AP_Float _dos_sp;     // SA_DOS_SP     setpoint: luong thuc an muon cap, gam (nguoi dung nhap, vd 1000)
   AP_Int8  _dos_rev;    // SA_DOS_REV    chieu quay: 0 = thuan (xung 800..1500, 800=nhanh nhat), 1 = nguoc (xung 1500..2200)
   AP_Int8  _dos_log_enable; // SA_DOS_LOG     console log enable cho dosing motor
   AP_Int16 _dos_log_ms;     // SA_DOS_LOG_MS  khoang thoi gian giua hai lan in log (ms, mac dinh 1000)
-  AP_Int8  _dos_mode;       // SA_DOS_MODE    0=fixed PWM (cu), 1=variable theo speed+mission
-  AP_Int8  _dos_food;       // SA_DOS_FOOD    chon loai thuc an 1-7 (tuong ung SA_DOS_F1..F7)
-  AP_Float _dos_fr[7];      // SA_DOS_F1..F7  rate (g/50us) theo tung loai thuc an
+  AP_Int8  _dos_mode;       // SA_DOS_MODE    0=fixed PWM, 1=variable theo speed+mission
+  AP_Int8  _dos_food;       // SA_DOS_FOOD    chon loai thuc an 1-7 (tuong ung SA_DOS_F1..F7 va SA_DOS_D1..D7)
+  AP_Float _dos_fr[7];      // SA_DOS_F1..F7  the tich vit tai (mL/50us) theo tung loai thuc an (DOS_MODE=1)
+  AP_Float _dos_dr[7];      // SA_DOS_D1..D7  khoi luong rieng (g/mL) theo tung loai thuc an
   // [/AP_ShoesAgtech]
 
   // [AP_ShoesAgtech] Parameter: simulation mode (slot 32)
@@ -153,6 +180,8 @@ private:
   uint32_t _tank_warn_ms;        // last time tank distance warning was printed
   bool     _arm_dist_warned;     // true sau khi da canh bao dist>dist_max lan nay (reset khi disarm)
   bool     _was_armed;           // trang thai arm chu ki truoc (de phat hien canh ARM)
+  bool     _tank_empty_detected; // true khi da phat hien thung het vi sinh (bom hut khi)
+  uint32_t _tank_empty_ms;       // thoi diem flow bat dau vuot nguong 1.7 L/min lien tuc
   // [/AP_ShoesAgtech]
   float    _pid_integral;
   float    _pid_output_lpf;
@@ -203,7 +232,11 @@ private:
   // Afternoon slot: 12:00–16:59 local time
   // Reset at 00:00, yesterday's alkalinity kept as fallback
   float     _ph_morn_val;            // morning slot pH
+  int32_t   _ph_morn_lat;            // GPS lat when morning slot captured (deg×1e7), 0=no fix
+  int32_t   _ph_morn_lng;            // GPS lng when morning slot captured (deg×1e7), 0=no fix
   float     _ph_aft_val;             // afternoon slot pH
+  int32_t   _ph_aft_lat;             // GPS lat when afternoon slot captured (deg×1e7), 0=no fix
+  int32_t   _ph_aft_lng;             // GPS lng when afternoon slot captured (deg×1e7), 0=no fix
   bool      _ph_morn_valid;          // morning slot captured today
   bool      _ph_aft_valid;           // afternoon slot captured today
   float     _delta_ph;               // ΔpH = afternoon − morning (0 if incomplete)
@@ -216,8 +249,21 @@ private:
   // 3=yesterday's data  4=no data yet
   uint8_t   _alk_slot_status;
 
+  bool      _alk_log_pending;         // set true when status first reaches FULL; cleared by consume_alk_log_pending()
+
   uint32_t  _rtc_last_day;           // UTC day counter for midnight rollover
   uint32_t  _slot_warn_ms;           // last time slot warning was printed
+
+  // ---- Distance-based pH sample point tracking (SA_PH_SAMP_D) ----
+  uint16_t  _ph_samp_wp_prev;        // WP index at last triggered sample (to detect WP change)
+  uint8_t   _ph_samp_sub_idx;        // sub-point counter within current WP segment
+  int32_t   _ph_samp_ref_lat;        // GPS lat of last sample point (for distance calc)
+  int32_t   _ph_samp_ref_lng;        // GPS lng of last sample point (for distance calc)
+  bool      _ph_samp_pending;        // pending sample to log (cleared by consume_ph_samp_pending)
+  uint16_t  _ph_samp_pend_wp;        // pending sample WP index
+  uint8_t   _ph_samp_pend_sub;       // pending sample sub-index
+  int32_t   _ph_samp_pend_lat;       // pending sample GPS lat
+  int32_t   _ph_samp_pend_lng;       // pending sample GPS lng
   // [/AP_ShoesAgtech]
 
   // Private methods — flow/spray
@@ -247,5 +293,7 @@ private:
   void     _ph_update(void);
   void     _ph_update_daily_slots(float ph_cal);
   float    _ph_calc_alkalinity(float ph, float base_kh_dkh, float temp_c);
+  void     _ph_samp_update(void);   // distance-based sample point trigger
+  void     _ph_samp_trigger(uint16_t wp, uint8_t sub, int32_t lat, int32_t lng);
   // [/AP_ShoesAgtech]
 };
