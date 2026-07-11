@@ -46,22 +46,23 @@ public:
   uint8_t  get_alk_slot_status(void) const { return _alk_slot_status; }
   bool     alk_is_yesterday(void)    const { return _alk_slot_status == 3; }
   bool     ph_is_enabled(void)       const { return _ph_en.get() > 0; }
-  // Returns true once per FULL transition — resets flag so SD log is written only once per day
-  bool     consume_alk_log_pending(void) {
-    if (!_alk_log_pending) return false;
-    _alk_log_pending = false;
-    return true;
+  // Returns true while any pond has a pending PHAK SD write.
+  // Each call pops ONE pending pond and loads its data into the output mirror getters
+  // (get_ph_morn, get_ph_aft, get_alk_dkh, etc.) so Log.cpp can write the record.
+  // Call repeatedly each cycle until it returns false (all ponds flushed).
+  bool     consume_alk_log_pending(void);
+  uint8_t  get_alk_pond_idx(void)   const { return _alk_pond_idx; }
+  // Dữ liệu trực tiếp từ ao đang active (GPS-matched cycle hiện tại).
+  // Trả 0 nếu ao chưa có dữ liệu đủ (alk_computed=false hoặc status<3).
+  float    get_active_alk_dkh(void) const {
+    return (_ponds[_active_pond_idx].alk_computed) ? _ponds[_active_pond_idx].alk_dkh : 0.0f;
   }
-  // Returns true once per triggered sample point — resets flag; read getters before next update()
-  bool     consume_ph_samp_pending(void) {
-    if (!_ph_samp_pending) return false;
-    _ph_samp_pending = false;
-    return true;
+  float    get_active_alk_mgl(void) const {
+    return (_ponds[_active_pond_idx].alk_computed) ? _ponds[_active_pond_idx].alk_mgl : 0.0f;
   }
-  uint16_t get_ph_samp_wp(void)  const { return _ph_samp_pend_wp; }
-  uint8_t  get_ph_samp_sub(void) const { return _ph_samp_pend_sub; }
-  int32_t  get_ph_samp_lat(void) const { return _ph_samp_pend_lat; }
-  int32_t  get_ph_samp_lng(void) const { return _ph_samp_pend_lng; }
+  float    get_active_delta_ph(void) const {
+    return (_ponds[_active_pond_idx].status == 3) ? _ponds[_active_pond_idx].delta_ph : 0.0f;
+  }
   // true when the pH sensor has produced a valid Modbus frame within the
   // last SA_PH_TIMEOUT seconds (matches the "mất kết nối" threshold used
   // for the GCS warning)
@@ -102,14 +103,15 @@ private:
   AP_Int8  _ph_log_enable;  // SA_PH_LOG      console print for pH sensor (independent of SA_FLOW_LOG)
   AP_Int8  _ph_tz;          // SA_PH_TZ       UTC offset hours (Vietnam = 7)
   AP_Int16 _flow_log_ms;    // SA_LOG_FL_MS   flow console log interval (ms, default 1000)
-  AP_Int16 _ph_log_ms;      // SA_LOG_PH_MS   pH console log interval (ms, default 2000)
+  AP_Int16 _ph_log_ms;      // SA_PH_LOG_MS   pH console log interval (ms, default 2000)
   AP_Int16 _ph_timeout;     // SA_PH_TIMEOUT  pH "mat ket noi" timeout, seconds (default 1)
   AP_Float _ph_ms;          // SA_PH_MS    gio bat dau slot sang  (0.0-23.99, default 5.0)  vd 5.5=5h30
   AP_Float _ph_me;          // SA_PH_ME    gio ket thuc slot sang  (0.0-24.0,  default 11.0) vd 11.5=11h30
   AP_Float _ph_as;          // SA_PH_AS    gio bat dau slot chieu (0.0-23.99, default 12.0) vd 13.5=13h30
   AP_Float _ph_ae;          // SA_PH_AE    gio ket thuc slot chieu (0.0-24.0,  default 16.0) vd 16.5=16h30
-  AP_Float _ph_samp_dist;   // SA_PH_SAMP_D khoang cach lay mau (m), 0=tat
   AP_Float _ph_pond_dist;   // SA_PH_POND_D nguong cung ao sang+chieu (m), default 300
+  AP_Int16 _ph_cap_s;       // SA_PH_CAP_S   khoang thoi gian giua hai mau (giay, default 20)
+  AP_Int8  _ph_cap_sam;     // SA_PH_CAP_SAM so mau tich luy de tinh trung binh (default 20)
   // [/AP_ShoesAgtech]
 
   // [AP_ShoesAgtech] Parameters: dosing motor (vit tai thuc an tom) — servo
@@ -218,8 +220,6 @@ private:
   float     _ph_value_ma;            // moving average pH
   int16_t   _ph_mv;                  // electrode voltage in mV (signed)
   float     _ph_temp;                // temperature in °C
-  float     _alk_dkh;                // current best alkalinity dKH (today or yesterday)
-  float     _alk_mgl;                // current best alkalinity mg/L CaCO3
 
   static const uint8_t PH_WINDOW = 10;
   float     _ph_buf[PH_WINDOW];      // circular buffer for pH MA
@@ -227,43 +227,55 @@ private:
   uint8_t   _ph_buf_count;
   float     _ph_buf_sum;
 
-  // ---- Daily slot tracking (ΔpH sáng–chiều) ----
-  // Morning slot: 05:00–11:59 local time
-  // Afternoon slot: 12:00–16:59 local time
-  // Reset at 00:00, yesterday's alkalinity kept as fallback
-  float     _ph_morn_val;            // morning slot pH
-  int32_t   _ph_morn_lat;            // GPS lat when morning slot captured (deg×1e7), 0=no fix
-  int32_t   _ph_morn_lng;            // GPS lng when morning slot captured (deg×1e7), 0=no fix
-  float     _ph_aft_val;             // afternoon slot pH
-  int32_t   _ph_aft_lat;             // GPS lat when afternoon slot captured (deg×1e7), 0=no fix
-  int32_t   _ph_aft_lng;             // GPS lng when afternoon slot captured (deg×1e7), 0=no fix
-  bool      _ph_morn_valid;          // morning slot captured today
-  bool      _ph_aft_valid;           // afternoon slot captured today
-  float     _delta_ph;               // ΔpH = afternoon − morning (0 if incomplete)
-  float     _alk_today_dkh;          // today's calculated alkalinity
-  float     _alk_today_mgl;
-  float     _alk_prev_dkh;           // yesterday's alkalinity (kept at midnight)
-  float     _alk_prev_mgl;
+  // ---- Per-pond GPS cluster tracking (Hướng 2) ----
+  // Mỗi ao nhận diện bằng GPS cluster (tâm ± SA_PH_POND_D).
+  // Dữ liệu ao giữ qua các ngày; chỉ xóa slot hôm nay khi đo lại ao đó vào ngày mới.
+  // Ring buffer ghi đè ao cũ nhất khi đủ 16 ao.
+  static const uint8_t MAX_PONDS = 16;
 
-  // 0=both slots today  1=morning only  2=afternoon only
-  // 3=yesterday's data  4=no data yet
+  struct PondEntry {
+    float    center_lat;    // tâm ao GPS lat (degrees)
+    float    center_lng;    // tâm ao GPS lng (degrees)
+    float    ph_morn;       // pH buổi sáng (mẫu cuối cùng)
+    float    ph_aft;        // pH buổi chiều (mẫu cuối cùng)
+    float    alk_dkh;       // kiềm dKH (giữ qua ngày)
+    float    alk_mgl;       // kiềm mg/L (giữ qua ngày)
+    float    delta_ph;      // ph_aft - ph_morn
+    uint32_t last_day;      // day_num lần đo gần nhất
+    uint32_t morn_last_ms;  // millis mẫu sáng cuối (rate-limit)
+    uint32_t aft_last_ms;   // millis mẫu chiều cuối (rate-limit)
+    int32_t  morn_lat;      // GPS lat mẫu sáng cuối (deg×1e7)
+    int32_t  morn_lng;      // GPS lng mẫu sáng cuối (deg×1e7)
+    uint16_t gps_count;     // số mẫu GPS cho rolling centroid
+    uint8_t  morn_count;    // số mẫu sáng hôm nay
+    uint8_t  aft_count;     // số mẫu chiều hôm nay
+    uint8_t  status;        // bit0=có_sáng bit1=có_chiều (3=FULL)
+    bool     alk_pending;    // cần ghi PHAK vào SD
+    bool     alk_computed;   // đã tính kiềm hôm nay
+    bool     morn_reported;  // đã in thông báo hoàn thành slot sáng
+    bool     aft_reported;   // đã in thông báo hoàn thành slot chiều
+    bool     valid;          // slot đã được khởi tạo
+  };
+
+  PondEntry  _ponds[MAX_PONDS];
+  uint8_t    _pond_count;     // số slot đang dùng (0–MAX_PONDS)
+  uint8_t    _pond_ring_idx;  // ring buffer write head
+
+  // Output mirrors — cập nhật từ pond active/pending, dùng bởi Log.cpp getters
+  float     _ph_morn_val;
+  int32_t   _ph_morn_lat;
+  int32_t   _ph_morn_lng;
+  float     _ph_aft_val;
+  float     _delta_ph;
+  float     _alk_dkh;
+  float     _alk_mgl;
+  // 0=FULL hôm nay  1=chỉ có sáng  2=chỉ có chiều  3=dùng dữ liệu cũ  4=chưa có
   uint8_t   _alk_slot_status;
+  uint8_t   _alk_pond_idx;        // pond index của PHAK vừa ghi (logging mirror)
+  uint8_t   _active_pond_idx;     // pond index đang active trong cycle hiện tại
+  uint32_t  _slot_warn_ms;
+  bool      _pond_first_detect_done;  // true sau khi đã in thông báo ao lần đầu
 
-  bool      _alk_log_pending;         // set true when status first reaches FULL; cleared by consume_alk_log_pending()
-
-  uint32_t  _rtc_last_day;           // UTC day counter for midnight rollover
-  uint32_t  _slot_warn_ms;           // last time slot warning was printed
-
-  // ---- Distance-based pH sample point tracking (SA_PH_SAMP_D) ----
-  uint16_t  _ph_samp_wp_prev;        // WP index at last triggered sample (to detect WP change)
-  uint8_t   _ph_samp_sub_idx;        // sub-point counter within current WP segment
-  int32_t   _ph_samp_ref_lat;        // GPS lat of last sample point (for distance calc)
-  int32_t   _ph_samp_ref_lng;        // GPS lng of last sample point (for distance calc)
-  bool      _ph_samp_pending;        // pending sample to log (cleared by consume_ph_samp_pending)
-  uint16_t  _ph_samp_pend_wp;        // pending sample WP index
-  uint8_t   _ph_samp_pend_sub;       // pending sample sub-index
-  int32_t   _ph_samp_pend_lat;       // pending sample GPS lat
-  int32_t   _ph_samp_pend_lng;       // pending sample GPS lng
   // [/AP_ShoesAgtech]
 
   // Private methods — flow/spray
@@ -293,7 +305,5 @@ private:
   void     _ph_update(void);
   void     _ph_update_daily_slots(float ph_cal);
   float    _ph_calc_alkalinity(float ph, float base_kh_dkh, float temp_c);
-  void     _ph_samp_update(void);   // distance-based sample point trigger
-  void     _ph_samp_trigger(uint16_t wp, uint8_t sub, int32_t lat, int32_t lng);
   // [/AP_ShoesAgtech]
 };

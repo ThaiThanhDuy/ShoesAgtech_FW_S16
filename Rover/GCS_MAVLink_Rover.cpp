@@ -256,13 +256,13 @@ void GCS_MAVLINK_Rover::send_water_depth() {
 //     [4] spray_mode    (0=PASSTHROUGH 1=FLOW_PID 2=AUTO_RATE)
 //
 //   Module 2 — pH sensor:
-//     [5] ph            (moving-avg, 10 mẫu)    }
+//     [5] ph            (moving-avg, 10 mẫu)     }
 //     [6] ph_mv         (mV, signed)             }
 //     [7] ph_temp       (°C)                     } chỉ khi SA_PH_EN=1
-//     [8] alk_dkh       (dKH)                    } AND ph_has_data()
-//     [9] alk_mgl       (mg/L CaCO3)             }
-//    [10] delta_ph      (pH chiều - pH sáng)     }
-//    [11] slot_status   (0=FULL 1=MORN 2=AFT 3=PREV 4=NODATA)
+//     [8] alk_dkh       (dKH, ao active — 0 nếu chưa đủ dữ liệu)   } AND ph_has_data()
+//     [9] alk_mgl       (mg/L CaCO3, ao active — 0 nếu chưa đủ)    }
+//    [10] delta_ph      (pH chiều - pH sáng, ao active — 0 nếu chưa đủ) }
+//    [11] pond_idx      (index ao detect được trong vòng lặp hiện tại)
 //
 //   Module 3 — Dosing motor:
 //    [12] dos_sp        (gam, SA_DOS_SP)
@@ -270,7 +270,8 @@ void GCS_MAVLINK_Rover::send_water_depth() {
 //    [14] dos_pwm       (us)
 //    [15] dos_food      (1-7, SA_DOS_FOOD — loai thuc an dang chon)
 //
-// Hiển thị trong Mission Planner: Ctrl+F > MAVLink Inspector > DEBUG_FLOAT_ARRAY
+// Hiển thị trong Mission Planner: Ctrl+F > MAVLink Inspector >
+// DEBUG_FLOAT_ARRAY
 void GCS_MAVLINK_Rover::send_shoesagtech_debug_arrays() {
   if (!HAVE_PAYLOAD_SPACE(chan, DEBUG_FLOAT_ARRAY)) {
     return;
@@ -310,13 +311,13 @@ void GCS_MAVLINK_Rover::send_shoesagtech_debug_arrays() {
   // ---- Module 2: pH sensor [5..11] ----
   // pH mất tín hiệu/chưa kết nối -> giữ data[5..11] = 0 (không gửi rác)
   if (sa.ph_is_enabled() && sa.ph_has_data()) {
-    data[5]  = sa.get_ph();
-    data[6]  = sa.get_ph_mv();
-    data[7]  = sa.get_ph_temp();
-    data[8]  = sa.get_alk_dkh();
-    data[9]  = sa.get_alk_mgl();
-    data[10] = sa.get_delta_ph();
-    data[11] = (float)sa.get_alk_slot_status();
+    data[5] = sa.get_ph();
+    data[6] = sa.get_ph_mv();
+    data[7] = sa.get_ph_temp();
+    data[8] = sa.get_active_alk_dkh();
+    data[9] = sa.get_active_alk_mgl();
+    data[10] = sa.get_active_delta_ph();
+    data[11] = (float)(sa.get_alk_pond_idx() + 1U);  // hiển thị bắt đầu từ 1
   }
 
   // ---- Module 3: Dosing motor [12..15] ----

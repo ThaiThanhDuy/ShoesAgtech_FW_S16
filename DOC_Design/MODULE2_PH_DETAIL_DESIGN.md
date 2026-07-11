@@ -217,9 +217,9 @@ init() [1 lần boot]
 | `SA_PH_OFF` | 17 | Float | 0.0 | -2.0 | 2.0 | Offset hiệu chuẩn pH: `pH = raw/100 + SA_PH_OFF`. |
 | `SA_PH_KH` | 18 | Float | 4.0 | 0 | 30 | Kiềm tham chiếu từ test kit (dKH). Cập nhật khi test ao. |
 | `SA_PH_EMA` | 19 | Float | 0.15 | 0.01 | 1.0 | Alpha EMA làm mịn pH. Nhỏ = mịn hơn, phản hồi chậm hơn. |
-| `SA_PH_LOG` | 20 | Int8 | 0 | 0 | 1 | Bật (1) console log pH/nhiệt độ/mV theo chu kỳ `SA_LOG_PH_MS`. |
+| `SA_PH_LOG` | 20 | Int8 | 0 | 0 | 1 | Bật (1) console log pH/nhiệt độ/mV theo chu kỳ `SA_PH_LOG_MS`. |
 | `SA_PH_TZ` | 21 | Int8 | 7 | -12 | 14 | UTC offset (giờ). Việt Nam = 7. Dùng phân slot sáng/chiều + GPS thời gian. |
-| `SA_LOG_PH_MS` | 23 | Int16 | 2000 | 500 | 60000 | Chu kỳ console log pH (ms). |
+| `SA_PH_LOG_MS` | 23 | Int16 | 2000 | 500 | 60000 | Chu kỳ console log pH (ms). |
 | `SA_PH_TIMEOUT` | 24 | Int16 | 2 | 1 | 300 | Ngưỡng mất kết nối (giây). Quá ngưỡng → `ph_has_data()=false`. |
 | `SA_PH_MS` | 55 | Int8 | 5 | 0 | 23 | Giờ **bắt đầu** cửa sổ sáng (0–23). Mặc định: 5h00. |
 | `SA_PH_ME` | 56 | Int8 | 11 | 0 | 24 | Giờ **kết thúc** cửa sổ sáng (0–24, inclusive). Mặc định: 11h59. |
@@ -478,7 +478,7 @@ Tần suất: 1 record mỗi SA_PH_SAMP_D mét dọc tuyến đường + 1 tại
 ### 4.3 Console Log
 
 ```
-Trigger: mỗi SA_LOG_PH_MS ms khi SA_PH_LOG=1
+Trigger: mỗi SA_PH_LOG_MS ms khi SA_PH_LOG=1
 
 Dòng 1 (luôn in):
   [WM] pH:<ph_raw> MA:<ph_ma> Tmp:<temp>C mV:<mv> [FULL|MORN|AFT|PREV|NODATA]
@@ -561,7 +561,7 @@ FC config (x = SA_PH_PORT):
 | Vị trí GPS trong log | Không có | Có trong cả 3 loại (PHWD, PHAK, PHSP) | Định danh ao, phân bố pH trong ao |
 | Kiềm per-ao | Không phân | Kiểm tra khoảng cách sáng↔chiều ≤ 300m | Tránh tính kiềm nhầm khi robot đi nhiều ao/ngày |
 | Điểm mẫu dọc tuyến | Không có | PHSP theo SA_PH_SAMP_D mét | Phân tích phân bố pH dọc bờ ao từng đoạn WP |
-| Timeout warning | Mỗi N giây | Mỗi 10s (độc lập SA_LOG_PH_MS) | Cần cảnh báo nhanh dù log chậm |
+| Timeout warning | Mỗi N giây | Mỗi 10s (độc lập SA_PH_LOG_MS) | Cần cảnh báo nhanh dù log chậm |
 
 ---
 

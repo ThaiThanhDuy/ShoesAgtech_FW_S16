@@ -180,7 +180,7 @@ const AP_Param::GroupInfo AP_ShoesAgtech::var_info[] = {
     // @User: Advanced
     AP_GROUPINFO("LOG_FL_MS", 22, AP_ShoesAgtech, _flow_log_ms, 1000),
 
-    // @Param: LOG_PH_MS
+    // @Param: PH_LOG_MS
     // @DisplayName: pH console log interval (ms)
     // @Description: Khoảng thời gian giữa hai lần in dữ liệu pH/nhiệt độ/kiềm
     // ra console khi SA_PH_LOG=1.
@@ -189,7 +189,7 @@ const AP_Param::GroupInfo AP_ShoesAgtech::var_info[] = {
     // @Range: 500 60000
     // @Units: ms
     // @User: Advanced
-    AP_GROUPINFO("LOG_PH_MS", 23, AP_ShoesAgtech, _ph_log_ms, 2000),
+    AP_GROUPINFO("PH_LOG_MS", 23, AP_ShoesAgtech, _ph_log_ms, 2000),
 
     // @Param: PH_TIMEOUT
     // @DisplayName: pH disconnection timeout (s)
@@ -500,16 +500,6 @@ const AP_Param::GroupInfo AP_ShoesAgtech::var_info[] = {
     // @User: Standard
     AP_GROUPINFO("PH_AE", 58, AP_ShoesAgtech, _ph_ae, 16.0f),
 
-    // @Param: PH_SAMP_D
-    // @DisplayName: pH sample distance (m)
-    // @Description: Khoang cach (m) giua cac diem lay mau pH doc theo tuyen duong.
-    //   Robot tu dong ghi mau PHSP khi di duoc du so met ke tu diem mau truoc.
-    //   Dat = 0 de tat tinh nang nay. Vi du: 8 -> lay mau moi 8m.
-    //   Nhan dang: WP_idx.sub (1.0=tai WP1, 1.1=8m sau WP1, 1.2=16m sau, 2.0=tai WP2).
-    // @Range: 0 500
-    // @Units: m
-    // @User: Standard
-    AP_GROUPINFO("PH_SAMP_D", 59, AP_ShoesAgtech, _ph_samp_dist, 0.0f),
     // @Param: PH_POND_D
     // @DisplayName: pH same-pond distance threshold (m)
     // @Description: Khoang cach toi da (m) giua diem do sang va chieu de coi la
@@ -519,6 +509,23 @@ const AP_Param::GroupInfo AP_ShoesAgtech::var_info[] = {
     // @Units: m
     // @User: Standard
     AP_GROUPINFO("PH_POND_D", 60, AP_ShoesAgtech, _ph_pond_dist, 300.0f),
+    // @Param: PH_CAP_S
+    // @DisplayName: pH capture interval (seconds)
+    // @Description: Khoang thoi gian giua hai lan lay mau pH trong slot sang/chieu (giay).
+    //   Mau duoc lay moi SA_PH_CAP_S giay, tich luy toi SA_PH_CAP_SAM mau roi tinh trung binh.
+    //   Vi du: 20 -> lay mau moi 20 giay.
+    // @Range: 1 3600
+    // @Units: s
+    // @User: Standard
+    AP_GROUPINFO("PH_CAP_S", 61, AP_ShoesAgtech, _ph_cap_s, 20),
+    // @Param: PH_CAP_SAM
+    // @DisplayName: pH capture sample count
+    // @Description: So mau pH tich luy trong moi slot sang/chieu de tinh gia tri trung binh.
+    //   Sau khi du so mau, slot bi khoa lai (khong lay them). Max 100 mau.
+    //   Vi du: 20 -> lay 20 mau roi tinh trung binh lam gia tri pH buoi sang/chieu.
+    // @Range: 1 100
+    // @User: Standard
+    AP_GROUPINFO("PH_CAP_SAM", 62, AP_ShoesAgtech, _ph_cap_sam, 20),
     // [/AP_ShoesAgtech]
 
     AP_GROUPEND};
@@ -544,26 +551,21 @@ AP_ShoesAgtech::AP_ShoesAgtech()
       _ph_uart(nullptr), _ph_update_ms(0), _ph_req_sent_ms(0),
       _ph_req_pending(false), _ph_last_good_ms(0), _ph_nodata_warn_ms(0),
       _ph_last_log_ms(0), _ph_value(0.0f), _ph_value_ema(-1.0f),
-      _ph_value_ma(0.0f), _ph_mv(0), _ph_temp(25.0f), _alk_dkh(0.0f),
-      _alk_mgl(0.0f), _ph_buf_idx(0), _ph_buf_count(0), _ph_buf_sum(0.0f),
-      // daily slot tracking
+      _ph_value_ma(0.0f), _ph_mv(0), _ph_temp(25.0f),
+      _ph_buf_idx(0), _ph_buf_count(0), _ph_buf_sum(0.0f),
+      // per-pond GPS cluster tracking
+      _pond_count(0), _pond_ring_idx(0),
       _ph_morn_val(0.0f), _ph_morn_lat(0), _ph_morn_lng(0),
-      _ph_aft_val(0.0f), _ph_aft_lat(0), _ph_aft_lng(0),
-      _ph_morn_valid(false),
-      _ph_aft_valid(false), _delta_ph(0.0f), _alk_today_dkh(0.0f),
-      _alk_today_mgl(0.0f), _alk_prev_dkh(0.0f), _alk_prev_mgl(0.0f),
-      _alk_slot_status(4), _alk_log_pending(false),
-      _rtc_last_day(0), _slot_warn_ms(0),
-      // distance-based sample point tracking
-      _ph_samp_wp_prev(0xFFFF), _ph_samp_sub_idx(0),
-      _ph_samp_ref_lat(0), _ph_samp_ref_lng(0),
-      _ph_samp_pending(false), _ph_samp_pend_wp(0), _ph_samp_pend_sub(0),
-      _ph_samp_pend_lat(0), _ph_samp_pend_lng(0)
+      _ph_aft_val(0.0f), _delta_ph(0.0f),
+      _alk_dkh(0.0f), _alk_mgl(0.0f),
+      _alk_slot_status(4), _alk_pond_idx(0), _active_pond_idx(0), _slot_warn_ms(0),
+      _pond_first_detect_done(false)
 // [/AP_ShoesAgtech]
 {
   memset(_sample_buffer, 0, sizeof(_sample_buffer));
   // [AP_ShoesAgtech]
   memset(_ph_buf, 0, sizeof(_ph_buf));
+  memset(_ponds, 0, sizeof(_ponds));
   // [/AP_ShoesAgtech]
   AP_Param::setup_object_defaults(this, var_info);
 }
@@ -623,10 +625,6 @@ void AP_ShoesAgtech::update(void) {
 
   // [AP_ShoesAgtech] dosing motor — RC on/off + rate-to-PWM conversion
   _update_dosing_motor();
-  // [/AP_ShoesAgtech]
-
-  // [AP_ShoesAgtech] distance-based pH sample points (SA_PH_SAMP_D)
-  _ph_samp_update();
   // [/AP_ShoesAgtech]
 
   uint32_t now = AP_HAL::millis();
@@ -1412,166 +1410,255 @@ void AP_ShoesAgtech::_ph_update(void) {
 // =============================================================
 // [AP_ShoesAgtech] DAILY ΔpH SLOT TRACKING
 //
-// Classifies each pH reading into morning [SA_PH_MS..SA_PH_ME] or afternoon
-// [SA_PH_AS..SA_PH_AE] local time slots. At midnight resets today's slots and
-// preserves yesterday's alkalinity as fallback.
-//
-// Alkalinity derivation priority:
-//   Both slots captured today  → ΔpH-scaled from morning pH (best)
-//   One slot only              → single-point estimate + warning
-//   No data today              → yesterday's value + warning
-//   Never had data             → no estimate
+// =============================================================
+// consume_alk_log_pending — pop ONE pending pond PHAK write per call.
+// Sets output mirror fields (_ph_morn_val, _alk_dkh, etc.) so Log.cpp
+// can read getters and write the PHAK record.  Returns false when no
+// more ponds are pending.  Called each update cycle by Rover.cpp →
+// Log_Write_Ph_Alkalinity(), so multiple ponds flush across successive cycles.
+// =============================================================
+bool AP_ShoesAgtech::consume_alk_log_pending(void) {
+  for (uint8_t i = 0; i < _pond_count; i++) {
+    PondEntry &p = _ponds[i];
+    if (!p.valid || !p.alk_pending) continue;
+    p.alk_pending  = false;
+    _alk_pond_idx  = i;
+    _ph_morn_val   = p.ph_morn;
+    _ph_aft_val    = p.ph_aft;
+    _ph_morn_lat   = p.morn_lat;
+    _ph_morn_lng   = p.morn_lng;
+    _delta_ph      = p.delta_ph;
+    _alk_dkh       = p.alk_dkh;
+    _alk_mgl       = p.alk_mgl;
+    return true;
+  }
+  return false;
+}
+
+// =============================================================
+// _ph_update_daily_slots — GPS cluster approach (Hướng 2).
+// Nhận diện ao bằng khoảng cách GPS (SA_PH_POND_D), tích lũy mẫu pH
+// trung bình trong slot sáng/chiều, tính kiềm khi ao đủ cả hai slot.
+// Dữ liệu ao không reset hàng ngày — chỉ xóa slot hôm nay khi quay lại
+// ao đó vào ngày mới.  Ring buffer 16 ao.
 // =============================================================
 void AP_ShoesAgtech::_ph_update_daily_slots(float ph_cal) {
   uint32_t now = AP_HAL::millis();
 
-  // ---- GPS time classification (optional — slot tracking only works with GPS
-  // time) ----
+  // ---- Require GPS time ----
   uint64_t utc_usec = 0;
-  const bool have_time = AP::rtc().get_utc_usec(utc_usec);
-
-  if (have_time) {
-    int8_t tz = (int8_t)constrain_int16(_ph_tz.get(), -12, 14);
-    uint32_t utc_sec = (uint32_t)(utc_usec / 1000000ULL);
-    uint32_t local_sec = utc_sec + (uint32_t)((int32_t)tz * 3600);
-    uint32_t day_num = local_sec / 86400U;
-    // Fractional hours: 13.5 = 13:30, 5.0 = 05:00
-    float local_h = (float)(local_sec % 86400U) / 3600.0f;
-
-    // New-day: fires on first GPS fix (0 → today) AND on midnight rollover
-    if (day_num != _rtc_last_day) {
-      if (_rtc_last_day != 0 && _alk_today_dkh > 0.0f) {
-        _alk_prev_dkh = _alk_today_dkh;
-        _alk_prev_mgl = _alk_today_mgl;
-      }
-      _ph_morn_valid = false;
-      _ph_aft_valid = false;
-      _ph_morn_val = 0.0f;
-      _ph_morn_lat = 0;
-      _ph_morn_lng = 0;
-      _ph_aft_val = 0.0f;
-      _ph_aft_lat = 0;
-      _ph_aft_lng = 0;
-      _delta_ph = 0.0f;
-      _alk_today_dkh = 0.0f;
-      _alk_today_mgl = 0.0f;
-      _alk_log_pending = false;
-      if (_alk_prev_dkh > 0.0f) {
-        gcs().send_text(MAV_SEVERITY_INFO,
-                        "[WM] Ngày mới - kiềm: dùng hôm qua");
-      } else {
-        gcs().send_text(MAV_SEVERITY_INFO,
-                        "[WM] Ngày mới - chưa có dữ liệu kiềm");
-      }
-      _rtc_last_day = day_num;
+  if (!AP::rtc().get_utc_usec(utc_usec)) {
+    if (_ph_log_enable.get() > 0 && now - _slot_warn_ms >= 60000) {
+      _slot_warn_ms = now;
+      gcs().send_text(MAV_SEVERITY_INFO, "[WM] Chưa GPS - kiềm đợi GPS/giờ");
     }
-
-    // Doc GPS hien tai de luu vao slot
-    int32_t cur_lat = 0, cur_lng = 0;
-    const AP_GPS &gps_inst = AP::gps();
-    if (gps_inst.status(0) >= AP_GPS::GPS_OK_FIX_3D) {
-      const Location &loc = gps_inst.location(0);
-      cur_lat = loc.lat;
-      cur_lng = loc.lng;
-    }
-
-    // Phan loai theo cua so co the chinh (SA_PH_MS..SA_PH_ME, SA_PH_AS..SA_PH_AE)
-    // Dung so thap phan: 13.5 = 13:30, 5.0 = 05:00
-    float ms  = constrain_float(_ph_ms.get(),  0.0f, 23.99f);
-    float me  = constrain_float(_ph_me.get(),  0.0f, 24.0f);
-    float as_ = constrain_float(_ph_as.get(),  0.0f, 23.99f);
-    float ae  = constrain_float(_ph_ae.get(),  0.0f, 24.0f);
-
-    if (local_h >= ms && local_h <= me) {
-      _ph_morn_val = ph_cal;
-      _ph_morn_lat = cur_lat;
-      _ph_morn_lng = cur_lng;
-      _ph_morn_valid = true;
-    } else if (local_h >= as_ && local_h <= ae) {
-      _ph_aft_val = ph_cal;
-      _ph_aft_lat = cur_lat;
-      _ph_aft_lng = cur_lng;
-      _ph_aft_valid = true;
-    }
-    // Ngoai ca hai cua so: bo qua, khong cap nhat slot nao
+    return;
   }
 
-  // ---- Alkalinity calculation — only when FULL (both morning + afternoon slots) ----
-  if (_ph_morn_valid && _ph_aft_valid) {
-    // Kiem tra sang va chieu co cung ao khong (nguong SA_PH_POND_D met)
-    bool same_pond = true;
-    if (_ph_morn_lat != 0 && _ph_aft_lat != 0) {
-      // Xap xi khoang cach (chinh xac trong pham vi vai km)
-      const float DEG2M = 111320.0f;  // 1 degree lat = 111320m
-      float dlat_m = (_ph_aft_lat - _ph_morn_lat) * 1.0e-7f * DEG2M;
-      float coslat  = cosf((float)_ph_morn_lat * 1.0e-7f * DEG_TO_RAD);
-      float dlng_m  = (_ph_aft_lng - _ph_morn_lng) * 1.0e-7f * DEG2M * coslat;
-      float dist_m  = sqrtf(dlat_m * dlat_m + dlng_m * dlng_m);
-      float pond_thr = constrain_float(_ph_pond_dist.get(), 10.0f, 5000.0f);
-      if (dist_m > pond_thr) {
-        same_pond = false;
-        if (_ph_log_enable.get() > 0) {
-          gcs().send_text(MAV_SEVERITY_WARNING,
-              "[WM] Kiềm: khác ao %.0fm - bỏ qua", (double)dist_m);
-        }
-      }
+  // ---- Require GPS 3D fix ----
+  int32_t cur_lat_i = 0, cur_lng_i = 0;
+  const AP_GPS &gps_inst = AP::gps();
+  if (gps_inst.status(0) < AP_GPS::GPS_OK_FIX_3D) {
+    if (_ph_log_enable.get() > 0 && now - _slot_warn_ms >= 60000) {
+      _slot_warn_ms = now;
+      gcs().send_text(MAV_SEVERITY_INFO, "[WM] Chưa GPS - kiềm đợi GPS/giờ");
     }
+    return;
+  }
+  {
+    const Location &loc = gps_inst.location(0);
+    cur_lat_i = loc.lat;
+    cur_lng_i = loc.lng;
+  }
 
-    if (same_pond) {
-      _delta_ph = _ph_aft_val - _ph_morn_val;
-      float kh_scaled = _ph_kh.get() *
-                        (1.0f + constrain_float(_delta_ph * 0.375f, -0.5f, 1.0f));
-      _alk_today_dkh = _ph_calc_alkalinity(_ph_morn_val, kh_scaled, _ph_temp);
-      _alk_today_mgl = _alk_today_dkh * 17.85f;
-      _alk_dkh = _alk_today_dkh;
-      _alk_mgl = _alk_today_mgl;
-      if (_alk_slot_status != 0) {
-        _alk_log_pending = true;  // first time reaching FULL today — trigger SD log
-      }
-      _alk_slot_status = 0;
+  int8_t tz = (int8_t)constrain_int16(_ph_tz.get(), -12, 14);
+  uint32_t utc_sec   = (uint32_t)(utc_usec / 1000000ULL);
+  uint32_t local_sec = utc_sec + (uint32_t)((int32_t)tz * 3600);
+  uint32_t today     = local_sec / 86400U;
+  float    local_h   = (float)(local_sec % 86400U) / 3600.0f;
+  float    cur_lat_f = cur_lat_i * 1.0e-7f;
+  float    cur_lng_f = cur_lng_i * 1.0e-7f;
+
+  // ---- Slot time windows ----
+  float ms  = constrain_float(_ph_ms.get(),  0.0f, 23.99f);
+  float me  = constrain_float(_ph_me.get(),  0.0f, 24.0f);
+  float as_ = constrain_float(_ph_as.get(),  0.0f, 23.99f);
+  float ae  = constrain_float(_ph_ae.get(),  0.0f, 24.0f);
+  const bool in_morn = (local_h >= ms  && local_h <= me);
+  const bool in_aft  = (local_h >= as_ && local_h <= ae);
+
+  // ---- GPS cluster: tìm ao gần nhất trong bán kính SA_PH_POND_D ----
+  const float DEG2M   = 111320.0f;
+  float pond_thr      = constrain_float(_ph_pond_dist.get(), 10.0f, 5000.0f);
+  float coslat        = cosf(cur_lat_f * DEG_TO_RAD);
+  int8_t pond_idx     = -1;
+  float  best_dist    = pond_thr + 1.0f;
+
+  for (uint8_t i = 0; i < _pond_count; i++) {
+    if (!_ponds[i].valid) continue;
+    float dlat_m = (cur_lat_f - _ponds[i].center_lat) * DEG2M;
+    float dlng_m = (cur_lng_f - _ponds[i].center_lng) * DEG2M * coslat;
+    float dist_m = sqrtf(dlat_m * dlat_m + dlng_m * dlng_m);
+    if (dist_m < best_dist) {
+      best_dist = dist_m;
+      pond_idx  = (int8_t)i;
+    }
+  }
+
+  // ---- Tạo slot mới hoặc dùng ring buffer khi đầy ----
+  const bool pond_is_new = (pond_idx < 0);
+  if (pond_is_new) {
+    uint8_t new_idx;
+    if (_pond_count < MAX_PONDS) {
+      new_idx = _pond_count++;
     } else {
-      // Khac ao — giu slot chiều nhưng không tính kiềm; chờ sang lần đo tiếp
-      _delta_ph = 0.0f;
-      _alk_slot_status = 2;  // treat as afternoon-only
+      new_idx        = _pond_ring_idx;
+      _pond_ring_idx = (_pond_ring_idx + 1) % MAX_PONDS;
+      gcs().send_text(MAV_SEVERITY_WARNING,
+                      "[SA] Vòng ao: ghi đè ao #%u", (unsigned)new_idx);
     }
-  } else if (_ph_morn_valid) {
-    // Morning only — no alkalinity yet; wait for afternoon slot
-    _delta_ph = 0.0f;
-    _alk_slot_status = 1;
-  } else if (_ph_aft_valid) {
-    // Afternoon only — no alkalinity yet; wait for morning slot
-    _delta_ph = 0.0f;
-    _alk_slot_status = 2;
-  } else if (_alk_prev_dkh > 0.0f) {
-    // Yesterday's data as reference — not recalculated
-    _alk_dkh = _alk_prev_dkh;
-    _alk_mgl = _alk_prev_mgl;
-    _alk_slot_status = 3;
-  } else {
-    // No data yet — alkalinity unavailable
-    _alk_dkh = 0.0f;
-    _alk_mgl = 0.0f;
-    _alk_slot_status = 4;
+    memset(&_ponds[new_idx], 0, sizeof(PondEntry));
+    _ponds[new_idx].center_lat = cur_lat_f;
+    _ponds[new_idx].center_lng = cur_lng_f;
+    _ponds[new_idx].gps_count  = 1;
+    _ponds[new_idx].valid      = true;
+    _ponds[new_idx].last_day   = today;
+    pond_idx = (int8_t)new_idx;
   }
 
-  // ---- Periodic status warning (every 60s when SA_PH_LOG=1) ----
+  PondEntry &pond = _ponds[(uint8_t)pond_idx];
+  _active_pond_idx = (uint8_t)pond_idx;
+  const unsigned disp_idx = (unsigned)pond_idx + 1;  // hiển thị bắt đầu từ 1
+
+  // ---- Thông báo lần đầu bật máy: ao số mấy ----
+  if (!_pond_first_detect_done) {
+    _pond_first_detect_done = true;
+    if (pond_is_new) {
+      gcs().send_text(MAV_SEVERITY_INFO,
+                      "[SA] Khởi động: ao mới → ao #%u", disp_idx);
+    } else {
+      gcs().send_text(MAV_SEVERITY_INFO,
+                      "[SA] Khởi động: nhận ra ao #%u (%.0fm)",
+                      disp_idx, (double)best_dist);
+    }
+  }
+
+  // ---- Cập nhật centroid GPS (rolling average, cap 1000 tránh mất độ chính xác float) ----
+  if (pond.gps_count < 1000) pond.gps_count++;
+  float w            = 1.0f / (float)pond.gps_count;
+  pond.center_lat    = pond.center_lat * (1.0f - w) + cur_lat_f * w;
+  pond.center_lng    = pond.center_lng * (1.0f - w) + cur_lng_f * w;
+
+  // ---- Ngày mới cho ao này: xóa slot hôm nay, giữ alk từ ngày trước ----
+  if (pond.last_day != today) {
+    pond.ph_morn       = 0.0f;
+    pond.ph_aft        = 0.0f;
+    pond.morn_count    = 0;     pond.aft_count    = 0;
+    pond.status        = 0;     pond.delta_ph     = 0.0f;
+    pond.alk_pending   = false; pond.alk_computed  = false;
+    pond.morn_reported = false; pond.aft_reported  = false;
+    pond.morn_last_ms  = 0;     pond.aft_last_ms   = 0;
+    pond.morn_lat      = 0;     pond.morn_lng      = 0;
+    pond.last_day      = today;
+    // alk_dkh / alk_mgl được giữ lại — dùng làm tham chiếu "hôm qua" cho ao này
+  }
+
+  // ---- Lấy mẫu pH — chỉ khi ARM, rate-limited SA_PH_CAP_S, lưu mẫu cuối cùng ----
+  const bool is_armed = hal.util->get_soft_armed();
+  if ((in_morn || in_aft) && is_armed) {
+    uint32_t cap_ms  = (uint32_t)constrain_int16(_ph_cap_s.get(), 1, 3600) * 1000U;
+    uint8_t  cap_min = (uint8_t)constrain_int16(_ph_cap_sam.get(), 1, 100);
+
+    if (in_morn && now - pond.morn_last_ms >= cap_ms) {
+      pond.ph_morn      = ph_cal;  // last-write-wins
+      pond.morn_lat     = cur_lat_i;
+      pond.morn_lng     = cur_lng_i;
+      pond.morn_last_ms = now;
+      pond.morn_count++;
+      pond.status      |= 1;  // bit0 = có buổi sáng
+      // Báo cáo lần đầu khi đủ ngưỡng mẫu tối thiểu
+      if (pond.morn_count == cap_min && !pond.morn_reported) {
+        pond.morn_reported = true;
+        gcs().send_text(MAV_SEVERITY_INFO,
+                        "[SA] Ao#%u pH sang: %.2f (%u mau)",
+                        disp_idx, (double)pond.ph_morn, (unsigned)cap_min);
+      }
+    } else if (in_aft && now - pond.aft_last_ms >= cap_ms) {
+      pond.ph_aft      = ph_cal;  // last-write-wins
+      pond.aft_last_ms = now;
+      pond.aft_count++;
+      pond.status     |= 2;  // bit1 = có buổi chiều
+      // Báo cáo lần đầu khi đủ ngưỡng mẫu tối thiểu
+      if (pond.aft_count == cap_min && !pond.aft_reported) {
+        pond.aft_reported = true;
+        gcs().send_text(MAV_SEVERITY_INFO,
+                        "[SA] Ao#%u pH chieu: %.2f (%u mau)",
+                        disp_idx, (double)pond.ph_aft, (unsigned)cap_min);
+      }
+    }
+  }
+
+  // ---- Tính kiềm khi ao đủ cả hai slot (chỉ tính một lần mỗi ngày) ----
+  if (pond.status == 3 && !pond.alk_computed) {
+    pond.delta_ph     = pond.ph_aft - pond.ph_morn;
+    float kh_scaled   = _ph_kh.get() *
+                        (1.0f + constrain_float(pond.delta_ph * 0.375f, -0.5f, 1.0f));
+    pond.alk_dkh      = _ph_calc_alkalinity(pond.ph_morn, kh_scaled, _ph_temp);
+    pond.alk_mgl      = pond.alk_dkh * 17.85f;
+    pond.alk_computed = true;
+    pond.alk_pending  = true;  // kích hoạt ghi PHAK vào SD
+    _delta_ph = pond.delta_ph;
+    _alk_dkh  = pond.alk_dkh;
+    _alk_mgl  = pond.alk_mgl;
+    // In tóm tắt đầy đủ: S / C / ΔpH / kiềm
+    gcs().send_text(MAV_SEVERITY_INFO,
+                    "[SA] Ao#%u S:%.2f C:%.2f dPH:%.2f",
+                    disp_idx,
+                    (double)pond.ph_morn, (double)pond.ph_aft,
+                    (double)pond.delta_ph);
+    gcs().send_text(MAV_SEVERITY_INFO,
+                    "[SA] Ao#%u kiem:%.1fdKH/%.0fmgL",
+                    disp_idx,
+                    (double)pond.alk_dkh, (double)pond.alk_mgl);
+  }
+
+  // ---- Cập nhật trạng thái hiển thị từ ao đang active ----
+  if (pond.status == 3) {
+    _alk_slot_status = 0;           // FULL hôm nay
+  } else if (pond.status == 1) {
+    _alk_slot_status = 1;           // chỉ có sáng
+  } else if (pond.status == 2) {
+    _alk_slot_status = 2;           // chỉ có chiều
+  } else if (pond.alk_dkh > 0.0f) {
+    _alk_dkh = pond.alk_dkh;       // dùng dữ liệu ngày trước của ao này
+    _alk_mgl = pond.alk_mgl;
+    _alk_slot_status = 3;           // PREV
+  } else {
+    _alk_slot_status = 4;           // chưa có dữ liệu
+  }
+
+  // ---- In cảnh báo định kỳ (mỗi 60s khi SA_PH_LOG=1) ----
   if (_ph_log_enable.get() > 0 && now - _slot_warn_ms >= 60000) {
     _slot_warn_ms = now;
-    if (!have_time) {
-      gcs().send_text(MAV_SEVERITY_WARNING,
-                      "[WM] Chưa GPS - kiềm tính pH tức thì");
-    } else if (_alk_slot_status == 1) {
-      gcs().send_text(MAV_SEVERITY_WARNING,
-                      "[WM] Kiềm: S:%.2f C:--", (double)_ph_morn_val);
+    uint8_t cap_max = (uint8_t)constrain_int16(_ph_cap_sam.get(), 1, 100);
+    if (_alk_slot_status == 1) {
+      gcs().send_text(MAV_SEVERITY_INFO,
+                      "[WM] Ao#%u S:%.2f(%u/%u) C:--",
+                      disp_idx, (double)pond.ph_morn,
+                      (unsigned)pond.morn_count, (unsigned)cap_max);
     } else if (_alk_slot_status == 2) {
-      gcs().send_text(MAV_SEVERITY_WARNING,
-                      "[WM] Kiềm: S:-- C:%.2f", (double)_ph_aft_val);
+      gcs().send_text(MAV_SEVERITY_INFO,
+                      "[WM] Ao#%u S:-- C:%.2f(%u/%u)",
+                      disp_idx, (double)pond.ph_aft,
+                      (unsigned)pond.aft_count, (unsigned)cap_max);
     } else if (_alk_slot_status == 3) {
-      gcs().send_text(MAV_SEVERITY_WARNING,
-                      "[WM] Kiềm: đang dùng dữ liệu hôm qua");
+      gcs().send_text(MAV_SEVERITY_INFO,
+                      "[WM] Ao#%u: dùng dữ liệu cũ (%.1f dKH)",
+                      disp_idx, (double)pond.alk_dkh);
     } else if (_alk_slot_status == 4) {
-      gcs().send_text(MAV_SEVERITY_WARNING,
-                      "[WM] Kiềm: chưa có slot (đợi GPS/giờ)");
+      gcs().send_text(MAV_SEVERITY_INFO,
+                      "[WM] Ao#%u: chưa có slot (đợi giờ đo)",
+                      disp_idx);
     }
   }
 }
@@ -1613,92 +1700,6 @@ float AP_ShoesAgtech::_ph_calc_alkalinity(float ph, float base_kh_dkh,
 }
 
 // =============================================================
-// DISTANCE-BASED pH SAMPLE POINTS (SA_PH_SAMP_D)
-//
-// Triggers a PHSP log entry each time the robot has moved at least
-// SA_PH_SAMP_D metres from the previous sample position.
-// When the mission waypoint index advances, a "WP arrival" sample
-// is logged with sub=0 and the sub counter resets.
-//
-// Naming: WP_idx.sub_idx  e.g. 1.0=WP1 arrival, 1.1=8m after, 2.0=WP2
-// Set SA_PH_SAMP_D=0 to disable.
-// =============================================================
-void AP_ShoesAgtech::_ph_samp_trigger(uint16_t wp, uint8_t sub,
-                                      int32_t lat, int32_t lng) {
-  _ph_samp_pend_wp  = wp;
-  _ph_samp_pend_sub = sub;
-  _ph_samp_pend_lat = lat;
-  _ph_samp_pend_lng = lng;
-  _ph_samp_pending  = true;
-  if (_ph_log_enable.get() > 0) {
-    gcs().send_text(MAV_SEVERITY_INFO,
-                    "[WM] Samp WP%u.%u pH:%.2f Tmp:%.1fC",
-                    (unsigned)wp, (unsigned)sub,
-                    (double)_ph_value_ma, (double)_ph_temp);
-  }
-}
-
-void AP_ShoesAgtech::_ph_samp_update(void) {
-  float interval_m = _ph_samp_dist.get();
-  if (interval_m < 0.5f) {
-    return;  // disabled
-  }
-  if (!ph_has_data()) {
-    return;  // no valid pH reading
-  }
-
-  // Require GPS fix
-  const AP_GPS &gps_inst = AP::gps();
-  if (gps_inst.status(0) < AP_GPS::GPS_OK_FIX_3D) {
-    return;
-  }
-  const Location &loc = gps_inst.location(0);
-  int32_t cur_lat = loc.lat;
-  int32_t cur_lng = loc.lng;
-
-  // Get current mission waypoint index
-  uint16_t wp_idx = 0;
-  AP_Mission *mission_ptr = AP::mission();
-  if (mission_ptr != nullptr) {
-    wp_idx = mission_ptr->get_current_nav_index();
-  }
-
-  // WP changed → sample at arrival point, reset sub counter
-  if (wp_idx != _ph_samp_wp_prev) {
-    _ph_samp_wp_prev  = wp_idx;
-    _ph_samp_sub_idx  = 1;  // next intermediate will be .1
-    _ph_samp_ref_lat  = cur_lat;
-    _ph_samp_ref_lng  = cur_lng;
-    _ph_samp_trigger(wp_idx, 0, cur_lat, cur_lng);
-    return;
-  }
-
-  // Initialise reference on first call after GPS fix
-  if (_ph_samp_ref_lat == 0 && _ph_samp_ref_lng == 0) {
-    _ph_samp_ref_lat = cur_lat;
-    _ph_samp_ref_lng = cur_lng;
-    return;
-  }
-
-  // Compute distance from last sample point (flat-Earth approx, valid < 10 km)
-  const float DEG2M = 111320.0f;
-  float dlat_m = (cur_lat - _ph_samp_ref_lat) * 1.0e-7f * DEG2M;
-  float coslat  = cosf((float)_ph_samp_ref_lat * 1.0e-7f * DEG_TO_RAD);
-  float dlng_m  = (cur_lng - _ph_samp_ref_lng) * 1.0e-7f * DEG2M * coslat;
-  float dist_m  = sqrtf(dlat_m * dlat_m + dlng_m * dlng_m);
-
-  if (dist_m >= interval_m) {
-    _ph_samp_trigger(wp_idx, _ph_samp_sub_idx, cur_lat, cur_lng);
-    _ph_samp_ref_lat = cur_lat;
-    _ph_samp_ref_lng = cur_lng;
-    _ph_samp_sub_idx++;
-    if (_ph_samp_sub_idx > 99) {
-      _ph_samp_sub_idx = 99;  // clamp to prevent overflow display
-    }
-  }
-}
-
-// =============================================================
 // SIMULATION — SA_SIM = 1
 // Generates sinusoidal fake sensor data so modes 1/2 and GCS
 // display can be verified without real hardware attached.
@@ -1735,7 +1736,7 @@ void AP_ShoesAgtech::_run_simulation(void) {
   // Keep ph_has_data() returning true
   _ph_last_good_ms = now;
 
-  // Run full slot + alkalinity pipeline so PHAK/PHSP SD logging works in SITL.
+  // Run full slot + alkalinity pipeline so PHAK SD logging works in SITL.
   // This overwrites _alk_dkh/mgl/delta_ph/_alk_slot_status with real computed values.
   _ph_update_daily_slots(ph_sim);
 }

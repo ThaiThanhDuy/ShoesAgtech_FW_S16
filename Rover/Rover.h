@@ -375,8 +375,6 @@ private:
   void Log_Write_Ph_Realtime(void);
   // [AP_ShoesAgtech] Log_Write_Ph_Alkalinity writes PHAK once per day when morning+afternoon slots both complete
   void Log_Write_Ph_Alkalinity(void);
-  // [AP_ShoesAgtech] Log_Write_Ph_Sample writes PHSP on each distance-triggered sample point
-  void Log_Write_Ph_Sample(void);
   // [/AP_ShoesAgtech]
 #endif
 

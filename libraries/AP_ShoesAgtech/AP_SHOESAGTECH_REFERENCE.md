@@ -116,10 +116,10 @@ Nếu SA_TANK_VOL > 0: mỗi 30s gửi STATUSTEXT ước tính quãng đường 
 | `SA_PH_OFF` | 17 | Float | **0.0** | -2.0 | 2.0 | Offset hiệu chuẩn pH: `pH_cal = pH_raw/100 + SA_PH_OFF`. Dùng dung dịch buffer để đo. |
 | `SA_PH_KH` | 18 | Float | **4.0** | 0 | 30 | Kiềm tham chiếu dKH đo từ test kit. Cập nhật mỗi khi test ao. |
 | `SA_PH_EMA` | 19 | Float | **0.15** | 0.01 | 1.0 | Alpha EMA làm mịn pH. Nhỏ = mịn hơn, phản hồi chậm hơn. |
-| `SA_PH_LOG` | 20 | Int8 | **0** | 0 | 1 | Bật (1) in dữ liệu pH/nhiệt độ/kiềm ra console GCS theo chu kỳ `SA_LOG_PH_MS`. Độc lập với `SA_FLOW_LOG`. |
+| `SA_PH_LOG` | 20 | Int8 | **0** | 0 | 1 | Bật (1) in dữ liệu pH/nhiệt độ/kiềm ra console GCS theo chu kỳ `SA_PH_LOG_MS`. Độc lập với `SA_FLOW_LOG`. |
 | `SA_PH_TZ` | 21 | Int8 | **7** | -12 | 14 | UTC offset (giờ). Việt Nam = 7 (UTC+7). Dùng phân loại slot sáng/chiều cho tính kiềm ΔpH. |
 | `SA_LOG_FL_MS` | 22 | Int16 | **1000** | 100 | 60000 | Chu kỳ in log lưu lượng ra console (ms). Chỉ hoạt động khi `SA_FLOW_LOG=1`. |
-| `SA_LOG_PH_MS` | 23 | Int16 | **2000** | 500 | 60000 | Chu kỳ in log pH ra console (ms). Không nên đặt < 2000 (Modbus chỉ trả dữ liệu mỗi 2s). |
+| `SA_PH_LOG_MS` | 23 | Int16 | **2000** | 500 | 60000 | Chu kỳ in log pH ra console (ms). Không nên đặt < 2000 (Modbus chỉ trả dữ liệu mỗi 2s). |
 | `SA_PH_TIMEOUT` | 24 | Int16 | **2** | 1 | 300 | Ngưỡng "mất kết nối" (giây): nếu không nhận được frame pH hợp lệ quá thời gian này, phát cảnh báo STATUSTEXT và xóa `data[4..8]` về 0 trong gói SA_DATA. |
 
 **Giao thức Modbus RTU:**
