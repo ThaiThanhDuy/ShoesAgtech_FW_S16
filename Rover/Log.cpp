@@ -248,16 +248,17 @@ void Rover::Log_Write_Flow_Realtime(void) {
 }
 
 // [AP_ShoesAgtech] ---------------------------------------------------------
-// Binary log message PHWD: realtime pH readings, temperature, electrode mV, GPS position
+// Binary log message PHWD: realtime pH readings, temperature, electrode mV, GPS
+// position
 struct PACKED log_PhData {
   LOG_PACKET_HEADER;
   uint64_t time_us;
-  float   ph_raw;  // calibrated pH (latest sample)
-  float   ph_ma;   // moving-average pH
-  float   temp_c;  // water temperature °C
-  int16_t mv;      // electrode millivolts (Nernst raw)
-  int32_t lat;     // GPS latitude  (degrees × 1e7); 0 = no fix
-  int32_t lng;     // GPS longitude (degrees × 1e7); 0 = no fix
+  float ph_raw; // calibrated pH (latest sample)
+  float ph_ma;  // moving-average pH
+  float temp_c; // water temperature °C
+  int16_t mv;   // electrode millivolts (Nernst raw)
+  int32_t lat;  // GPS latitude  (degrees × 1e7); 0 = no fix
+  int32_t lng;  // GPS longitude (degrees × 1e7); 0 = no fix
 };
 
 void Rover::Log_Write_Ph_Realtime(void) {
@@ -276,12 +277,12 @@ void Rover::Log_Write_Ph_Realtime(void) {
   struct log_PhData pkt = {
     LOG_PACKET_HEADER_INIT(LOG_PH_DATA_MSG),
     time_us : AP_HAL::micros64(),
-    ph_raw  : g2.custom_nav.get_ph_raw(),
-    ph_ma   : g2.custom_nav.get_ph(),
-    temp_c  : g2.custom_nav.get_ph_temp(),
-    mv      : (int16_t)g2.custom_nav.get_ph_mv(),
-    lat     : lat,
-    lng     : lng
+    ph_raw : g2.custom_nav.get_ph_raw(),
+    ph_ma : g2.custom_nav.get_ph(),
+    temp_c : g2.custom_nav.get_ph_temp(),
+    mv : (int16_t)g2.custom_nav.get_ph_mv(),
+    lat : lat,
+    lng : lng
   };
   logger.WriteBlock(&pkt, sizeof(pkt));
 }
@@ -293,14 +294,14 @@ void Rover::Log_Write_Ph_Realtime(void) {
 struct PACKED log_PhAlk {
   LOG_PACKET_HEADER;
   uint64_t time_us;
-  float   ph_morn;   // morning slot pH (average of SA_PH_CAP_SAM samples)
-  float   ph_aft;    // afternoon slot pH (average)
-  float   delta_ph;  // afternoon − morning
-  float   alk_dkh;   // alkalinity (dKH) derived from ΔpH
-  float   alk_mgl;   // alkalinity (mg/L CaCO3)
-  int32_t lat;       // pond GPS latitude  (morning slot, degrees × 1e7)
-  int32_t lng;       // pond GPS longitude (morning slot, degrees × 1e7)
-  uint8_t pond_idx;  // pond ring-buffer index (0-based)
+  float ph_morn;    // morning slot pH (average of SA_PH_CAP_SAM samples)
+  float ph_aft;     // afternoon slot pH (average)
+  float delta_ph;   // afternoon − morning
+  float alk_dkh;    // alkalinity (dKH) derived from ΔpH
+  float alk_mgl;    // alkalinity (mg/L CaCO3)
+  int32_t lat;      // pond GPS latitude  (morning slot, degrees × 1e7)
+  int32_t lng;      // pond GPS longitude (morning slot, degrees × 1e7)
+  uint8_t pond_idx; // pond ring-buffer index (0-based)
 };
 
 void Rover::Log_Write_Ph_Alkalinity(void) {
@@ -315,14 +316,14 @@ void Rover::Log_Write_Ph_Alkalinity(void) {
   }
   struct log_PhAlk pkt = {
     LOG_PACKET_HEADER_INIT(LOG_PH_ALK_MSG),
-    time_us  : AP_HAL::micros64(),
-    ph_morn  : g2.custom_nav.get_ph_morn(),
-    ph_aft   : g2.custom_nav.get_ph_aft(),
+    time_us : AP_HAL::micros64(),
+    ph_morn : g2.custom_nav.get_ph_morn(),
+    ph_aft : g2.custom_nav.get_ph_aft(),
     delta_ph : g2.custom_nav.get_delta_ph(),
-    alk_dkh  : g2.custom_nav.get_alk_dkh(),
-    alk_mgl  : g2.custom_nav.get_alk_mgl(),
-    lat      : g2.custom_nav.get_ph_morn_lat(),
-    lng      : g2.custom_nav.get_ph_morn_lng(),
+    alk_dkh : g2.custom_nav.get_alk_dkh(),
+    alk_mgl : g2.custom_nav.get_alk_mgl(),
+    lat : g2.custom_nav.get_ph_morn_lat(),
+    lng : g2.custom_nav.get_ph_morn_lng(),
     pond_idx : (uint8_t)(g2.custom_nav.get_alk_pond_idx() + 1U)
   };
   logger.WriteBlock(&pkt, sizeof(pkt));
@@ -434,20 +435,25 @@ const LogStructure Rover::log_structure[] = {
      "TimeUS,pHRaw,pHMA,Temp,mV,Lat,Lng", "s----DU", "F----GG"},
 
     // =================================================================
-    // [AP_ShoesAgtech] PHAK log structure — daily alkalinity from ΔpH + pond GPS
+    // [AP_ShoesAgtech] PHAK log structure — daily alkalinity from ΔpH + pond
+    // GPS
     // @LoggerMessage: PHAK
-    // @Description: Daily alkalinity written once when morning+afternoon slots at same pond
+    // @Description: Daily alkalinity written once when morning+afternoon slots
+    // at same pond
     // @Field: TimeUS:   Time since system startup
     // @Field: pHMorn:   Morning slot pH
     // @Field: pHAft:    Afternoon slot pH
     // @Field: dPH:      Afternoon − morning pH swing
     // @Field: AlkDKH:   Alkalinity derived from ΔpH (dKH)
     // @Field: AlkMGL:   Alkalinity (mg/L CaCO3)
-    // @Field: Lat:      Pond GPS latitude  (morning slot position, degrees × 1e7)
-    // @Field: Lng:      Pond GPS longitude (morning slot position, degrees × 1e7)
+    // @Field: Lat:      Pond GPS latitude  (morning slot position, degrees ×
+    // 1e7)
+    // @Field: Lng:      Pond GPS longitude (morning slot position, degrees ×
+    // 1e7)
     // @Field: PondIdx:  Pond ring-buffer index (0-based, up to 16 ponds)
     {LOG_PH_ALK_MSG, sizeof(log_PhAlk), "PHAK", "QfffffLLB",
-     "TimeUS,pHMorn,pHAft,dPH,AlkDKH,AlkMGL,Lat,Lng,PondIdx", "s-----DU-", "F-----GG-"},
+     "TimeUS,pHMorn,pHAft,dPH,AlkDKH,AlkMGL,Lat,Lng,PondIdx", "s-----DU-",
+     "F-----GG-"},
 
     // [/AP_ShoesAgtech]
 };

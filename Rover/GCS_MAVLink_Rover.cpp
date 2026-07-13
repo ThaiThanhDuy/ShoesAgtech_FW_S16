@@ -259,16 +259,20 @@ void GCS_MAVLINK_Rover::send_water_depth() {
 //     [5] ph            (moving-avg, 10 mẫu)     }
 //     [6] ph_mv         (mV, signed)             }
 //     [7] ph_temp       (°C)                     } chỉ khi SA_PH_EN=1
-//     [8] alk_dkh       (dKH, ao active — 0 nếu chưa đủ dữ liệu)   } AND ph_has_data()
-//     [9] alk_mgl       (mg/L CaCO3, ao active — 0 nếu chưa đủ)    }
+//     [8] alk_dkh       (dKH, ao active — 0 nếu chưa đủ dữ liệu)   } AND
+//     ph_has_data() [9] alk_mgl       (mg/L CaCO3, ao active — 0 nếu chưa đủ) }
 //    [10] delta_ph      (pH chiều - pH sáng, ao active — 0 nếu chưa đủ) }
 //    [11] pond_idx      (index ao detect được trong vòng lặp hiện tại)
+//    [12] ph_morn       (pH sáng ngày hôm đó của ao active — 0 nếu chưa có mẫu)
+//    [13] ph_aft        (pH chiều ngày hôm đó của ao active — 0 nếu chưa có
+//    mẫu) [14] last_day      (ngày ghi nhận dữ liệu, tính từ Unix epoch; ×86400
+//    = Unix timestamp)
 //
 //   Module 3 — Dosing motor:
-//    [12] dos_sp        (gam, SA_DOS_SP)
-//    [13] dos_rate      (gam/50us, SA_DOS_RATE)
-//    [14] dos_pwm       (us)
-//    [15] dos_food      (1-7, SA_DOS_FOOD — loai thuc an dang chon)
+//    [15] dos_sp        (gam — của ao active, lấy SA_DOS_SP lúc ao được tạo lần đầu)
+//    [16] dos_rate      (gam/50us, SA_DOS_RATE)
+//    [17] dos_pwm       (us)
+//    [18] dos_food      (1-7, SA_DOS_FOOD — loai thuc an dang chon)
 //
 // Hiển thị trong Mission Planner: Ctrl+F > MAVLink Inspector >
 // DEBUG_FLOAT_ARRAY
@@ -308,8 +312,8 @@ void GCS_MAVLINK_Rover::send_shoesagtech_debug_arrays() {
   data[3] = (float)sa.get_pump_pwm();
   data[4] = (float)sa.get_spray_mode();
 
-  // ---- Module 2: pH sensor [5..11] ----
-  // pH mất tín hiệu/chưa kết nối -> giữ data[5..11] = 0 (không gửi rác)
+  // ---- Module 2: pH sensor [5..14] ----
+  // pH mất tín hiệu/chưa kết nối -> giữ data = 0 (không gửi rác)
   if (sa.ph_is_enabled() && sa.ph_has_data()) {
     data[5] = sa.get_ph();
     data[6] = sa.get_ph_mv();
@@ -317,16 +321,39 @@ void GCS_MAVLINK_Rover::send_shoesagtech_debug_arrays() {
     data[8] = sa.get_active_alk_dkh();
     data[9] = sa.get_active_alk_mgl();
     data[10] = sa.get_active_delta_ph();
-    data[11] = (float)(sa.get_alk_pond_idx() + 1U);  // hiển thị bắt đầu từ 1
+    data[11] = (float)(sa.get_active_pond_idx() +
+                       1U); // hiển thị bắt đầu từ 1, cùng ao với [8..14]
+    data[12] = sa.get_active_ph_morn();
+    data[13] = sa.get_active_ph_aft();
+    data[14] = (float)sa.get_active_last_day();
   }
 
-  // ---- Module 3: Dosing motor [12..15] ----
-  data[12] = sa.get_dosing_sp();
-  data[13] = sa.get_dosing_rate();
-  data[14] = (float)sa.get_dosing_pwm();
-  data[15] = (float)sa.get_dosing_food();
+  // ---- Module 3: Dosing motor [15..18] ----
+  data[15] = sa.get_active_dos_sp();  // dos_sp của ao đang active
+  data[16] = sa.get_dosing_rate();
+  data[17] = (float)sa.get_dosing_pwm();
+  data[18] = (float)sa.get_dosing_food();
 
   mavlink_msg_debug_float_array_send(chan, now_ms, data_name, 0, data);
+
+  // SA_PHK — gửi bản ghi pH/kiềm ngày (đã tính đủ sáng+chiều) khi có sẵn.
+  // QGC nhận để hiển thị bảng "Chất lượng nước" và đồng bộ lên server.
+  // array_id=1 phân biệt với SA_DATA (array_id=0).
+  // Layout: [0]ph_morn [1]ph_aft [2]delta_ph [3]alk_dkh [4]alk_mgl
+  //         [5]lat/1e7 [6]lng/1e7 [7]pond_idx(1-based)
+  if (sa.ph_is_enabled() && sa.consume_alk_log_pending()) {
+    const char phk_name[10] = "SA_PHK";
+    float phk[58] = {};
+    phk[0] = sa.get_ph_morn();
+    phk[1] = sa.get_ph_aft();
+    phk[2] = sa.get_delta_ph();
+    phk[3] = sa.get_alk_dkh();
+    phk[4] = sa.get_alk_mgl();
+    phk[5] = sa.get_ph_morn_lat() * 1e-7f;
+    phk[6] = sa.get_ph_morn_lng() * 1e-7f;
+    phk[7] = (float)(sa.get_alk_pond_idx() + 1U);
+    mavlink_msg_debug_float_array_send(chan, now_ms, phk_name, 1, phk);
+  }
 }
 // [/AP_ShoesAgtech] -------------------------------------------------------
 

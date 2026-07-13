@@ -63,6 +63,15 @@ public:
   float    get_active_delta_ph(void) const {
     return (_ponds[_active_pond_idx].status == 3) ? _ponds[_active_pond_idx].delta_ph : 0.0f;
   }
+  // pH sáng/chiều của ao active trong ngày hôm đó (0 nếu slot chưa có mẫu).
+  float    get_active_ph_morn(void)  const { return _ponds[_active_pond_idx].ph_morn; }
+  float    get_active_ph_aft(void)   const { return _ponds[_active_pond_idx].ph_aft; }
+  // Ngày ghi nhận dữ liệu pH của ao active (ngày tính từ Unix epoch, × 86400 = Unix timestamp).
+  uint32_t get_active_last_day(void)  const { return _ponds[_active_pond_idx].last_day; }
+  // Index ao đang active trong cycle hiện tại (0-based nội bộ; cộng 1 trước khi hiển thị).
+  uint8_t  get_active_pond_idx(void)  const { return _active_pond_idx; }
+  // Lượng thức ăn (gam) của ao đang active — mỗi ao lưu riêng, khởi tạo từ SA_DOS_SP.
+  float    get_active_dos_sp(void)    const { return _ponds[_active_pond_idx].dos_sp; }
   // true when the pH sensor has produced a valid Modbus frame within the
   // last SA_PH_TIMEOUT seconds (matches the "mất kết nối" threshold used
   // for the GCS warning)
@@ -109,7 +118,8 @@ private:
   AP_Float _ph_me;          // SA_PH_ME    gio ket thuc slot sang  (0.0-24.0,  default 11.0) vd 11.5=11h30
   AP_Float _ph_as;          // SA_PH_AS    gio bat dau slot chieu (0.0-23.99, default 12.0) vd 13.5=13h30
   AP_Float _ph_ae;          // SA_PH_AE    gio ket thuc slot chieu (0.0-24.0,  default 16.0) vd 16.5=16h30
-  AP_Float _ph_pond_dist;   // SA_PH_POND_D nguong cung ao sang+chieu (m), default 300
+  AP_Float _ph_pond_dist;   // SA_PH_POND_D  nguong GPS validate cung ao (m), default 300
+  AP_Int16 _pond_select;    // SA_POND_IDX   ao dang do (1-based, nhap thu cong), default 1
   AP_Int16 _ph_cap_s;       // SA_PH_CAP_S   khoang thoi gian giua hai mau (giay, default 20)
   AP_Int8  _ph_cap_sam;     // SA_PH_CAP_SAM so mau tich luy de tinh trung binh (default 20)
   // [/AP_ShoesAgtech]
@@ -231,7 +241,7 @@ private:
   // Mỗi ao nhận diện bằng GPS cluster (tâm ± SA_PH_POND_D).
   // Dữ liệu ao giữ qua các ngày; chỉ xóa slot hôm nay khi đo lại ao đó vào ngày mới.
   // Ring buffer ghi đè ao cũ nhất khi đủ 16 ao.
-  static const uint8_t MAX_PONDS = 16;
+  static const uint8_t MAX_PONDS = 100;
 
   struct PondEntry {
     float    center_lat;    // tâm ao GPS lat (degrees)
@@ -241,6 +251,7 @@ private:
     float    alk_dkh;       // kiềm dKH (giữ qua ngày)
     float    alk_mgl;       // kiềm mg/L (giữ qua ngày)
     float    delta_ph;      // ph_aft - ph_morn
+    float    dos_sp;        // lượng thức ăn cho ao này (gam) — khởi tạo từ SA_DOS_SP
     uint32_t last_day;      // day_num lần đo gần nhất
     uint32_t morn_last_ms;  // millis mẫu sáng cuối (rate-limit)
     uint32_t aft_last_ms;   // millis mẫu chiều cuối (rate-limit)
@@ -259,7 +270,6 @@ private:
 
   PondEntry  _ponds[MAX_PONDS];
   uint8_t    _pond_count;     // số slot đang dùng (0–MAX_PONDS)
-  uint8_t    _pond_ring_idx;  // ring buffer write head
 
   // Output mirrors — cập nhật từ pond active/pending, dùng bởi Log.cpp getters
   float     _ph_morn_val;
@@ -274,7 +284,10 @@ private:
   uint8_t   _alk_pond_idx;        // pond index của PHAK vừa ghi (logging mirror)
   uint8_t   _active_pond_idx;     // pond index đang active trong cycle hiện tại
   uint32_t  _slot_warn_ms;
+  uint32_t  _ponds_save_ms;           // thời điểm save cuối (rate-limit 5s)
   bool      _pond_first_detect_done;  // true sau khi đã in thông báo ao lần đầu
+  bool      _ponds_dirty;             // true khi _ponds[] có thay đổi cần ghi SD
+  bool      _ponds_loaded;            // true sau khi đã load từ SD (defer khỏi init)
 
   // [/AP_ShoesAgtech]
 
@@ -305,5 +318,10 @@ private:
   void     _ph_update(void);
   void     _ph_update_daily_slots(float ph_cal);
   float    _ph_calc_alkalinity(float ph, float base_kh_dkh, float temp_c);
+  // [/AP_ShoesAgtech]
+
+  // [AP_ShoesAgtech] Private methods — pond state persistence
+  void     _pond_load(void);   // đọc _ponds[] từ SD card lúc boot
+  void     _pond_save(void);   // ghi _ponds[] ra SD card (gọi khi dirty)
   // [/AP_ShoesAgtech]
 };

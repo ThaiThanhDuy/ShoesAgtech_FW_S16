@@ -1,4 +1,5 @@
 #include "AP_ShoesAgtech.h"
+#include <AP_Filesystem/AP_Filesystem.h>
 #include <AP_AHRS/AP_AHRS.h>
 #include <AP_GPS/AP_GPS.h>
 #include <AP_Math/AP_Math.h>
@@ -509,6 +510,13 @@ const AP_Param::GroupInfo AP_ShoesAgtech::var_info[] = {
     // @Units: m
     // @User: Standard
     AP_GROUPINFO("PH_POND_D", 60, AP_ShoesAgtech, _ph_pond_dist, 300.0f),
+    // @Param: POND_IDX
+    // @DisplayName: Pond index (manual selection)
+    // @Description: Index ao dang do, nhap thu cong (1-100). GPS chi dung de validate
+    //   vi tri: neu lech qua SA_PH_POND_D thi in log. Dat = 0 de tat pH.
+    // @Range: 0 100
+    // @User: Standard
+    AP_GROUPINFO("POND_IDX", 59, AP_ShoesAgtech, _pond_select, 1),
     // @Param: PH_CAP_S
     // @DisplayName: pH capture interval (seconds)
     // @Description: Khoang thoi gian giua hai lan lay mau pH trong slot sang/chieu (giay).
@@ -553,13 +561,14 @@ AP_ShoesAgtech::AP_ShoesAgtech()
       _ph_last_log_ms(0), _ph_value(0.0f), _ph_value_ema(-1.0f),
       _ph_value_ma(0.0f), _ph_mv(0), _ph_temp(25.0f),
       _ph_buf_idx(0), _ph_buf_count(0), _ph_buf_sum(0.0f),
-      // per-pond GPS cluster tracking
-      _pond_count(0), _pond_ring_idx(0),
+      // per-pond manual selection tracking
+      _pond_count(0),
       _ph_morn_val(0.0f), _ph_morn_lat(0), _ph_morn_lng(0),
       _ph_aft_val(0.0f), _delta_ph(0.0f),
       _alk_dkh(0.0f), _alk_mgl(0.0f),
       _alk_slot_status(4), _alk_pond_idx(0), _active_pond_idx(0), _slot_warn_ms(0),
-      _pond_first_detect_done(false)
+      _ponds_save_ms(0), _pond_first_detect_done(false), _ponds_dirty(false),
+      _ponds_loaded(false)
 // [/AP_ShoesAgtech]
 {
   memset(_sample_buffer, 0, sizeof(_sample_buffer));
@@ -612,6 +621,13 @@ void AP_ShoesAgtech::update(void) {
     return;
   }
 
+  // [AP_ShoesAgtech] load pond state từ SD card lần đầu update (filesystem đã sẵn sàng)
+  if (!_ponds_loaded) {
+    _ponds_loaded = true;
+    _pond_load();
+  }
+  // [/AP_ShoesAgtech]
+
   _check_pump_config();
 
   // [AP_ShoesAgtech] simulation or real sensor path
@@ -625,6 +641,17 @@ void AP_ShoesAgtech::update(void) {
 
   // [AP_ShoesAgtech] dosing motor — RC on/off + rate-to-PWM conversion
   _update_dosing_motor();
+  // [/AP_ShoesAgtech]
+
+  // [AP_ShoesAgtech] persist pond state to SD card when dirty (rate-limited 5s)
+  if (_ponds_dirty) {
+    uint32_t _now_ms = AP_HAL::millis();
+    if (_now_ms - _ponds_save_ms >= 5000U) {
+      _pond_save();
+      _ponds_save_ms = _now_ms;
+      _ponds_dirty   = false;
+    }
+  }
   // [/AP_ShoesAgtech]
 
   uint32_t now = AP_HAL::millis();
@@ -1487,61 +1514,52 @@ void AP_ShoesAgtech::_ph_update_daily_slots(float ph_cal) {
   const bool in_morn = (local_h >= ms  && local_h <= me);
   const bool in_aft  = (local_h >= as_ && local_h <= ae);
 
-  // ---- GPS cluster: tìm ao gần nhất trong bán kính SA_PH_POND_D ----
-  const float DEG2M   = 111320.0f;
-  float pond_thr      = constrain_float(_ph_pond_dist.get(), 10.0f, 5000.0f);
-  float coslat        = cosf(cur_lat_f * DEG_TO_RAD);
-  int8_t pond_idx     = -1;
-  float  best_dist    = pond_thr + 1.0f;
+  // ---- Chọn ao theo SA_POND_IDX (nhập thủ công, 1-based) ----
+  const int8_t sel = (int8_t)constrain_int16(_pond_select.get(), 1, (int16_t)MAX_PONDS);
+  const uint8_t pond_idx = (uint8_t)(sel - 1);  // 0-based internal index
 
-  for (uint8_t i = 0; i < _pond_count; i++) {
-    if (!_ponds[i].valid) continue;
-    float dlat_m = (cur_lat_f - _ponds[i].center_lat) * DEG2M;
-    float dlng_m = (cur_lng_f - _ponds[i].center_lng) * DEG2M * coslat;
-    float dist_m = sqrtf(dlat_m * dlat_m + dlng_m * dlng_m);
-    if (dist_m < best_dist) {
-      best_dist = dist_m;
-      pond_idx  = (int8_t)i;
-    }
-  }
-
-  // ---- Tạo slot mới hoặc dùng ring buffer khi đầy ----
-  const bool pond_is_new = (pond_idx < 0);
+  // Khởi tạo slot nếu lần đầu dùng ao này
+  const bool pond_is_new = !_ponds[pond_idx].valid;
   if (pond_is_new) {
-    uint8_t new_idx;
-    if (_pond_count < MAX_PONDS) {
-      new_idx = _pond_count++;
-    } else {
-      new_idx        = _pond_ring_idx;
-      _pond_ring_idx = (_pond_ring_idx + 1) % MAX_PONDS;
-      gcs().send_text(MAV_SEVERITY_WARNING,
-                      "[SA] Vòng ao: ghi đè ao #%u", (unsigned)new_idx);
-    }
-    memset(&_ponds[new_idx], 0, sizeof(PondEntry));
-    _ponds[new_idx].center_lat = cur_lat_f;
-    _ponds[new_idx].center_lng = cur_lng_f;
-    _ponds[new_idx].gps_count  = 1;
-    _ponds[new_idx].valid      = true;
-    _ponds[new_idx].last_day   = today;
-    pond_idx = (int8_t)new_idx;
+    memset(&_ponds[pond_idx], 0, sizeof(PondEntry));
+    _ponds[pond_idx].center_lat = cur_lat_f;
+    _ponds[pond_idx].center_lng = cur_lng_f;
+    _ponds[pond_idx].gps_count  = 1;
+    _ponds[pond_idx].valid      = true;
+    _ponds[pond_idx].last_day   = today;
+    _ponds[pond_idx].dos_sp     = _dos_sp.get();
+    if (pond_idx >= _pond_count) _pond_count = pond_idx + 1;
+    _ponds_dirty = true;
   }
 
-  PondEntry &pond = _ponds[(uint8_t)pond_idx];
-  _active_pond_idx = (uint8_t)pond_idx;
+  PondEntry &pond = _ponds[pond_idx];
   const unsigned disp_idx = (unsigned)pond_idx + 1;  // hiển thị bắt đầu từ 1
 
-  // ---- Thông báo lần đầu bật máy: ao số mấy ----
-  if (!_pond_first_detect_done) {
+  // ---- Thông báo khi ao thay đổi (kể cả lần đầu boot) — in 1 lần ----
+  if (pond_idx != _active_pond_idx || !_pond_first_detect_done) {
     _pond_first_detect_done = true;
-    if (pond_is_new) {
-      gcs().send_text(MAV_SEVERITY_INFO,
-                      "[SA] Khởi động: ao mới → ao #%u", disp_idx);
-    } else {
-      gcs().send_text(MAV_SEVERITY_INFO,
-                      "[SA] Khởi động: nhận ra ao #%u (%.0fm)",
-                      disp_idx, (double)best_dist);
+    gcs().send_text(MAV_SEVERITY_INFO,
+                    "[SA] Chuyen sang ao #%u%s",
+                    disp_idx, pond_is_new ? " (ao moi)" : "");
+    // GPS validate — in 1 lần khi đổi ao, chỉ khi centroid đã ổn định
+    if (pond.gps_count > 5) {
+      const float DEG2M  = 111320.0f;
+      const float coslat = cosf(cur_lat_f * DEG_TO_RAD);
+      float dlat_m = (cur_lat_f - pond.center_lat) * DEG2M;
+      float dlng_m = (cur_lng_f - pond.center_lng) * DEG2M * coslat;
+      float dist_m = sqrtf(dlat_m * dlat_m + dlng_m * dlng_m);
+      float pond_thr = constrain_float(_ph_pond_dist.get(), 10.0f, 5000.0f);
+      if (dist_m <= pond_thr) {
+        gcs().send_text(MAV_SEVERITY_INFO,
+                        "[SA] Ao#%u GPS OK (%.0fm)", disp_idx, (double)dist_m);
+      } else {
+        gcs().send_text(MAV_SEVERITY_INFO,
+                        "[SA] Ao#%u GPS lech %.0fm - can check lai vi tri ao",
+                        disp_idx, (double)dist_m);
+      }
     }
   }
+  _active_pond_idx = pond_idx;
 
   // ---- Cập nhật centroid GPS (rolling average, cap 1000 tránh mất độ chính xác float) ----
   if (pond.gps_count < 1000) pond.gps_count++;
@@ -1576,6 +1594,7 @@ void AP_ShoesAgtech::_ph_update_daily_slots(float ph_cal) {
       pond.morn_last_ms = now;
       pond.morn_count++;
       pond.status      |= 1;  // bit0 = có buổi sáng
+      _ponds_dirty      = true;
       // Báo cáo lần đầu khi đủ ngưỡng mẫu tối thiểu
       if (pond.morn_count == cap_min && !pond.morn_reported) {
         pond.morn_reported = true;
@@ -1588,6 +1607,7 @@ void AP_ShoesAgtech::_ph_update_daily_slots(float ph_cal) {
       pond.aft_last_ms = now;
       pond.aft_count++;
       pond.status     |= 2;  // bit1 = có buổi chiều
+      _ponds_dirty     = true;
       // Báo cáo lần đầu khi đủ ngưỡng mẫu tối thiểu
       if (pond.aft_count == cap_min && !pond.aft_reported) {
         pond.aft_reported = true;
@@ -1607,6 +1627,7 @@ void AP_ShoesAgtech::_ph_update_daily_slots(float ph_cal) {
     pond.alk_mgl      = pond.alk_dkh * 17.85f;
     pond.alk_computed = true;
     pond.alk_pending  = true;  // kích hoạt ghi PHAK vào SD
+    _ponds_dirty      = true;
     _delta_ph = pond.delta_ph;
     _alk_dkh  = pond.alk_dkh;
     _alk_mgl  = pond.alk_mgl;
@@ -1637,30 +1658,6 @@ void AP_ShoesAgtech::_ph_update_daily_slots(float ph_cal) {
     _alk_slot_status = 4;           // chưa có dữ liệu
   }
 
-  // ---- In cảnh báo định kỳ (mỗi 60s khi SA_PH_LOG=1) ----
-  if (_ph_log_enable.get() > 0 && now - _slot_warn_ms >= 60000) {
-    _slot_warn_ms = now;
-    uint8_t cap_max = (uint8_t)constrain_int16(_ph_cap_sam.get(), 1, 100);
-    if (_alk_slot_status == 1) {
-      gcs().send_text(MAV_SEVERITY_INFO,
-                      "[WM] Ao#%u S:%.2f(%u/%u) C:--",
-                      disp_idx, (double)pond.ph_morn,
-                      (unsigned)pond.morn_count, (unsigned)cap_max);
-    } else if (_alk_slot_status == 2) {
-      gcs().send_text(MAV_SEVERITY_INFO,
-                      "[WM] Ao#%u S:-- C:%.2f(%u/%u)",
-                      disp_idx, (double)pond.ph_aft,
-                      (unsigned)pond.aft_count, (unsigned)cap_max);
-    } else if (_alk_slot_status == 3) {
-      gcs().send_text(MAV_SEVERITY_INFO,
-                      "[WM] Ao#%u: dùng dữ liệu cũ (%.1f dKH)",
-                      disp_idx, (double)pond.alk_dkh);
-    } else if (_alk_slot_status == 4) {
-      gcs().send_text(MAV_SEVERITY_INFO,
-                      "[WM] Ao#%u: chưa có slot (đợi giờ đo)",
-                      disp_idx);
-    }
-  }
 }
 
 // =============================================================
@@ -1697,6 +1694,60 @@ float AP_ShoesAgtech::_ph_calc_alkalinity(float ph, float base_kh_dkh,
   }
 
   return base_kh_dkh * constrain_float(pf * tf, 0.55f, 1.75f);
+}
+
+// =============================================================
+// POND STATE PERSISTENCE — /APM/SA_PONDS.bin
+// Lưu toàn bộ _ponds[] vào SD card mỗi khi có thay đổi (rate-limited 5s).
+// Đọc lại khi boot để khôi phục dữ liệu pH, kiềm, dos_sp của từng ao.
+// Format: magic(4) + version(1) + count(1) + PondEntry[MAX_PONDS]
+// =============================================================
+#define SA_PONDS_FILE  "/APM/SA_PONDS.bin"
+#define SA_PONDS_MAGIC 0x504F4E44UL  // 'POND'
+#define SA_PONDS_VER   1
+
+struct PondStateHdr {
+  uint32_t magic;
+  uint8_t  version;
+  uint8_t  count;
+};
+
+void AP_ShoesAgtech::_pond_save(void) {
+  int fd = AP::FS().open(SA_PONDS_FILE, O_WRONLY | O_CREAT | O_TRUNC);
+  if (fd < 0) return;
+
+  PondStateHdr hdr { SA_PONDS_MAGIC, SA_PONDS_VER, _pond_count };
+  AP::FS().write(fd, &hdr, sizeof(hdr));
+  AP::FS().write(fd, _ponds, sizeof(PondEntry) * MAX_PONDS);
+  AP::FS().close(fd);
+}
+
+void AP_ShoesAgtech::_pond_load(void) {
+  int fd = AP::FS().open(SA_PONDS_FILE, O_RDONLY);
+  if (fd < 0) return;
+
+  PondStateHdr hdr {};
+  if (AP::FS().read(fd, &hdr, sizeof(hdr)) != (ssize_t)sizeof(hdr) ||
+      hdr.magic != SA_PONDS_MAGIC || hdr.version != SA_PONDS_VER) {
+    AP::FS().close(fd);
+    return;
+  }
+
+  AP::FS().read(fd, _ponds, sizeof(PondEntry) * MAX_PONDS);
+  AP::FS().close(fd);
+
+  _pond_count = hdr.count;
+
+  // Reset các field không hợp lệ sau reboot
+  for (uint8_t i = 0; i < MAX_PONDS; i++) {
+    if (!_ponds[i].valid) continue;
+    _ponds[i].morn_last_ms = 0;  // timestamp ms không còn hợp lệ
+    _ponds[i].aft_last_ms  = 0;
+    _ponds[i].alk_pending  = false;  // PHAK đã được log trong session trước
+  }
+
+  gcs().send_text(MAV_SEVERITY_INFO,
+                  "[SA] Load %u ao tu SD card", (unsigned)_pond_count);
 }
 
 // =============================================================
