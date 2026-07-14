@@ -269,10 +269,10 @@ void GCS_MAVLINK_Rover::send_water_depth() {
 //    = Unix timestamp)
 //
 //   Module 3 — Dosing motor:
-//    [15] dos_sp        (gam — của ao active, lấy SA_DOS_SP lúc ao được tạo lần đầu)
-//    [16] dos_rate      (gam/50us, SA_DOS_RATE)
+//    [15] dos_sp        (gam — setpoint riêng của ao active, đồng bộ 2 chiều với SA_DOS_SP)
+//    [16] dos_rate      (mL/50us — SA_DOS_Fx của loại thức ăn đang dùng cho ao active)
 //    [17] dos_pwm       (us)
-//    [18] dos_food      (1-7, SA_DOS_FOOD — loai thuc an dang chon)
+//    [18] dos_food      (1-7 — loại thức ăn riêng của ao active, đồng bộ 2 chiều với SA_DOS_FOOD)
 //
 // Hiển thị trong Mission Planner: Ctrl+F > MAVLink Inspector >
 // DEBUG_FLOAT_ARRAY
@@ -330,9 +330,9 @@ void GCS_MAVLINK_Rover::send_shoesagtech_debug_arrays() {
 
   // ---- Module 3: Dosing motor [15..18] ----
   data[15] = sa.get_active_dos_sp();  // dos_sp của ao đang active
-  data[16] = sa.get_dosing_rate();
+  data[16] = sa.get_active_dos_rate();
   data[17] = (float)sa.get_dosing_pwm();
-  data[18] = (float)sa.get_dosing_food();
+  data[18] = (float)sa.get_active_dos_food();  // dos_food của ao đang active
 
   mavlink_msg_debug_float_array_send(chan, now_ms, data_name, 0, data);
 
@@ -341,7 +341,7 @@ void GCS_MAVLINK_Rover::send_shoesagtech_debug_arrays() {
   // array_id=1 phân biệt với SA_DATA (array_id=0).
   // Layout: [0]ph_morn [1]ph_aft [2]delta_ph [3]alk_dkh [4]alk_mgl
   //         [5]lat/1e7 [6]lng/1e7 [7]pond_idx(1-based)
-  if (sa.ph_is_enabled() && sa.consume_alk_log_pending()) {
+  if (sa.ph_is_enabled() && sa.consume_gcs_alk_pending()) {
     const char phk_name[10] = "SA_PHK";
     float phk[58] = {};
     phk[0] = sa.get_ph_morn();

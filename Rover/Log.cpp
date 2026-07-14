@@ -289,19 +289,19 @@ void Rover::Log_Write_Ph_Realtime(void) {
 
 // Binary log message PHAK: alkalinity per pond — written once per pond per day
 // when both morning and afternoon pH slots are complete for that pond.
-// pond_idx identifies the pond (0-based ring buffer index, up to 16 ponds).
+// pond_idx: 1-based manual pond index (SA_POND_IDX), up to 100 ponds.
 // Lat/Lng record the pond's morning-slot GPS for map display.
 struct PACKED log_PhAlk {
   LOG_PACKET_HEADER;
   uint64_t time_us;
-  float ph_morn;    // morning slot pH (average of SA_PH_CAP_SAM samples)
-  float ph_aft;     // afternoon slot pH (average)
+  float ph_morn;    // morning slot pH (last-write-wins within slot window)
+  float ph_aft;     // afternoon slot pH (last-write-wins within slot window)
   float delta_ph;   // afternoon − morning
   float alk_dkh;    // alkalinity (dKH) derived from ΔpH
   float alk_mgl;    // alkalinity (mg/L CaCO3)
   int32_t lat;      // pond GPS latitude  (morning slot, degrees × 1e7)
   int32_t lng;      // pond GPS longitude (morning slot, degrees × 1e7)
-  uint8_t pond_idx; // pond ring-buffer index (0-based)
+  uint8_t pond_idx; // pond index (1-based, matches SA_POND_IDX)
 };
 
 void Rover::Log_Write_Ph_Alkalinity(void) {
@@ -450,7 +450,7 @@ const LogStructure Rover::log_structure[] = {
     // 1e7)
     // @Field: Lng:      Pond GPS longitude (morning slot position, degrees ×
     // 1e7)
-    // @Field: PondIdx:  Pond ring-buffer index (0-based, up to 16 ponds)
+    // @Field: PondIdx:  Pond index, 1-based (matches SA_POND_IDX, up to 100)
     {LOG_PH_ALK_MSG, sizeof(log_PhAlk), "PHAK", "QfffffLLB",
      "TimeUS,pHMorn,pHAft,dPH,AlkDKH,AlkMGL,Lat,Lng,PondIdx", "s-----DU-",
      "F-----GG-"},
