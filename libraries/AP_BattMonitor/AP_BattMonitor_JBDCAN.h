@@ -30,6 +30,10 @@ private:
     uint8_t _can_interface_index;
     // Timestamp of last update (us)
     uint64_t _last_update_us;
+    // Timestamp of last successfully received & parsed frame (us) — used to
+    // detect a stale/disconnected BMS in read(), independent of the RTR
+    // send-throttle timer above
+    uint64_t _last_frame_us = 0;
     // Frame callback handler
     void handle_frame_callback(uint8_t iface_num,
                                const AP_HAL::CANFrame &frame,
@@ -38,7 +42,6 @@ private:
     // Parse CAN frame data from JBD
     void handle_frame(const AP_HAL::CANFrame &frame);
     // Constants for JBD CAN message IDs and timing
-    static const uint16_t query_ids;
     static const uint16_t JBD_REQUEST_ID  = 0x100;
     static const uint16_t JBD_RESPONSE_ID = 0x100;
     static const uint32_t UPDATE_INTERVAL_US = 200000;  // 200ms

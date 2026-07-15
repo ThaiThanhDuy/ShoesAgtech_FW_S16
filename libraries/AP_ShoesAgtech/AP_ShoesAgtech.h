@@ -76,14 +76,11 @@ public:
 
   // ---- MODULE 3: Dosing motor getters (for logging) ----
   uint16_t get_dosing_pwm(void)     const { return _dos_pwm; }
-  int8_t   get_dosing_food(void)    const { return _dos_food.get(); }
   // Tốc độ vít tải (mL/50us) của loại thức ăn đang dùng cho ao active (SA_DOS_Fx).
   float    get_active_dos_rate(void) const {
-    int8_t food = _ponds[_active_pond_idx].valid ? _ponds[_active_pond_idx].dos_food
-                                                  : (int8_t)_dos_food.get();
-    if (food < 1) food = 1;
-    if (food > 7) food = 7;
-    return _dos_fr[food - 1].get();
+    const int8_t food = _ponds[_active_pond_idx].valid ? _ponds[_active_pond_idx].dos_food
+                                                        : (int8_t)_dos_food.get();
+    return _dos_fr[_clamp_food(food) - 1].get();
   }
 
   static const AP_Param::GroupInfo var_info[];
@@ -117,7 +114,7 @@ private:
   AP_Float _mix_cnt;        // SA_MIX_CNT  ti le vi sinh nac cao (Chong nghet van), default 0.50
   AP_Float _flow_vel;       // SA_FLOW_VEL  0=dung van toc that, >0=dung gia tri nay (m/s)
 
-  // ---- MODULE 2: pH sensor — Nengshi ASPS3801D-0.5M (slots 14-24, 55-62) ----
+  // ---- MODULE 2: pH sensor — Nengshi ASPS3801D-0.5M (slots 14-24, 55-62; slot 12 reused) ----
   AP_Int8  _ph_en;          // SA_PH_EN     enable pH sensor
   AP_Int8  _ph_port;        // SA_PH_PORT   UART port number (matches SERIALx)
   AP_Float _ph_toff;        // SA_PH_TOFF   temperature offset °C
@@ -135,6 +132,7 @@ private:
   AP_Int16 _pond_select;    // SA_POND_IDX   ao dang do (1-based, nhap thu cong), default 1
   AP_Int16 _ph_cap_s;       // SA_PH_CAP_S   khoang thoi gian giua hai mau (giay, default 20)
   AP_Int8  _ph_cap_sam;     // SA_PH_CAP_SAM so mau tich luy de tinh trung binh (default 20)
+  AP_Int8  _ph_cap_m;       // SA_PH_CAP_M   ban kinh capture (m), 1-100 - chi dung cho app, firmware khong doc
 
   // ---- MODULE 3: dosing motor (vit tai thuc an tom) — servo xoay lien tuc 360° (slots 25-26, 28-31, 36, 40-54; slot 27 retired) ----
   AP_Int8  _dos_chan;   // SA_DOS_CHAN   servo output channel (1-indexed)
@@ -307,6 +305,11 @@ private:
   void     _check_dosing_config(void);
   void     _sync_dosing_setpoint(void);
   void     _update_dosing_motor(void);
+  // Chuyển offset PWM (us, luôn dương) thành giá trị PWM xuất ra theo chiều
+  // quay SA_DOS_REV, đã constrain đúng nửa dải (800-1500 hoặc 1500-2200).
+  uint16_t _offset_to_dos_pwm(float offset) const;
+  // Kẹp giá trị loại thức ăn (SA_DOS_FOOD/dos_food) về dải hợp lệ 1-7.
+  static int8_t _clamp_food(int8_t food);
 
   // ---- SIMULATION ----
   void     _run_simulation(void);

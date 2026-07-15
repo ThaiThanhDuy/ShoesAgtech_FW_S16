@@ -168,7 +168,7 @@ const AP_Param::GroupInfo AP_ShoesAgtech::var_info[] = {
     // @Param: MIX_CNT
     // @DisplayName: Spray ratio at high RC position (anti-clog nozzle)
     // @Description: Biocide fraction at high RC. In FLOW_MODE=0, flow target
-    //   is scaled by MIX_CNT/MIX_STD to keep boom output consistent.f
+    //   is scaled by MIX_CNT/MIX_STD to keep boom output consistent.
     // @Range: 0.01 1.0
     // @Increment: 0.001
     // @User: Standard
@@ -316,6 +316,18 @@ const AP_Param::GroupInfo AP_ShoesAgtech::var_info[] = {
     // @Range: 1 100
     // @User: Standard
     AP_GROUPINFO("PH_CAP_SAM", 62, AP_ShoesAgtech, _ph_cap_sam, 20),
+
+    // slot 12 reused (previously retired APP_RATE, unused since before this
+    // library's current history — no field-flashed unit ever stored a value
+    // there).
+    // @Param: PH_CAP_M
+    // @DisplayName: pH capture radius (m)
+    // @Description: Capture radius in metres, used by the companion app
+    //   only. Firmware initialises this value but does not read it anywhere.
+    // @Range: 1 100
+    // @Units: m
+    // @User: Standard
+    AP_GROUPINFO("PH_CAP_M", 12, AP_ShoesAgtech, _ph_cap_m, 1),
 
     // ================================================================
     // MODULE 3 — Dosing motor: continuous-rotation 360° servo
@@ -1382,8 +1394,7 @@ void AP_ShoesAgtech::_ph_update_daily_slots(float ph_cal) {
     _ponds[pond_idx].valid = true;
     _ponds[pond_idx].last_day = today;
     _ponds[pond_idx].dos_sp = _dos_sp.get();
-    _ponds[pond_idx].dos_food =
-        (int8_t)constrain_int16(_dos_food.get(), 1, 7);
+    _ponds[pond_idx].dos_food = _clamp_food((int8_t)_dos_food.get());
     if (pond_idx >= _pond_count)
       _pond_count = pond_idx + 1;
     _ponds_dirty = true;
@@ -1639,9 +1650,12 @@ void AP_ShoesAgtech::_pond_save(void) {
   if (fd < 0)
     return;
 
+  // Chỉ ghi đúng _pond_count slot đã từng dùng tới (không phải cả MAX_PONDS)
+  // để giảm I/O thẻ SD. _pond_load() vẫn đọc an toàn: phần còn lại của
+  // _ponds[] giữ nguyên trạng thái zero-init (valid=false) nếu file ngắn hơn.
   PondStateHdr hdr{SA_PONDS_MAGIC, SA_PONDS_VER, _pond_count};
   AP::FS().write(fd, &hdr, sizeof(hdr));
-  AP::FS().write(fd, _ponds, sizeof(PondEntry) * MAX_PONDS);
+  AP::FS().write(fd, _ponds, sizeof(PondEntry) * _pond_count);
   AP::FS().close(fd);
 }
 
@@ -1758,6 +1772,20 @@ void AP_ShoesAgtech::_check_dosing_config(void) {
   }
 }
 
+// Kẹp giá trị loại thức ăn về dải hợp lệ 1-7 (khớp SA_DOS_FOOD @Range).
+int8_t AP_ShoesAgtech::_clamp_food(int8_t food) {
+  return (int8_t)constrain_int16(food, 1, 7);
+}
+
+// Chuyển offset PWM (us, luôn dương, xem công thức đầu Module 3) thành PWM
+// xuất ra theo chiều quay SA_DOS_REV, constrain đúng nửa dải servo.
+uint16_t AP_ShoesAgtech::_offset_to_dos_pwm(float offset) const {
+  if (_dos_rev.get() == 0) {
+    return (uint16_t)constrain_float(1500.0f - offset, 800.0f, 1500.0f);
+  }
+  return (uint16_t)constrain_float(1500.0f + offset, 1500.0f, 2200.0f);
+}
+
 // =============================================================
 // ĐỒNG BỘ SETPOINT + LOẠI THỨC ĂN THEO AO
 // SA_DOS_SP / SA_DOS_FOOD là tham số người dùng đọc/sửa, nhưng giá trị
@@ -1793,7 +1821,7 @@ void AP_ShoesAgtech::_sync_dosing_setpoint(void) {
     _ponds_dirty = true;
   }
 
-  int8_t cur_food = (int8_t)constrain_int16(_dos_food.get(), 1, 7);
+  int8_t cur_food = _clamp_food((int8_t)_dos_food.get());
   if (cur_food != _dos_food_sync_val) {
     pond.dos_food = cur_food;
     _dos_food_sync_val = cur_food;
@@ -1804,7 +1832,8 @@ void AP_ShoesAgtech::_sync_dosing_setpoint(void) {
 void AP_ShoesAgtech::_update_dosing_motor(void) {
   _sync_dosing_setpoint();
   const PondEntry &active_pond = _ponds[_active_pond_idx];
-  const float dos_sp_active = active_pond.valid ? active_pond.dos_sp : _dos_sp.get();
+  const float dos_sp_active =
+      active_pond.valid ? active_pond.dos_sp : _dos_sp.get();
   const int8_t dos_food_active =
       active_pond.valid ? active_pond.dos_food : (int8_t)_dos_food.get();
 
@@ -1828,9 +1857,10 @@ void AP_ShoesAgtech::_update_dosing_motor(void) {
   if (motor_on) {
     float pwm_f = 1500.0f;
 
-    // Tốc độ vít tải + mật độ đều lấy theo loại thức ăn đang active (SA_DOS_Fx/SA_DOS_Dx),
-    // dùng chung cho cả 2 mode — calib SA_DOS_Fx/SA_DOS_Dx riêng cho từng loại thức ăn.
-    uint8_t food_idx = (uint8_t)constrain_int16(dos_food_active, 1, 7) - 1;
+    // Tốc độ vít tải + mật độ đều lấy theo loại thức ăn đang active
+    // (SA_DOS_Fx/SA_DOS_Dx), dùng chung cho cả 2 mode — calib
+    // SA_DOS_Fx/SA_DOS_Dx riêng cho từng loại thức ăn.
+    uint8_t food_idx = (uint8_t)_clamp_food(dos_food_active) - 1;
     float vol_rate = _dos_fr[food_idx].get();
     if (vol_rate < 0.1f) {
       vol_rate = 0.1f;
@@ -1844,11 +1874,7 @@ void AP_ShoesAgtech::_update_dosing_motor(void) {
     if (_dos_mode.get() == 0) {
       // ---- DOS_MODE 0: tốc độ cố định ----
       float offset = dos_sp_active * 50.0f / effective;
-      if (_dos_rev.get() == 0) {
-        pwm_f = constrain_float(1500.0f - offset, 800.0f, 1500.0f);
-      } else {
-        pwm_f = constrain_float(1500.0f + offset, 1500.0f, 2200.0f);
-      }
+      pwm_f = (float)_offset_to_dos_pwm(offset);
     } else {
       // ---- DOS_MODE 1: phân bố đều theo mission ----
       float mission_dist = _get_mission_dist();
@@ -1857,11 +1883,7 @@ void AP_ShoesAgtech::_update_dosing_motor(void) {
       if (mission_dist > 1.0f && speed_ms >= 0.05f) {
         float dos_gpm = (dos_sp_active * speed_ms * 60.0f) / mission_dist;
         float offset = dos_gpm * 50.0f / effective;
-        if (_dos_rev.get() == 0) {
-          pwm_f = constrain_float(1500.0f - offset, 800.0f, 1500.0f);
-        } else {
-          pwm_f = constrain_float(1500.0f + offset, 1500.0f, 2200.0f);
-        }
+        pwm_f = (float)_offset_to_dos_pwm(offset);
       } else {
         pwm_f = 1500.0f;
         if (now - _dos_warn_ms >= 5000U) {
@@ -1891,7 +1913,7 @@ void AP_ShoesAgtech::_update_dosing_motor(void) {
   if (_dos_log_enable.get() > 0) {
     if (now - _dos_last_log_ms >= (uint32_t)_dos_log_ms.get()) {
       _dos_last_log_ms = now;
-      uint8_t food_log = (uint8_t)constrain_int16(dos_food_active, 1, 7) - 1;
+      uint8_t food_log = (uint8_t)_clamp_food(dos_food_active) - 1;
       gcs().send_text(MAV_SEVERITY_INFO,
                       "[DOS] M%d F%d SERVO%d %s SP:%.0fg D:%.2fg/mL PWM:%u",
                       (int)_dos_mode.get(), (int)dos_food_active,

@@ -248,6 +248,13 @@ protected:
   float _last_pitch_rate_rads{0.0f}; // Van toc goc Pitch chu ky truoc (q[k-1])
   float _filtered_pitch_accel_degs2{
       0.0f}; // Gia toc goc Pitch da loc LPF (deg/s^2)
+
+  // Shoes_Agtech: logic Pitch Safety dung chung cho Manual va Auto. Giam
+  // *value (throttle % hoac target_speed m/s) theo pitch_scale khi goc/gia
+  // toc pitch vuot nguong SAFE_PITCH_*, tre pitch_delay_ms truoc khi phuc
+  // hoi. tag la prefix log GCS ("MAN"/"AUTO").
+  void _apply_pitch_safety(float &value, bool enabled, float pitch_scale_pct,
+                            int32_t pitch_delay_ms, const char *tag);
 };
 
 class ModeAcro : public Mode {

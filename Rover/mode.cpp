@@ -512,6 +512,71 @@ void Mode::set_steering(float steering_value)
     g2.motors.set_steering(steering_value);
 }
 
+// Shoes_Agtech: shared Pitch Safety logic for Manual and Auto modes.
+// Scales *value down by pitch_scale_pct when pitch angle or filtered pitch
+// angular acceleration exceeds the shared SAFE_PITCH_* limits, then holds
+// the reduction for pitch_delay_ms after the pitch becomes safe again
+// before resuming full authority. tag selects the GCS message prefix.
+void Mode::_apply_pitch_safety(float &value, bool enabled, float pitch_scale_pct, int32_t pitch_delay_ms, const char *tag)
+{
+    if (!enabled) {
+        _last_pitch_rate_rads = 0.0f;
+        _filtered_pitch_accel_degs2 = 0.0f;
+        _pitch_warning_sent = false;
+        _pitch_safe_start_ms = 0U;
+        return;
+    }
+
+    const uint32_t now_ms = AP_HAL::millis();
+    const float pitch_deg = degrees(rover.ahrs.get_pitch_rad());
+    const float current_pitch_rate_rads = rover.ahrs.get_gyro().y;
+
+    float raw_pitch_accel_degs2 = 0.0f;
+    if (rover.G_Dt > 0.0001f) {
+        raw_pitch_accel_degs2 = degrees(current_pitch_rate_rads - _last_pitch_rate_rads) / rover.G_Dt;
+    }
+    _last_pitch_rate_rads = current_pitch_rate_rads;
+
+    const float lpf_alpha = constrain_float(rover.G_Dt / (0.04f + rover.G_Dt), 0.05f, 1.0f);
+    _filtered_pitch_accel_degs2 = (lpf_alpha * raw_pitch_accel_degs2) +
+                                  ((1.0f - lpf_alpha) * _filtered_pitch_accel_degs2);
+
+    const float safe_pitch_down_limit = -fabsf(g.safe_pitch_down.get());
+    const float safe_pitch_up_limit = fabsf(g.safe_pitch_up.get());
+    const float safe_pitch_accel_limit = fabsf(g.safe_pitch_accel.get());
+
+    const bool is_angle_bad = (pitch_deg < safe_pitch_down_limit) || (pitch_deg > safe_pitch_up_limit);
+    const bool is_inertia_bad = (fabsf(_filtered_pitch_accel_degs2) > safe_pitch_accel_limit);
+    const bool is_pitch_bad = is_angle_bad || is_inertia_bad;
+
+    const float pitch_scale = constrain_float(pitch_scale_pct * 0.01f, 0.0f, 1.0f);
+
+    if (is_pitch_bad) {
+        value *= pitch_scale;
+        _pitch_safe_start_ms = 0U;
+        if (!_pitch_warning_sent) {
+            gcs().send_text(MAV_SEVERITY_CRITICAL,
+                            "[%s] PITCH DANGER! Ang:%.1fdeg Acc:%.1fdeg/s2 -> x%.0f%%",
+                            tag, static_cast<double>(pitch_deg),
+                            static_cast<double>(_filtered_pitch_accel_degs2),
+                            static_cast<double>(pitch_scale_pct));
+            _pitch_warning_sent = true;
+        }
+    } else if (_pitch_warning_sent) {
+        if (_pitch_safe_start_ms == 0U) {
+            _pitch_safe_start_ms = now_ms;
+        }
+        const uint32_t recovery_delay_ms = static_cast<uint32_t>(MAX(pitch_delay_ms, 0));
+        if (now_ms - _pitch_safe_start_ms >= recovery_delay_ms) {
+            gcs().send_text(MAV_SEVERITY_WARNING, "[%s] Pitch Safe - Resuming", tag);
+            _pitch_warning_sent = false;
+            _pitch_safe_start_ms = 0U;
+        } else {
+            value *= pitch_scale;
+        }
+    }
+}
+
 Mode *Rover::mode_from_mode_num(const enum Mode::Number num)
 {
     Mode *ret = nullptr;

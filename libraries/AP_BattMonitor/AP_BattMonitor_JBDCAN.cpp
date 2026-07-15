@@ -42,6 +42,15 @@ void AP_BattMonitor_JBDCAN::read() {
     return;
 
   uint64_t now = AP_HAL::micros();
+
+  // Mark unhealthy once no valid frame has arrived within the timeout, so a
+  // disconnected/dead BMS doesn't keep reporting stale voltage/current as
+  // "healthy" forever.
+  if (_last_frame_us == 0 ||
+      now - _last_frame_us > AP_BATTMONITOR_JBDCAN_TIMEOUT_MICROS) {
+    _state.healthy = false;
+  }
+
   if (now - _last_update_us < 200000)
     return;
 
@@ -69,34 +78,9 @@ void AP_BattMonitor_JBDCAN::handle_frame_callback(
   }
 }
 
-// Process received CAN frame from JBD BMS
-// void AP_BattMonitor_JBDCAN::handle_frame(const AP_HAL::CANFrame &frame) {
-//   const uint8_t *data = frame.data;
-
-//   uint16_t raw_voltage = (data[0] << 8) | data[1];
-//   float voltage = raw_voltage * 0.01f;
-
-//   int16_t raw_current = (data[2] << 8) | data[3];
-//   float current = raw_current * 0.01f;
-
-//   uint16_t raw_capacity = (data[4] << 8) | data[5];
-//   float remaining_mah = raw_capacity * 10.0f;
-
-//   // Calculate consumed capacity if pack capacity is available
-//   if (_params._pack_capacity > 0) {
-//     _state.consumed_mah = _params._pack_capacity - remaining_mah;
-//   }
-
-//   _state.voltage = voltage;
-//   _state.current_amps = current;
-//   _state.healthy = true;
-//   _last_update_us = AP_HAL::micros();
-
-//   if (voltage > 0) {
-//     _state.consumed_wh = _state.consumed_mah * voltage * 0.001f;
-//   }
-// }
-// Duy điều chỉnh V 63V -> 58.8V cho pack
+// Process received CAN frame from JBD BMS. Voltage-to-percentage uses a
+// 14S pack curve (V_MAX/V_MIN below) rather than the raw capacity field
+// reported by the BMS.
 void AP_BattMonitor_JBDCAN::handle_frame(const AP_HAL::CANFrame &frame) {
   const uint8_t *data = frame.data;
 
@@ -128,6 +112,7 @@ void AP_BattMonitor_JBDCAN::handle_frame(const AP_HAL::CANFrame &frame) {
   _state.current_amps = current;
   _state.healthy = true;
   _last_update_us = AP_HAL::micros();
+  _last_frame_us = AP_HAL::micros();
 
   if (voltage > 0) {
     _state.consumed_wh = _state.consumed_mah * voltage * 0.001f;
@@ -135,9 +120,10 @@ void AP_BattMonitor_JBDCAN::handle_frame(const AP_HAL::CANFrame &frame) {
 }
 // Calculate remaining capacity percentage
 bool AP_BattMonitor_JBDCAN::capacity_remaining_pct(uint8_t &percentage) const {
-  if (_params._pack_capacity > 0) {
-    percentage = 100 * (_params._pack_capacity - _state.consumed_mah) /
-                 _params._pack_capacity;
+  if (_params._pack_capacity <= 0) {
+    return false;
   }
+  percentage = 100 * (_params._pack_capacity - _state.consumed_mah) /
+               _params._pack_capacity;
   return true;
 }

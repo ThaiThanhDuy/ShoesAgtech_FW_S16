@@ -87,10 +87,8 @@ public:
   friend class AP_Rally_Rover;
   friend class AP_Arming_Rover;
 
-  // NOTE: the actual AP_ShoesAgtech instance lives in ParametersG2::custom_nav
-  // (declared in Parameters.h). This duplicate is kept only for build
-  // compatibility with files that reference rover.custom_nav directly; it is
-  // NOT the instance whose parameters are registered with AP_Param.
+  // NOTE: the AP_ShoesAgtech instance lives in ParametersG2::custom_nav
+  // (declared in Parameters.h), accessed elsewhere as rover.g2.custom_nav.
 #if AP_ROVER_ADVANCED_FAILSAFE_ENABLED
   friend class AP_AdvancedFailsafe_Rover;
 #endif
