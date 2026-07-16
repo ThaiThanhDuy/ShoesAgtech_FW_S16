@@ -1854,6 +1854,8 @@ void AP_ShoesAgtech::_update_dosing_motor(void) {
                     motor_on ? "ON" : "OFF");
   }
 
+  float dos_rate_gpm = 0.0f; // tốc độ cấp tức thời (g/phút) — dùng để in log
+
   if (motor_on) {
     float pwm_f = 1500.0f;
 
@@ -1872,20 +1874,23 @@ void AP_ShoesAgtech::_update_dosing_motor(void) {
     float effective = vol_rate * density;
 
     if (_dos_mode.get() == 0) {
-      // ---- DOS_MODE 0: tốc độ cố định ----
-      float offset = dos_sp_active * 50.0f / effective;
+      // ---- DOS_MODE 0: tốc độ cố định — SA_DOS_SP CHÍNH LÀ tốc độ (g/phút) ----
+      dos_rate_gpm = dos_sp_active;
+      float offset = dos_rate_gpm * 50.0f / effective;
       pwm_f = (float)_offset_to_dos_pwm(offset);
     } else {
-      // ---- DOS_MODE 1: phân bố đều theo mission ----
+      // ---- DOS_MODE 1: phân bố đều theo mission — SA_DOS_SP là TỔNG gam,
+      // dos_rate_gpm là tốc độ tức thời suy ra từ speed/mission_dist ----
       float mission_dist = _get_mission_dist();
-      float speed_ms =
-          (_simulation.get() > 0) ? _sim_speed : AP::ahrs().groundspeed();
+      float speed_ms = _get_spray_speed(); // đồng bộ nguồn tốc độ với Module 1
+                                            // (SIM > SA_FLOW_VEL > AHRS)
       if (mission_dist > 1.0f && speed_ms >= 0.05f) {
-        float dos_gpm = (dos_sp_active * speed_ms * 60.0f) / mission_dist;
-        float offset = dos_gpm * 50.0f / effective;
+        dos_rate_gpm = (dos_sp_active * speed_ms * 60.0f) / mission_dist;
+        float offset = dos_rate_gpm * 50.0f / effective;
         pwm_f = (float)_offset_to_dos_pwm(offset);
       } else {
         pwm_f = 1500.0f;
+        dos_rate_gpm = 0.0f;
         if (now - _dos_warn_ms >= 5000U) {
           _dos_warn_ms = now;
           if (mission_dist <= 1.0f) {
@@ -1910,16 +1915,29 @@ void AP_ShoesAgtech::_update_dosing_motor(void) {
   SRV_Channels::set_output_pwm_chan(chan_idx, _dos_pwm);
 
   // ---- IN LOG MOTOR CHO ĂN RA CONSOLE (SA_DOS_LOG) ----
+  // Format khác nhau theo mode: mode 0 thì SA_DOS_SP CHÍNH LÀ tốc độ (g/ph)
+  // nên chỉ in 1 field "Rate"; mode 1 thì SA_DOS_SP là tổng gam cho cả
+  // mission, nên in thêm "Rate" (tốc độ tức thời suy ra) bên cạnh "SP" (tổng).
   if (_dos_log_enable.get() > 0) {
     if (now - _dos_last_log_ms >= (uint32_t)_dos_log_ms.get()) {
       _dos_last_log_ms = now;
       uint8_t food_log = (uint8_t)_clamp_food(dos_food_active) - 1;
-      gcs().send_text(MAV_SEVERITY_INFO,
-                      "[DOS] M%d F%d SERVO%d %s SP:%.0fg D:%.2fg/mL PWM:%u",
-                      (int)_dos_mode.get(), (int)dos_food_active,
-                      (int)_dos_chan.get(), motor_on ? "ON" : "OFF",
-                      (double)dos_sp_active, (double)_dos_dr[food_log].get(),
-                      (unsigned)_dos_pwm);
+      if (_dos_mode.get() == 0) {
+        gcs().send_text(
+            MAV_SEVERITY_INFO,
+            "[DOS] M0 F%d SERVO%d %s Rate:%.0fg/ph D:%.2fg/mL PWM:%u",
+            (int)dos_food_active, (int)_dos_chan.get(),
+            motor_on ? "ON" : "OFF", (double)dos_rate_gpm,
+            (double)_dos_dr[food_log].get(), (unsigned)_dos_pwm);
+      } else {
+        gcs().send_text(MAV_SEVERITY_INFO,
+                        "[DOS] M1 F%d SERVO%d %s SP:%.0fg Rate:%.2fg/ph "
+                        "D:%.2fg/mL PWM:%u",
+                        (int)dos_food_active, (int)_dos_chan.get(),
+                        motor_on ? "ON" : "OFF", (double)dos_sp_active,
+                        (double)dos_rate_gpm, (double)_dos_dr[food_log].get(),
+                        (unsigned)_dos_pwm);
+      }
     }
   }
 }
