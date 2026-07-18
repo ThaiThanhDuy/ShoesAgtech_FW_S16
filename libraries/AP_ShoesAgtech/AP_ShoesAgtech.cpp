@@ -799,6 +799,20 @@ void AP_ShoesAgtech::update(void) {
                     (unsigned)_spray_mode, (double)_flow_target,
                     (double)_flow_rate_filtered, (double)_flow_rate_avg,
                     (unsigned)_pump_pwm);
+
+    // ---- DEBUG: chẩn đoán phần cứng cảm biến flow ----
+    // In số pin GPIO đang dùng, mức tín hiệu tức thời (0/1), và số xung
+    // cộng dồn (_pulse_count) — không đổi giữa các lần in nghĩa là ISR
+    // chưa từng bắt được xung nào (sai wiring/mode chân, không phải lỗi
+    // tính toán lưu lượng).
+    {
+      uint8_t dbg_pin = (uint8_t)constrain_int16(_flow_pin.get(), 1, 200);
+      uint8_t dbg_level = hal.gpio->read(dbg_pin);
+      gcs().send_text(MAV_SEVERITY_INFO, "%s DBG Pin:%u Lvl:%u Pulses:%u",
+                      flow_pfx, (unsigned)dbg_pin, (unsigned)dbg_level,
+                      (unsigned)_pulse_count);
+    }
+
     if ((_spray_mode == 1 || _spray_mode == 2) && _flow_mode.get() == 1 &&
         _tank_vol.get() > 0.0f) {
       float r = (_spray_mode == 2) ? _mix_cnt.get() : _mix_std.get();
