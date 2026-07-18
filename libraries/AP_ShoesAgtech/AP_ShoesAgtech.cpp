@@ -524,6 +524,7 @@ AP_ShoesAgtech::AP_ShoesAgtech()
       _ph_morn_lat(0), _ph_morn_lng(0), _ph_aft_val(0.0f), _delta_ph(0.0f),
       _alk_dkh(0.0f), _alk_mgl(0.0f), _alk_slot_status(4), _alk_pond_idx(0),
       _active_pond_idx(0), _slot_warn_ms(0), _ponds_save_ms(0),
+      _pond_save_fail_ms(0),
       _pond_first_detect_done(false), _ponds_dirty(false), _ponds_loaded(false),
       _dos_pwm(1500), _dos_config_ok(false), _dos_warn_ms(0),
       _dos_was_ok(false), _dos_was_on(false), _dos_last_log_ms(0),
@@ -1635,10 +1636,20 @@ void AP_ShoesAgtech::_io_update(void) {
   }
   if (_ponds_dirty) {
     uint32_t now_ms = AP_HAL::millis();
-    if (now_ms - _ponds_save_ms >= 5000U) {
-      _pond_save();
+    // Backoff 60s sau lần lưu thất bại gần nhất (thẻ SD đầy/lỗi) — tránh
+    // liên tục chiếm semaphore filesystem dùng chung với AP_Logger mỗi 5s,
+    // vốn có thể khiến AP_Logger không mở được file log (EBUSY) và làm
+    // main loop bị treo (INTERNAL_ERROR main_loop_stuck) khi ghi SD chậm.
+    uint32_t min_interval =
+        (_pond_save_fail_ms != 0) ? 60000U : 5000U;
+    if (now_ms - _ponds_save_ms >= min_interval) {
       _ponds_save_ms = now_ms;
-      _ponds_dirty = false;
+      if (_pond_save()) {
+        _ponds_dirty = false;
+        _pond_save_fail_ms = 0;
+      } else {
+        _pond_save_fail_ms = now_ms;
+      }
     }
   }
 }
@@ -1659,18 +1670,30 @@ struct PondStateHdr {
   uint8_t count;
 };
 
-void AP_ShoesAgtech::_pond_save(void) {
+bool AP_ShoesAgtech::_pond_save(void) {
   int fd = AP::FS().open(SA_PONDS_FILE, O_WRONLY | O_CREAT | O_TRUNC);
-  if (fd < 0)
-    return;
+  if (fd < 0) {
+    return false;
+  }
 
   // Chỉ ghi đúng _pond_count slot đã từng dùng tới (không phải cả MAX_PONDS)
   // để giảm I/O thẻ SD. _pond_load() vẫn đọc an toàn: phần còn lại của
   // _ponds[] giữ nguyên trạng thái zero-init (valid=false) nếu file ngắn hơn.
   PondStateHdr hdr{SA_PONDS_MAGIC, SA_PONDS_VER, _pond_count};
-  AP::FS().write(fd, &hdr, sizeof(hdr));
-  AP::FS().write(fd, _ponds, sizeof(PondEntry) * _pond_count);
+  const ssize_t hdr_written = AP::FS().write(fd, &hdr, sizeof(hdr));
+  const size_t data_len = sizeof(PondEntry) * _pond_count;
+  const ssize_t data_written = AP::FS().write(fd, _ponds, data_len);
   AP::FS().close(fd);
+
+  // Ghi thiếu byte (vd ENOSPC — thẻ SD đầy) — không coi là đã lưu thành
+  // công. Báo 1 lần mỗi 60s (dùng chung timer backoff của _io_update) để
+  // người dùng biết dữ liệu ao KHÔNG được lưu, thay vì âm thầm mất dữ liệu.
+  if (hdr_written != (ssize_t)sizeof(hdr) || data_written != (ssize_t)data_len) {
+    gcs().send_text(MAV_SEVERITY_WARNING,
+                    "SA: khong the luu du lieu ao xuong SD (the day/loi?)");
+    return false;
+  }
+  return true;
 }
 
 void AP_ShoesAgtech::_pond_load(void) {

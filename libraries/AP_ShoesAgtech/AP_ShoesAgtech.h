@@ -260,6 +260,9 @@ private:
   uint8_t   _active_pond_idx;
   uint32_t  _slot_warn_ms;
   uint32_t  _ponds_save_ms;
+  uint32_t  _pond_save_fail_ms; // lần lưu SD thất bại gần nhất (backoff, tránh
+                                // giữ semaphore filesystem chung khi thẻ SD
+                                // đầy/lỗi — xem _pond_save())
   bool      _pond_first_detect_done;
   bool      _ponds_dirty;
   bool      _ponds_loaded;
@@ -299,7 +302,9 @@ private:
   float    _ph_calc_alkalinity(float ph, float base_kh_dkh, float temp_c);
   void     _io_update(void);   // chạy trong IO thread — load/save _ponds[] an toàn với AP::FS()
   void     _pond_load(void);
-  void     _pond_save(void);
+  // Trả false nếu ghi SD thất bại (vd hết dung lượng) — dùng để backoff
+  // trong _io_update(), tránh giữ semaphore filesystem chung quá lâu/liên tục.
+  bool     _pond_save(void);
 
   // ---- MODULE 3: dosing motor ----
   void     _check_dosing_config(void);
