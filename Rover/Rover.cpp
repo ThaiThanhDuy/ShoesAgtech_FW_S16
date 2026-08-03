@@ -579,11 +579,19 @@ void Rover::update_auto_timer(void) {
   if (_auto_timer_active) {
     if (control_mode != &mode_auto) {
       _auto_timer_active = false; // da roi AUTO vi ly do khac
+      gcs().send_text(MAV_SEVERITY_INFO,
+                      "AUTO_TIMER: mode da doi khoi AUTO vi ly do khac - "
+                      "ngung tu dong ve MANUAL");
     } else if (mode_auto.mission.state() == AP_Mission::MISSION_COMPLETE) {
       _auto_timer_active = false;
-      set_mode(mode_manual, ModeReason::MISSION_END);
-      gcs().send_text(MAV_SEVERITY_INFO,
-                      "AUTO_TIMER: mission xong - tu dong ve mode MANUAL");
+      if (set_mode(mode_manual, ModeReason::MISSION_END)) {
+        gcs().send_text(MAV_SEVERITY_INFO,
+                        "AUTO_TIMER: mission xong - tu dong ve mode MANUAL");
+      } else {
+        gcs().send_text(MAV_SEVERITY_WARNING,
+                        "AUTO_TIMER: mission xong nhung chuyen ve MANUAL "
+                        "that bai");
+      }
     }
   }
 
@@ -745,13 +753,40 @@ void Rover::update_auto_timer(void) {
       continue;
     }
 
+    // GPS phai fix 3D truoc khi tu dieu huong AUTO - chi co gio GPS/RTC
+    // (da kiem tra o tren) khong dam bao vi tri du tin cay de chay mission.
+    if (gps.status(0) < AP_GPS::GPS_OK_FIX_3D) {
+      gcs().send_text(MAV_SEVERITY_WARNING,
+                      "AUTO_TIMER%u (%02u:%02u): GPS chua fix 3D - bo qua tu "
+                      "dong chuyen AUTO",
+                      (unsigned)(i + 1), (unsigned)hh, (unsigned)mm);
+      continue;
+    }
+
+    // Phai co mission hop le (>=2 lenh) truoc khi chuyen - tranh vao AUTO
+    // voi mission rong/chua upload.
+    if (mode_auto.mission.num_commands() < 2) {
+      gcs().send_text(MAV_SEVERITY_WARNING,
+                      "AUTO_TIMER%u (%02u:%02u): chua co mission - bo qua tu "
+                      "dong chuyen AUTO",
+                      (unsigned)(i + 1), (unsigned)hh, (unsigned)mm);
+      continue;
+    }
+
     mode_auto.mission.reset(); // rewind ve waypoint dau
-    set_mode(mode_auto, ModeReason::UNKNOWN);
-    _auto_timer_active = true; // phien AUTO nay la do AUTO_TIMER kich hoat
-    gcs().send_text(MAV_SEVERITY_INFO,
-                    "AUTO_TIMER%u (%02u:%02u): da ARM - chuyen sang mode "
-                    "AUTO, xe bat dau chay ngay",
-                    (unsigned)(i + 1), (unsigned)hh, (unsigned)mm);
+    // Kiem tra set_mode() co thanh cong khong - KHONG duoc gia dinh luon
+    // thanh cong (vd ModeAuto co the tu choi vao vi ly do noi bo khac).
+    if (set_mode(mode_auto, ModeReason::AUTO_TIMER_SCHEDULE)) {
+      _auto_timer_active = true; // phien AUTO nay la do AUTO_TIMER kich hoat
+      gcs().send_text(MAV_SEVERITY_INFO,
+                      "AUTO_TIMER%u (%02u:%02u): da ARM - chuyen sang mode "
+                      "AUTO, xe bat dau chay ngay",
+                      (unsigned)(i + 1), (unsigned)hh, (unsigned)mm);
+    } else {
+      gcs().send_text(MAV_SEVERITY_WARNING,
+                      "AUTO_TIMER%u (%02u:%02u): chuyen mode AUTO that bai",
+                      (unsigned)(i + 1), (unsigned)hh, (unsigned)mm);
+    }
   }
 }
 // [/Shoes_Agtech] -----------------------------------------------------------

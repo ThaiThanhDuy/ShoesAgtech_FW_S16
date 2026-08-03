@@ -412,7 +412,7 @@ pwm          = constrain(TRIM + lpf_output, MIN, MAX)
 ### 3.3 Xử lý các trường hợp đặc biệt
 
 - `SERVOx_FUNCTION ≠ 0`: cảnh báo mỗi 5s, **không block** xuất PWM
-- Mode 0 passthrough: PWM ngoài 800–2200 bị clamp về 1500
+- Mode 0 passthrough: PWM ngoài 800–2200 (kể cả 0 = chưa có tín hiệu RC, ví dụ mới cấp điện mà chưa kết nối tay cầm) → bơm về `SERVOx_MIN` đã cấu hình (KHÔNG dùng 1500 cứng, tránh bơm tự chạy khi chưa có RC)
 - Mode 2 FLOW_MODE=1, xe dừng (speed < 0.1): PI reset, return 0 → bơm dừng
 - `SA_FLOW_VEL > 0`: override vận tốc, dùng khi calib đứng yên
 - Tank-empty flag reset khi disarm → phát hiện lại ở lần ARM tiếp theo

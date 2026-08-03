@@ -681,12 +681,21 @@ void AP_ShoesAgtech::update(void) {
     // ---- MODE 0: TRUYỀN THẲNG PHẦN MỀM ----
     uint8_t rc_pump_idx = (uint8_t)constrain_int16(_rc_pump.get() - 1, 0, 15);
     uint16_t rc_pwm = RC_Channels::get_radio_in(rc_pump_idx);
-    if (rc_pwm < 800 || rc_pwm > 2200) {
-      rc_pwm = 1500;
-    }
     _flow_target = 0.0f;
     _pid_integral = 0.0f;
     _pid_output_lpf = 0.0f;
+    if (rc_pwm < 800 || rc_pwm > 2200) {
+      // Chưa có tín hiệu RC hợp lệ (vd: chưa cắm/kết nối tay cầm) -> đưa
+      // bơm về đúng vị trí AN TOÀN đã cấu hình (SERVOx_MIN), KHÔNG dùng
+      // giá trị 1500 cứng vì có thể không phải là mức tắt bơm thực tế.
+      SRV_Channel *ch0 =
+          SRV_Channels::srv_channel((uint8_t)(_pump_chan.get() - 1));
+      if (ch0 != nullptr) {
+        _pump_pwm = ch0->get_output_min();
+        _write_pump_pwm(_pump_pwm);
+      }
+      break;
+    }
     _pump_pwm = rc_pwm;
     _write_pump_pwm(_pump_pwm);
     break;

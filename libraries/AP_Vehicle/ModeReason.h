@@ -73,4 +73,5 @@ enum class ModeReason : uint8_t {
   AUX_FUNCTION = 53,
   FIXED_WING_AUTOLAND = 54,
   FENCE_REENABLE = 55,
+  AUTO_TIMER_SCHEDULE = 56, // Shoes_Agtech: Rover AUTO_TIMER scheduled auto-run switched the mode
 };
