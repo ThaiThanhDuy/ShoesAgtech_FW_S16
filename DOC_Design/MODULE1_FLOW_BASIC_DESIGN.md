@@ -6,7 +6,7 @@
 > Người không biết lập trình cũng đọc được và hiểu hệ thống làm gì.
 
 **Dự án:** `ardupilot-jbdcan_testing_S16`
-**Ngày tạo:** 2026-05-01 | **Cập nhật lần cuối:** 2026-07-08
+**Ngày tạo:** 2026-05-01 | **Cập nhật lần cuối:** 2026-07-16
 **Người viết:** ThaiThanhDuy
 **Trạng thái:** `[x] Draft   [ ] Review   [ ] Approved`
 
@@ -152,9 +152,10 @@ Dữ liệu lưu lượng + trạng thái bơm gửi lên GCS liên tục
 ## 7. Những gì KHÔNG thay đổi
 
 - Hành vi điều hướng ArduPilot (navigation, waypoint, auto mode)
-- SA_APP_RATE và SA_BOOM_W vẫn còn trong param nhưng **không dùng trong FLOW_MODE=1** (chỉ dùng FLOW_MODE=0 tank monitor ở nấc cao)
 - Module pH (Module 2) và Dosing Motor (Module 3)
 - GCS hiển thị tất cả thông số khác của ArduRover
+
+> **Đã loại bỏ so với bản thiết kế ban đầu:** `SA_APP_RATE` và `SA_BOOM_W` (slot 12–13) đã bị gỡ bỏ hoàn toàn khỏi param — không chỉ "không dùng". Slot 12 được tái sử dụng cho `SA_PH_CAP_M` (Module 2); slot 13 không còn tham số nào. Vai trò của hai param này được thay bằng `SA_MIX_STD` / `SA_MIX_CNT` (tỉ lệ vi sinh theo nấc RC).
 
 ---
 

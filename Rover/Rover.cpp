@@ -35,6 +35,9 @@
 
 #include "Rover.h"
 
+// Shoes_Agtech: AUTO_TIMER scheduled auto-run needs GPS/RTC local time
+#include <AP_RTC/AP_RTC.h>
+
 #define FORCE_VERSION_H_INCLUDE
 #include "version.h"
 #undef FORCE_VERSION_H_INCLUDE
@@ -131,6 +134,8 @@ const AP_Scheduler::Task Rover::scheduler_tasks[] = {
     SCHED_TASK_CLASS(ModeSmartRTL, &rover.mode_smartrtl, save_position, 3, 200,
                      90),
     SCHED_TASK(one_second_loop, 1, 1500, 96),
+    // Shoes_Agtech: AUTO_TIMER scheduled auto-run, checked once a second
+    SCHED_TASK(update_auto_timer, 1, 200, 97),
 #if HAL_SPRAYER_ENABLED
     SCHED_TASK_CLASS(AC_Sprayer, &rover.g2.sprayer, update, 3, 90, 99),
 #endif
@@ -532,6 +537,224 @@ void Rover::update_custom_flow(void) {
 #endif
 }
 // [/AP_ShoesAgtech] -------------------------------------------------------
+
+// Shoes_Agtech: -----------------------------------------------------------
+// AUTO_TIMER — hen gio chay tu dong. Moi giay kiem tra gio dia phuong
+// (AUTO_TIMER_TZ) so voi 3 moc AUTO_TIMER1/2/3. Khi toi/qua 1 moc (lan dau
+// trong ngay) va DA ARM SAN (nguoi van hanh tu arm truoc, co giam sat, roi
+// moi roi di) - BAT KE dang o mode nao: reset mission ve waypoint dau va
+// chuyen sang mode AUTO — vi dang ARM nen xe SE BAT DAU CHAY MISSION NGAY,
+// khong can ai co mat luc do. Neu dang KHONG arm luc do gio thi AN TOAN HON
+// la bo qua, chi bao info, khong tu chuyen mode/mission. Khong con kiem tra
+// mode hien tai truoc khi chuyen (bo theo yeu cau) - neu 1 moc khac dang
+// chay mission ma toi gio 1 moc sau, mission se bi reset lai tu waypoint dau.
+// Dinh dang moi AUTO_TIMER1/2/3: nhap THANG gio.phut (vd 15.30 = 15h30p,
+// KHONG phai phan so gio nhu SA_PH_MS). 0 = tat slot. Phan phut (2 chu so
+// sau dau cham) phai < 60, neu khong -> khong hop le. hh=24 & mm=0 (tuc
+// "24.00") = quy uoc rieng cho nua dem (00:00), vi 0 da danh cho "tat".
+enum class AutoTimerSlotState : uint8_t { DISABLED, INVALID, VALID };
+
+static AutoTimerSlotState auto_timer_parse_slot(float t, uint8_t &hh,
+                                                uint8_t &mm) {
+  if (t <= 0.0f) {
+    return AutoTimerSlotState::DISABLED;
+  }
+  const int hh_i = (int)t;
+  const int mm_i = (int)((t - (float)hh_i) * 100.0f + 0.5f);
+  if (mm_i >= 60 || hh_i > 24 || (hh_i == 24 && mm_i != 0)) {
+    return AutoTimerSlotState::INVALID;
+  }
+  hh = (uint8_t)((hh_i == 24) ? 0 : hh_i); // "24.00" quy uoc = nua dem 00:00
+  mm = (uint8_t)mm_i;
+  return AutoTimerSlotState::VALID;
+}
+
+void Rover::update_auto_timer(void) {
+  // Neu phien AUTO hien tai la do AUTO_TIMER kich hoat: theo doi mission.
+  // Mission xong (MISSION_COMPLETE) -> tu dong chuyen ve MANUAL. Neu mode da
+  // bi doi khoi AUTO vi ly do khac (nguoi dung/failsafe/RC...) -> ngung theo
+  // doi, khong con la phien cua AUTO_TIMER nua. Chay TRUOC ca kiem tra
+  // AUTO_TIMER master-enable, de van hoan tat dung cam ket ngay ca khi
+  // AUTO_TIMER vua bi tat giua chung mission.
+  if (_auto_timer_active) {
+    if (control_mode != &mode_auto) {
+      _auto_timer_active = false; // da roi AUTO vi ly do khac
+    } else if (mode_auto.mission.state() == AP_Mission::MISSION_COMPLETE) {
+      _auto_timer_active = false;
+      set_mode(mode_manual, ModeReason::MISSION_END);
+      gcs().send_text(MAV_SEVERITY_INFO,
+                      "AUTO_TIMER: mission xong - tu dong ve mode MANUAL");
+    }
+  }
+
+  if (g.auto_timer.get() <= 0) {
+    return;
+  }
+
+  const float slots[3] = {g.auto_timer1.get(), g.auto_timer2.get(),
+                          g.auto_timer3.get()};
+
+  // Phat hien nguoi dung vua sua AUTO_TIMERx (vd sua lai gio sau khi bi bo
+  // qua vi da qua gio). Neu gia tri moi chua toi gio thi se chay lai binh
+  // thuong ngay (khong doi den ngay mai), va in 1 dong INFO bao cap nhat.
+  for (uint8_t i = 0; i < 3; i++) {
+    if (!_auto_timer_last_val_init[i]) {
+      _auto_timer_last_val_init[i] = true;
+      _auto_timer_last_val[i] = slots[i];
+      continue; // lan doc dau tien - chi ghi nhan, khong bao "thay doi"
+    }
+    if (fabsf(slots[i] - _auto_timer_last_val[i]) <= 0.001f) {
+      continue; // khong doi
+    }
+    _auto_timer_last_val[i] = slots[i];
+    _auto_timer_triggered_day[i] = 0;   // cho danh gia lai voi gio moi
+    _auto_timer_seen_before[i] = false; // danh gia "da qua gio" lai tu dau
+
+    uint8_t hh_c = 0, mm_c = 0;
+    switch (auto_timer_parse_slot(slots[i], hh_c, mm_c)) {
+    case AutoTimerSlotState::DISABLED:
+      gcs().send_text(MAV_SEVERITY_INFO, "AUTO_TIMER%u: da tat",
+                      (unsigned)(i + 1));
+      break;
+    case AutoTimerSlotState::INVALID:
+      gcs().send_text(MAV_SEVERITY_WARNING,
+                      "AUTO_TIMER%u: gia tri moi %.2f khong hop le",
+                      (unsigned)(i + 1), (double)slots[i]);
+      break;
+    case AutoTimerSlotState::VALID:
+      gcs().send_text(MAV_SEVERITY_INFO,
+                      "AUTO_TIMER%u: cap nhat gio moi %02u:%02u",
+                      (unsigned)(i + 1), (unsigned)hh_c, (unsigned)mm_c);
+      break;
+    }
+  }
+
+  if (!_auto_timer_boot_logged) {
+    _auto_timer_boot_logged = true;
+    // "--:--" = tat slot; "LOI" = gia tri nhap sai (phut >=60); nguoc lai
+    // hien thi HH:MM that su. Buffer 32 byte du du de tranh canh bao
+    // -Wformat-truncation (GCC uoc luong worst-case cho %u co the toi 10 chu
+    // so du gia tri thuc luon nam trong uint8_t).
+    char hm[3][32];
+    for (uint8_t i = 0; i < 3; i++) {
+      uint8_t hh = 0, mm = 0;
+      switch (auto_timer_parse_slot(slots[i], hh, mm)) {
+      case AutoTimerSlotState::DISABLED:
+        snprintf(hm[i], sizeof(hm[i]), "--:--");
+        break;
+      case AutoTimerSlotState::INVALID:
+        snprintf(hm[i], sizeof(hm[i]), "LOI");
+        break;
+      case AutoTimerSlotState::VALID:
+        snprintf(hm[i], sizeof(hm[i]), "%02u:%02u", (unsigned)hh,
+                (unsigned)mm);
+        break;
+      }
+    }
+    gcs().send_text(MAV_SEVERITY_INFO, "AUTO_TIMER bat: moc %s %s %s", hm[0],
+                    hm[1], hm[2]);
+  }
+
+  uint64_t utc_usec;
+  if (!AP::rtc().get_utc_usec(utc_usec)) {
+    return; // chua co gio GPS/RTC
+  }
+
+  const int8_t tz = constrain_int16(g.auto_timer_tz.get(), -12, 14);
+  const uint32_t utc_sec = (uint32_t)(utc_usec / 1000000ULL);
+  const uint32_t local_sec = utc_sec + (uint32_t)((int32_t)tz * 3600);
+  const uint32_t today = local_sec / 86400U;
+  const float local_h = (float)(local_sec % 86400U) / 3600.0f;
+  const uint32_t now_ms = AP_HAL::millis();
+
+  // Sang ngay moi - reset "da tung thay chua toi gio" cho ca 3 moc.
+  if (today != _auto_timer_seen_day) {
+    _auto_timer_seen_day = today;
+    _auto_timer_seen_before[0] = false;
+    _auto_timer_seen_before[1] = false;
+    _auto_timer_seen_before[2] = false;
+  }
+
+  for (uint8_t i = 0; i < 3; i++) {
+    uint8_t hh = 0, mm = 0;
+    const AutoTimerSlotState state = auto_timer_parse_slot(slots[i], hh, mm);
+
+    if (state == AutoTimerSlotState::DISABLED) {
+      continue;
+    }
+    if (state == AutoTimerSlotState::INVALID) {
+      // Canh bao gia tri sai, rate-limit 60s de khong spam log.
+      if (now_ms - _auto_timer_invalid_warn_ms[i] >= 60000U) {
+        _auto_timer_invalid_warn_ms[i] = now_ms;
+        gcs().send_text(MAV_SEVERITY_WARNING,
+                        "AUTO_TIMER%u: gia tri %.2f khong hop le (phut phai "
+                        "<60) - bo qua",
+                        (unsigned)(i + 1), (double)slots[i]);
+      }
+      continue;
+    }
+
+    const float target_h = (float)hh + (float)mm / 60.0f;
+
+    if (_auto_timer_triggered_day[i] == today) {
+      continue; // moc nay da xu ly hom nay roi
+    }
+    if (local_h < target_h) {
+      // Chua toi gio - nhung xac nhan la DA THEO DOI truoc gio hen hom nay,
+      // de phan biet voi truong hop moi co GPS/RTC SAU KHI gio da troi qua.
+      _auto_timer_seen_before[i] = true;
+      continue;
+    }
+
+    // Tu day tro xuong: local_h >= target_h. Danh dau da xu ly moc nay hom
+    // nay - bat ke ket qua ben duoi la gi, khong thu lai nua cho den ngay moi.
+    _auto_timer_triggered_day[i] = today;
+
+    if (!_auto_timer_seen_before[i]) {
+      // Nguy hiem neu bo qua buoc nay: chua tung thay "chua toi gio" hom nay
+      // truoc khi phat hien da qua gio - nghia la he thong (hoac GPS/RTC)
+      // moi san sang SAU KHI gio hen da troi qua (vd boot tre trong ngay).
+      // KHONG kich hoat chuyen mode "bu" cho gio da qua - chi bao 1 dong info.
+      gcs().send_text(MAV_SEVERITY_INFO,
+                      "AUTO_TIMER%u (%02u:%02u): da qua gio - bo qua hom nay",
+                      (unsigned)(i + 1), (unsigned)hh, (unsigned)mm);
+      continue;
+    }
+
+    // YEU CAU BAT BUOC: phai DA ARM san (nguoi van hanh tu arm truoc, co
+    // giam sat, roi moi roi di) thi den gio moi duoc tu dong chuyen AUTO -
+    // vi chuyen mode trong luc DANG ARM se lam xe CHAY MISSION NGAY LAP TUC.
+    // Neu dang KHONG arm luc do -> AN TOAN HON la bo qua, khong tu chuyen
+    // mode (tranh chuan bi xe khong nguoi giam sat).
+    if (!hal.util->get_soft_armed()) {
+      gcs().send_text(MAV_SEVERITY_INFO,
+                      "AUTO_TIMER%u (%02u:%02u): chua ARM - bo qua tu dong "
+                      "chuyen AUTO",
+                      (unsigned)(i + 1), (unsigned)hh, (unsigned)mm);
+      continue;
+    }
+
+    if (control_mode == &mode_auto) {
+      // Da o mode AUTO san (do AUTO_TIMER khac dang chay, hoac nguoi dung tu
+      // bat AUTO binh thuong) - bo qua, tranh xung dot/reset ngang mission
+      // dang chay.
+      gcs().send_text(MAV_SEVERITY_INFO,
+                      "AUTO_TIMER%u (%02u:%02u): dang o mode AUTO - bo qua "
+                      "tranh xung dot",
+                      (unsigned)(i + 1), (unsigned)hh, (unsigned)mm);
+      continue;
+    }
+
+    mode_auto.mission.reset(); // rewind ve waypoint dau
+    set_mode(mode_auto, ModeReason::UNKNOWN);
+    _auto_timer_active = true; // phien AUTO nay la do AUTO_TIMER kich hoat
+    gcs().send_text(MAV_SEVERITY_INFO,
+                    "AUTO_TIMER%u (%02u:%02u): da ARM - chuyen sang mode "
+                    "AUTO, xe bat dau chay ngay",
+                    (unsigned)(i + 1), (unsigned)hh, (unsigned)mm);
+  }
+}
+// [/Shoes_Agtech] -----------------------------------------------------------
 
 void Rover::update_current_mode(void) {
   // check for emergency stop

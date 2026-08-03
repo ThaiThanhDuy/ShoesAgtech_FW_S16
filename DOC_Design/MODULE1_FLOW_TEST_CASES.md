@@ -4,30 +4,39 @@
 
 **Dự án:** `ardupilot-jbdcan_testing_S16`
 **File nguồn:** `libraries/AP_ShoesAgtech/AP_ShoesAgtech.cpp/.h`
-**Ngày viết:** 2026-07-08
+**Ngày viết:** 2026-07-08 | **Cập nhật lần cuối:** 2026-07-16
+
+> **Thay đổi quan trọng so với bản trước:** `SA_APP_RATE` và `SA_BOOM_W` đã bị gỡ bỏ hoàn toàn khỏi firmware — công thức FLOW_MODE=1 cũ (`q1 = r × APP_RATE × speed × BOOM_W × 0.006`, `dist_max` cố định không đổi theo tốc độ) **không còn đúng**. Toàn bộ TC-04, TC-05, TC-06, TC-08, TC-09 trong file này đã được tính lại theo công thức hiện tại:
+> ```
+> q1 = SA_TANK_VOL × r × speed × 60 / mission_dist        (L/min)
+> dist_max (tại speed hiện tại) = SA_TANK_VOL × r × speed × 60 / 0.3   (m — trần trên trước khi q1 < 0.3)
+> dist_min (tại speed hiện tại) = SA_TANK_VOL × r × speed × 60 / 2.0   (m — trần dưới trước khi q1 > 2.0)
+> vi_per_run = SA_TANK_VOL × r    (hằng số — KHÔNG đổi theo speed/mission, xem giải thích ở TC-04)
+> ```
+> **Khác biệt lớn nhất:** `dist_max`/`dist_min` giờ phụ thuộc tốc độ xe tại thời điểm tính (không còn là hằng số cố định như công thức cũ). Kết quả là **một kịch bản test cũ (nấc cao, tank 16L, mission 301m, v=1.3 m/s) không còn PASS** với công thức mới — xem TC-05 bên dưới để biết vì sao và cách chỉnh tốc độ vận hành cho phù hợp.
 
 ---
 
 ## Thông số phần cứng dùng trong tất cả các test
 
 | Thông số           | Giá trị       | Ghi chú                                          |
-| ------------------ | ------------- | ------------------------------------------------ |
+| ------------------- | ------------- | ------------------------------------------------ |
 | Cảm biến lưu lượng | YF-S402B      | Dải 0.3–6 L/min                                  |
 | SA_CAL_FAC         | **1745**      | Calibrated (pulses/L)                            |
-| SA_APP_RATE        | **150** L/ha  | Suất phun                                        |
-| SA_BOOM_W          | **2.0** m     | Sải phun                                         |
-| SA_TANK_VOL        | **16** L      | Thùng vi sinh                                    |
+| SA_TANK_VOL        | **16** L      | Tham chiếu định lượng vi sinh cho FLOW_MODE=1 — xem lưu ý TC-04 |
 | SA_MIX_STD         | **0.35**      | Nấc giữa — van vi sinh mức 2                     |
 | SA_MIX_CNT         | **0.50**      | Nấc cao — van vi sinh mức 2 (same), chỉnh van hồ |
-| SA_FLOW_SP         | **1.2** L/min | Max vi sinh vật lý tại van vi sinh mức 2         |
+| SA_FLOW_SP         | **1.2** L/min | Max vi sinh vật lý tại van vi sinh mức 2 (dùng cho TC-02/03, FLOW_MODE=0) |
 | SA_PID_P           | **80**        | µs per L/min error                               |
 | SA_PID_I           | **20**        | µs per L/min/s                                   |
 | SA_PID_LPF         | **0.3**       | Output smoothing                                 |
 | SERVO8_MIN         | **1000**      | pwm_min bơm                                      |
 | SERVO8_TRIM        | **1500**      | pwm_trim bơm                                     |
 | SERVO8_MAX         | **2000**      | pwm_max bơm                                      |
-| Vận tốc thực tế    | **1.3** m/s   | Tốc độ xe phun                                   |
+| Vận tốc thực tế    | **1.3** m/s   | Tốc độ xe phun (nấc giữa) — xem TC-05 cho nấc cao |
 | Mission distance   | **301** m     | Tuyến đường đã upload                            |
+
+> **Lưu ý:** Từ bản này, `SA_TANK_VOL` **không phải** dung tích vật lý của thùng chứa — đây là hằng số hiệu chuẩn: "tổng lượng vi sinh sẽ dùng cho **một** lần chạy hết mission, nếu tỉ lệ trộn r=1.0 (100%)". Với `r` (SA_MIX_STD/SA_MIX_CNT) < 1.0, lượng thực tế dùng mỗi lần chạy = `SA_TANK_VOL × r` (xem TC-04). Firmware **không** theo dõi mức vi sinh còn lại trong thùng vật lý ở FLOW_MODE=1 — người vận hành tự đối chiếu bằng cách đo trực tiếp.
 
 ---
 
@@ -36,7 +45,7 @@
 **Điều kiện:** RC nấc dưới → `_spray_mode = 0`
 
 | Bước | Hành động                           | Kết quả mong đợi                                |
-| ---- | ----------------------------------- | ----------------------------------------------- |
+| ---- | ------------------------------------ | ------------------------------------------------ |
 | 1    | Gạt RC về nấc thấp nhất             | GCS: không có SA log                            |
 | 2    | Chỉnh RC_PUMP (kênh 9) lên ~1700 µs | SERVO8 output = 1700 µs (passthrough trực tiếp) |
 | 3    | Chỉnh RC_PUMP xuống 1100 µs         | SERVO8 output = 1100 µs                         |
@@ -81,7 +90,7 @@ PWM ổn định  ≈ 1500 + (offset để duy trì 1.2 L/min)
 ### TC-02b — Steady-state (sau hội tụ)
 
 | Đo                       | Giá trị                        | Cách kiểm tra         |
-| ------------------------ | ------------------------------ | --------------------- |
+| ------------------------- | ------------------------------- | ---------------------- |
 | SA_DATA[0] (flow EMA)    | **1.2** L/min (±0.05)          | GCS MAVLink Inspector |
 | SA_DATA[2] (flow_target) | **1.2** L/min                  | GCS                   |
 | SA_DATA[3] (pump_pwm)    | Ổn định, không dao động        | GCS                   |
@@ -126,7 +135,7 @@ flow_target = SA_FLOW_SP × (MIX_CNT / MIX_STD)
 > hạn vật lý → pump_pwm sẽ ở mức cao (gần 2000 µs).
 
 | Đo                       | Giá trị         | Ghi chú                       |
-| ------------------------ | --------------- | ----------------------------- |
+| ------------------------- | ---------------- | ------------------------------ |
 | SA_DATA[2] (flow_target) | **1.714** L/min | Tự tính từ ratio              |
 | SA_DATA[0] (flow actual) | **~1.2** L/min  | Giới hạn vật lý van vi sinh   |
 | SA_DATA[3] (pump_pwm)    | **~2000** µs    | Pump max vì target > khả năng |
@@ -141,114 +150,101 @@ flow_target = SA_FLOW_SP × (MIX_CNT / MIX_STD)
 SA_FLOW_MODE = 1
 SA_TANK_VOL  = 16
 SA_MIX_STD   = 0.35
-SA_APP_RATE  = 150
-SA_BOOM_W    = 2.0
 SA_FLOW_VEL  = 0       (dùng vận tốc thật)
 ```
 
----
-
-### TC-04a — Kiểm tra dist_max (trước khi ARM)
-
-```
-dist_max = TANK_VOL × 10000 / (MIX_STD × APP_RATE × BOOM_W)
-         = 16 × 10000 / (0.35 × 150 × 2.0)
-         = 160 000 / 105
-         = 1 523.8 m
-```
-
-**Mission 301 m < 1 523.8 m → PASS — bơm cho phép chạy**
-
-> Thùng 16 L đủ cho tuyến đường tối đa **1 524 m** ở vận tốc bất kỳ.
-> Mission 301 m chỉ tiêu thụ ~21% dung tích thùng.
+Mission đã upload: **301 m**. Vận tốc vận hành: **1.3 m/s**.
 
 ---
 
-### TC-04b — q1_target thay đổi theo vận tốc
+### TC-04a — Công thức và giá trị tại tốc độ vận hành (1.3 m/s)
 
-Công thức: `q1 = 0.35 × 150 × v × 2.0 × 0.006 = 0.630 × v`
+```
+q1       = SA_TANK_VOL × r × speed × 60 / mission_dist
+         = 16 × 0.35 × 1.3 × 60 / 301
+         = 436.8 / 301
+         = 1.451 L/min                    (nằm trong dải hợp lệ 0.3–2.0 ✓)
+
+dist_max = SA_TANK_VOL × r × speed × 60 / 0.3     (trần trên mission — q1 sẽ < 0.3 nếu dài hơn)
+         = 436.8 / 0.3 = 1 456 m
+
+dist_min = SA_TANK_VOL × r × speed × 60 / 2.0     (trần dưới mission — q1 sẽ > 2.0 nếu ngắn hơn)
+         = 436.8 / 2.0 = 218.4 m
+```
+
+**Mission 301 m nằm trong khoảng (218.4 m, 1 456 m) tại 1.3 m/s → PASS — bơm cho phép chạy.**
+
+> `dist_max`/`dist_min` phụ thuộc tốc độ hiện tại — đây KHÔNG phải hằng số cố định trước khi chạy (khác với thiết kế cũ). Firmware tính lại mỗi vòng lặp theo tốc độ tức thời.
+
+---
+
+### TC-04b — q1 thay đổi theo vận tốc (mission cố định 301 m, r=0.35)
+
+Công thức rút gọn tại mission=301m: `q1 = (16 × 0.35 × 60 / 301) × v = 1.1163 × v`
 
 | Vận tốc (m/s) | q1 (L/min) | Trong dải 0.3–2.0? | Ghi chú                              |
-| ------------- | ---------- | ------------------ | ------------------------------------ |
-| 0.47          | 0.296      | ❌ < 0.3           | Xe đi quá chậm → bơm dừng + warning  |
-| **0.48**      | **0.302**  | ✅                 | Tốc độ tối thiểu để bơm hoạt động    |
-| 0.80          | 0.504      | ✅                 |                                      |
-| 1.00          | 0.630      | ✅                 |                                      |
-| **1.30**      | **0.819**  | ✅                 | **Tốc độ vận hành thực tế**          |
-| 1.50          | 0.945      | ✅                 |                                      |
-| 2.00          | 1.260      | ✅                 |                                      |
-| 3.17          | 1.997      | ✅                 | Tốc độ tối đa trước khi vượt ngưỡng  |
-| **3.18**      | **2.003**  | ❌ > 2.0           | Xe đi quá nhanh → bơm dừng + warning |
-
-**Tại v = 1.3 m/s (vận hành thực tế):**
-
-```
-q1 = 0.35 × 150 × 1.3 × 2.0 × 0.006 = 0.819 L/min
-```
+| -------------- | ---------- | -------------------- | -------------------------------------- |
+| 0.20           | 0.223      | ❌ < 0.3           | Xe đi quá chậm → bơm dừng + warning  |
+| 0.26           | 0.290      | ❌ < 0.3           |                                       |
+| **0.27**      | **0.301**  | ✅                 | Tốc độ tối thiểu để bơm hoạt động    |
+| 0.50           | 0.558      | ✅                 |                                       |
+| 0.80           | 0.893      | ✅                 |                                       |
+| 1.00           | 1.116      | ✅                 |                                       |
+| **1.30**      | **1.451**  | ✅                 | **Tốc độ vận hành thực tế**          |
+| 1.50           | 1.674      | ✅                 |                                       |
+| 1.79           | 1.998      | ✅                 | Tốc độ tối đa trước khi vượt ngưỡng  |
+| **1.80**      | **2.009**  | ❌ > 2.0           | Xe đi quá nhanh → bơm dừng + warning |
 
 ---
 
-### TC-04c — Thời gian và lượng vi sinh cho 1 lần chạy 301 m
+### TC-04c — Lượng vi sinh dùng mỗi lần chạy hết mission (bất biến theo speed)
 
 ```
-eta_s   = 301 / 1.3 = 231.5 s
-eta_min = 231 / 60  = 3 phút
-eta_sec = 231 % 60  = 51 giây
+vi_per_run = SA_TANK_VOL × r = 16 × 0.35 = 5.6 L
+```
 
-vi_used = q1 × (eta_s / 60)
-        = 0.819 × (231.5 / 60)
-        = 0.819 × 3.858
-        = 3.16 L
+**Vì sao là hằng số:** `vi_used = q1 × (mission_dist/speed) / 60 = [TANK_VOL×r×speed×60/dist] × (dist/speed) / 60 = TANK_VOL×r`
+→ Miễn PID bám đúng q1 suốt hành trình, tổng lượng vi sinh dùng cho **một lần chạy hết mission** luôn đúng bằng `TANK_VOL × r`, bất kể tốc độ xe nhanh/chậm hay đổi giữa đường (đây là mục đích thiết kế của công thức).
+
+**Thời gian dự kiến tại 1.3 m/s:**
+
+```
+eta_s   = 301 / 1.3 = 231.5 s → eta_min = 3, eta_sec = 51   (3 phút 51 giây)
 ```
 
 **GCS message khi ARM (tất cả điều kiện OK):**
 
 ```
-SA FM1 OK: r=0.35 q1=0.82L/ph miss=301m dmax=1524m ~3m51s vi~3.2L
+SA FM1 OK: r=0.35 q1=1.45L/ph miss=301m dmax=1456m ~3m51s vi/run=5.6L
+```
+
+**Console log định kỳ khi đang chạy (SA_FLOW_LOG=1):**
+
+```
+[FLOW] FM1 r:0.35 q1:1.45L/ph miss:301m dmax:1456m spd:1.30m/s vi/run:5.6L
 ```
 
 ---
 
-### TC-04d — Bao nhiêu lần chạy với thùng 16 L?
-
-```
-Số lần chạy = TANK_VOL / vi_used = 16 / 3.16 = 5.06 lần
-```
-
-| Lần chạy  | Vi sinh tiêu thụ (L) | Còn lại trong thùng (L)     |
-| --------- | -------------------- | --------------------------- |
-| Bắt đầu   | —                    | **16.00**                   |
-| Sau lần 1 | 3.16                 | **12.84**                   |
-| Sau lần 2 | 3.16                 | **9.68**                    |
-| Sau lần 3 | 3.16                 | **6.52**                    |
-| Sau lần 4 | 3.16                 | **3.36**                    |
-| Sau lần 5 | 3.16                 | **0.20** ← cạn, cần đổ thêm |
-
-→ **5 lần chạy** đầy đủ 301 m với thùng 16 L. Lần thứ 6 cần đổ thêm vi sinh.
-
----
-
-### TC-04e — Các giá trị SA_DATA cần kiểm tra
+### TC-04d — Các giá trị SA_DATA cần kiểm tra
 
 | Field SA_DATA | Index | Giá trị mong đợi       | Cách xem          |
-| ------------- | ----- | ---------------------- | ----------------- |
-| flow_rate EMA | [0]   | **0.82** L/min (±0.05) | MAVLink Inspector |
-| flow_rate MA  | [1]   | **0.82** L/min (±0.08) | MAVLink Inspector |
-| flow_target   | [2]   | **0.819** L/min        | MAVLink Inspector |
-| pump_pwm      | [3]   | Ổn định ~1550–1700 µs  | MAVLink Inspector |
+| -------------- | ----- | ------------------------ | ------------------ |
+| flow_rate EMA | [0]   | **1.45** L/min (±0.05) | MAVLink Inspector |
+| flow_rate MA  | [1]   | **1.45** L/min (±0.08) | MAVLink Inspector |
+| flow_target   | [2]   | **1.451** L/min        | MAVLink Inspector |
+| pump_pwm      | [3]   | Ổn định, không dao động  | MAVLink Inspector |
 | spray_mode    | [4]   | **1**                  | MAVLink Inspector |
 
 ---
 
-### TC-04f — Thủ tục test thực tế
+### TC-04e — Thủ tục test thực tế
 
-1. Đổ đúng **16 L** vi sinh vào thùng, đánh dấu mực.
-2. Cài đủ param ở trên, upload mission 301 m.
-3. ARM → đọc GCS message, xác nhận: `SA FM1 OK … ~3m51s vi~3.2L`
-4. Chạy xe theo mission, giữ vận tốc ~1.3 m/s.
-5. DISARM sau khi kết thúc mission.
-6. Đo lại mực vi sinh trong thùng.
-7. **Lượng đã dùng phải nằm trong khoảng 3.0–3.4 L** (sai số ±6%).
+1. Cài đủ param ở trên, upload mission 301 m.
+2. ARM → đọc GCS message, xác nhận: `SA FM1 OK … r=0.35 q1=1.45L/ph … ~3m51s vi/run=5.6L`
+3. Chạy xe theo mission, giữ vận tốc ~1.3 m/s.
+4. DISARM sau khi kết thúc mission.
+5. Đo lại lượng vi sinh thực tế đã dùng — **phải nằm trong khoảng 5.3–5.9 L** (sai số ±6% quanh 5.6 L).
 
 ---
 
@@ -260,158 +256,145 @@ Số lần chạy = TANK_VOL / vi_used = 16 / 3.16 = 5.06 lần
 SA_FLOW_MODE = 1
 SA_TANK_VOL  = 16
 SA_MIX_CNT   = 0.50
-SA_APP_RATE  = 150
-SA_BOOM_W    = 2.0
 SA_FLOW_VEL  = 0
 ```
 
----
-
-### TC-05a — Kiểm tra dist_max
-
-```
-dist_max = 16 × 10000 / (0.50 × 150 × 2.0)
-         = 160 000 / 150
-         = 1 066.7 m
-```
-
-**Mission 301 m < 1 066.7 m → PASS**
-
-> Thùng 16 L đủ cho tuyến tối đa **1 067 m** ở nấc cao.
-> Mission 301 m tiêu thụ ~28% dung tích.
+> **Khác biệt quan trọng so với nấc giữa:** cùng `TANK_VOL=16` và mission 301 m, nấc cao (r=0.50) đòi hỏi vận tốc xe **thấp hơn** để giữ q1 trong dải 0.3–2.0. Ở tốc độ vận hành 1.3 m/s dùng cho nấc giữa (TC-04), **nấc cao sẽ FAIL** — xem TC-05a.
 
 ---
 
-### TC-05b — q1_target thay đổi theo vận tốc
-
-Công thức: `q1 = 0.50 × 150 × v × 2.0 × 0.006 = 0.900 × v`
-
-| Vận tốc (m/s) | q1 (L/min) | Trong dải 0.3–2.0? | Ghi chú                             |
-| ------------- | ---------- | ------------------ | ----------------------------------- |
-| 0.33          | 0.297      | ❌ < 0.3           | Quá chậm → bơm dừng + warning       |
-| **0.34**      | **0.306**  | ✅                 | Tốc độ tối thiểu nấc cao            |
-| 0.80          | 0.720      | ✅                 |                                     |
-| 1.00          | 0.900      | ✅                 |                                     |
-| **1.30**      | **1.170**  | ✅                 | **Tốc độ vận hành thực tế**         |
-| 1.50          | 1.350      | ✅                 |                                     |
-| 2.00          | 1.800      | ✅                 |                                     |
-| 2.22          | 1.998      | ✅                 | Tốc độ tối đa trước khi vượt ngưỡng |
-| **2.23**      | **2.007**  | ❌ > 2.0           | Quá nhanh → bơm dừng + warning      |
-
-**Tại v = 1.3 m/s:**
+### TC-05a — Kiểm tra ở tốc độ 1.3 m/s (giống TC-04) → FAIL
 
 ```
-q1 = 0.50 × 150 × 1.3 × 2.0 × 0.006 = 1.170 L/min
+q1       = 16 × 0.50 × 1.3 × 60 / 301 = 624 / 301 = 2.073 L/min   ❌ > 2.0
+dist_min = 16 × 0.50 × 1.3 × 60 / 2.0 = 624 / 2.0  = 312 m
 ```
 
----
-
-### TC-05c — Thời gian và lượng vi sinh cho 1 lần chạy 301 m
-
-```
-eta_s   = 301 / 1.3 = 231.5 s → 3 phút 51 giây
-
-vi_used = 1.170 × (231.5 / 60)
-        = 1.170 × 3.858
-        = 4.51 L
-```
+**Mission 301 m < dist_min 312 m tại 1.3 m/s → FAIL — bơm dừng khi ARM.**
 
 **GCS message khi ARM:**
 
 ```
-SA FM1 OK: r=0.50 q1=1.17L/ph miss=301m dmax=1067m ~3m51s vi~4.5L
+SA FM1: q1=2.07L/ph > 2.0 @1.3m/s dist=301m - kéo dài mission (dmin=312m)
 ```
+
+**SA_DATA[2] (flow_target) = 0.0**, bơm không chạy cho đến khi giảm tốc độ hoặc kéo dài mission.
+
+---
+
+### TC-05b — Tốc độ vận hành an toàn cho nấc cao: 1.0 m/s
+
+```
+q1       = 16 × 0.50 × 1.0 × 60 / 301 = 480 / 301 = 1.595 L/min   ✅ (0.3–2.0)
+dist_max = 16 × 0.50 × 1.0 × 60 / 0.3 = 480 / 0.3  = 1 600 m
+dist_min = 16 × 0.50 × 1.0 × 60 / 2.0 = 480 / 2.0  =   240 m
+```
+
+**Mission 301 m nằm trong (240 m, 1 600 m) tại 1.0 m/s → PASS.**
 
 **GCS message khi ARM:**
 
 ```
-SA FM1 OK: r=0.50 q1=1.17L/ph miss=301m dmax=1067m ~3m51s vi~4.5L
+SA FM1 OK: r=0.50 q1=1.59L/ph miss=301m dmax=1600m ~5m01s vi/run=8.0L
+```
+
+**Console log định kỳ khi đang chạy:**
+
+```
+[FLOW] FM1 r:0.50 q1:1.59L/ph miss:301m dmax:1600m spd:1.00m/s vi/run:8.0L
 ```
 
 ---
 
-### TC-05d — Bao nhiêu lần chạy với thùng 16 L?
+### TC-05c — q1 thay đổi theo vận tốc (mission cố định 301 m, r=0.50)
 
-```
-Số lần chạy = 16 / 4.51 = 3.55 lần
-```
+Công thức rút gọn: `q1 = (16 × 0.50 × 60 / 301) × v = 1.5947 × v`
 
-| Lần chạy  | Vi sinh tiêu thụ (L) | Còn lại trong thùng (L)       |
-| --------- | -------------------- | ----------------------------- |
-| Bắt đầu   | —                    | **16.00**                     |
-| Sau lần 1 | 4.51                 | **11.49**                     |
-| Sau lần 2 | 4.51                 | **6.98**                      |
-| Sau lần 3 | 4.51                 | **2.47** ← không đủ cho lần 4 |
-
-→ **3 lần chạy** đầy đủ 301 m. Sau lần 3 còn **2.47 L** trong thùng — cần đổ thêm.
+| Vận tốc (m/s) | q1 (L/min) | Trong dải 0.3–2.0? | Ghi chú                                    |
+| -------------- | ---------- | -------------------- | --------------------------------------------- |
+| 0.18           | 0.287      | ❌ < 0.3           |                                               |
+| **0.19**      | **0.303**  | ✅                 | Tốc độ tối thiểu nấc cao                    |
+| 0.50           | 0.797      | ✅                 |                                               |
+| **1.00**      | **1.595**  | ✅                 | **Tốc độ vận hành khuyến nghị (TC-05b)**    |
+| 1.25           | 1.993      | ✅                 | Gần trần                                     |
+| **1.26**      | **2.010**  | ❌ > 2.0           | Vượt ngưỡng — thấp hơn nhiều so với nấc giữa |
+| 1.30           | 2.073      | ❌ > 2.0           | Chính là TC-05a (FAIL)                        |
 
 ---
 
-### TC-05e — Các giá trị SA_DATA cần kiểm tra
+### TC-05d — Lượng vi sinh mỗi lần chạy (hằng số, xem giải thích TC-04c)
+
+```
+vi_per_run = SA_TANK_VOL × r = 16 × 0.50 = 8.0 L    (không đổi theo speed, tại v=1.0 hay bất kỳ v hợp lệ nào)
+```
+
+---
+
+### TC-05e — Các giá trị SA_DATA cần kiểm tra (tại v=1.0 m/s)
 
 | Field SA_DATA | Index | Giá trị mong đợi       | Cách xem          |
-| ------------- | ----- | ---------------------- | ----------------- |
-| flow_rate EMA | [0]   | **1.17** L/min (±0.06) | MAVLink Inspector |
-| flow_rate MA  | [1]   | **1.17** L/min (±0.10) | MAVLink Inspector |
-| flow_target   | [2]   | **1.170** L/min        | MAVLink Inspector |
-| pump_pwm      | [3]   | Ổn định ~1600–1800 µs  | MAVLink Inspector |
+| -------------- | ----- | ------------------------ | ------------------ |
+| flow_rate EMA | [0]   | **1.59** L/min (±0.06) | MAVLink Inspector |
+| flow_rate MA  | [1]   | **1.59** L/min (±0.10) | MAVLink Inspector |
+| flow_target   | [2]   | **1.595** L/min        | MAVLink Inspector |
+| pump_pwm      | [3]   | Ổn định, không dao động  | MAVLink Inspector |
 | spray_mode    | [4]   | **2**                  | MAVLink Inspector |
 
 ---
 
 ### TC-05f — Thủ tục test thực tế
 
-1. Đổ đúng **16 L** vi sinh vào thùng, đánh dấu mực.
-2. Cài đủ param ở trên, upload mission 301 m.
-3. ARM → đọc GCS message, xác nhận: `SA FM1 OK … ~3m51s vi~4.5L`
-4. Gạt RC về **nấc cao** (spray_mode = 2).
-5. Chạy xe theo mission, giữ vận tốc ~1.3 m/s.
-6. DISARM sau khi kết thúc mission.
-7. Đo lại mực vi sinh trong thùng.
-8. **Lượng đã dùng phải nằm trong khoảng 4.3–4.8 L** (sai số ±6%).
+1. Cài đủ param ở trên, upload mission 301 m.
+2. Gạt RC về **nấc cao** (spray_mode = 2).
+3. ARM → đọc GCS message, xác nhận: `SA FM1 OK … r=0.50 q1=1.59L/ph … ~5m01s vi/run=8.0L`
+   - Nếu vô tình chạy ở tốc độ ~1.3 m/s như nấc giữa, GCS sẽ báo FAIL (xem TC-05a) — đây là hành vi đúng, không phải lỗi.
+4. Chạy xe theo mission, giữ vận tốc ~**1.0 m/s** (chậm hơn nấc giữa).
+5. DISARM sau khi kết thúc mission.
+6. Đo lại lượng vi sinh thực tế đã dùng — **phải nằm trong khoảng 7.5–8.5 L** (sai số ±6% quanh 8.0 L).
 
 ---
 
-## So sánh nấc giữa (TC-04) và nấc cao (TC-05) — Thùng 16 L, Mission 301 m
+## So sánh nấc giữa (TC-04) và nấc cao (TC-05) — Tank ref. 16 L, Mission 301 m
 
-| Chỉ số              | Nấc giữa (r=0.35)     | Nấc cao (r=0.50)      | Chênh lệch |
-| ------------------- | --------------------- | --------------------- | ---------- |
-| dist_max            | 1 523.8 m             | 1 066.7 m             | −30%       |
-| q1 tại 1.3 m/s      | 0.819 L/min           | 1.170 L/min           | +43%       |
-| Thời gian 1 lần     | 3 phút 51 giây        | 3 phút 51 giây        | Bằng nhau  |
-| Vi sinh 1 lần 301 m | **3.16 L**            | **4.51 L**            | +43%       |
-| Số lần chạy 301 m   | **5 lần** (dư 0.20 L) | **3 lần** (dư 2.47 L) |            |
-| Tốc độ tối thiểu    | 0.48 m/s              | 0.34 m/s              |            |
-| Tốc độ tối đa       | 3.17 m/s              | 2.22 m/s              |            |
+| Chỉ số                          | Nấc giữa (r=0.35)     | Nấc cao (r=0.50)       | Ghi chú |
+| --------------------------------- | ----------------------- | ------------------------- | ------- |
+| Tốc độ vận hành khuyến nghị    | 1.3 m/s                 | 1.0 m/s                   | Nấc cao cần **chậm hơn** để giữ q1 ≤ 2.0 với cùng tank/mission |
+| q1 tại tốc độ khuyến nghị      | 1.451 L/min             | 1.595 L/min               |         |
+| vi_per_run                       | **5.6 L**               | **8.0 L**                 | = TANK_VOL × r, hằng số |
+| Tốc độ tối thiểu (mission 301m) | 0.27 m/s                | 0.19 m/s                  |         |
+| Tốc độ tối đa (mission 301m)    | 1.79 m/s                | 1.25 m/s                  | Nấc cao có dải tốc độ hẹp hơn nhiều |
+| Chạy ở 1.3 m/s?                  | ✅ PASS (q1=1.451)      | ❌ FAIL (q1=2.073 > 2.0) | Xem TC-05a |
 
 ---
 
-## TC-06 — FAIL CASE: Tank 3L, mission 301 m (dist > dist_max)
+## TC-06 — FAIL CASE: Tank tham chiếu quá nhỏ so với mission (q1 < 0.3)
 
 **Cài param:**
 
 ```
-SA_TANK_VOL = 3
-SA_MIX_STD  = 0.35
+SA_FLOW_MODE = 1
+SA_TANK_VOL  = 3
+SA_MIX_STD   = 0.35
 ```
 
+Mission 301 m, tốc độ vận hành 1.3 m/s (giống TC-04):
+
 ```
-dist_max = 3 × 10000 / (0.35 × 150 × 2.0)
-         = 30000 / 105
-         = 285.7 m
+q1       = 3 × 0.35 × 1.3 × 60 / 301 = 81.9 / 301 = 0.272 L/min   ❌ < 0.3
+dist_max = 3 × 0.35 × 1.3 × 60 / 0.3 = 81.9 / 0.3  = 273 m
 ```
 
-**Mission 301 m > 285.7 m → FAIL → bơm dừng!**
+**Mission 301 m > dist_max 273 m tại 1.3 m/s → FAIL → bơm dừng!**
 
 **GCS message khi ARM:**
 
 ```
-SA FM1: mission 301m > dmax 286m - vẽ lại mission ngắn hơn
+SA FM1: q1=0.27L/ph < 0.3 @1.3m/s dist=301m - rút ngắn mission (dmax=273m)
 ```
 
-**SA_DATA[2]:** = 0.0 (pump bị force về min), bơm không chạy.
+**SA_DATA[2]** = 0.0 (flow_target=0), bơm không chạy.
 
-**Cách fix:** Rút ngắn mission xuống ≤ 285 m hoặc tăng TANK_VOL.
+**Cách fix:** Rút ngắn mission xuống ≤ 273 m, tăng tốc độ xe, hoặc tăng `SA_TANK_VOL` (thùng tham chiếu lớn hơn).
 
 ---
 
@@ -422,11 +405,11 @@ SA FM1: mission 301m > dmax 286m - vẽ lại mission ngắn hơn
 **Kết quả firmware:**
 
 - `_compute_visin_target()` trả về 0.0
-- Pump bị force về `SERVO8_MIN` = 1000 µs
+- Pump bị force về `SERVO8_MIN` = 1000 µs (qua `ch->get_output_min()`)
 - Bơm dừng ngay lập tức
 - Khi xe chạy lại (speed > 0.1), bơm tự tiếp tục
 
-**Không có GCS warning** khi speed ≤ 0.1 (chỉ warning khi ARM).
+**Không có GCS warning** khi speed ≤ 0.1 (chỉ warning khi ARM hoặc khi q1 ngoài dải 0.3–2.0).
 
 ---
 
@@ -435,14 +418,16 @@ SA FM1: mission 301m > dmax 286m - vẽ lại mission ngắn hơn
 **Cài param:**
 
 ```
-SA_FLOW_VEL = 1.3   (ép vận tốc = 1.3 m/s, xe đứng yên)
+SA_TANK_VOL  = 16
+SA_MIX_STD   = 0.35
+SA_FLOW_VEL  = 1.3   (ép vận tốc = 1.3 m/s, xe đứng yên)
 SA_FLOW_MODE = 1
 ```
 
-**q1_target giả lập (nấc giữa):**
+**q1_target giả lập (nấc giữa, mission 301m — giống hệt TC-04a vì cùng công thức):**
 
 ```
-q1 = 0.35 × 150 × 1.3 × 2.0 × 0.006 = 0.819 L/min
+q1 = 16 × 0.35 × 1.3 × 60 / 301 = 1.451 L/min
 ```
 
 Bơm chạy như xe đang đi 1.3 m/s dù đứng yên → dùng để calib PID không cần xe chạy.
@@ -451,39 +436,39 @@ Bơm chạy như xe đang đi 1.3 m/s dù đứng yên → dùng để calib PID
 
 ---
 
-## TC-09 — Kiểm tra cảnh báo q1 ngoài dải (0.3–2.0 L/min)
+## TC-09 — Kiểm tra cảnh báo q1 ngoài dải (0.3–2.0 L/min), khi đang chạy (không phải lúc ARM)
+
+Cấu hình giống TC-04 (`TANK_VOL=16`, `r=SA_MIX_STD=0.35`, mission=301m). Cảnh báo runtime này **không kèm dmax/dmin** (khác với cảnh báo lúc ARM ở TC-05a/TC-06) — dmax/dmin chỉ được tính và in trong thông báo lúc ARM.
 
 ### TC-09a — q1 < 0.3 L/min (speed quá thấp)
 
-Speed = 0.2 m/s:
+Speed = 0.20 m/s:
 
 ```
-q1 = 0.35 × 150 × 0.2 × 2.0 × 0.006 = 0.126 L/min < 0.3
+q1 = 16 × 0.35 × 0.20 × 60 / 301 = 67.2 / 301 = 0.223 L/min   < 0.3
 ```
 
-→ Bơm dừng, GCS warning:
+→ Bơm dừng, GCS warning (mỗi 5s trong lúc vẫn ở trạng thái này):
 
 ```
-SA FM1: Q visin 0.13L/min < 0.3 - tang mission_dist hoac giam speed
+SA FM1: q1=0.22L/ph < 0.3 - rút ngắn mission hoặc tăng speed
 ```
 
 ### TC-09b — q1 > 2.0 L/min (speed quá cao)
 
-Speed = 3.5 m/s, MIX_STD = 0.35:
+Speed = 2.5 m/s:
 
 ```
-q1 = 0.35 × 150 × 3.5 × 2.0 × 0.006 = 2.205 L/min > 2.0
+q1 = 16 × 0.35 × 2.5 × 60 / 301 = 840 / 301 = 2.791 L/min   > 2.0
 ```
 
-→ Bơm dừng, GCS warning:
+→ Bơm dừng, GCS warning (mỗi 5s):
 
 ```
-SA FM1: Q visin 2.21L/min > 6.0 - giam mission_dist hoac tang speed
+SA FM1: q1=2.79L/ph > 2.0 - kéo dài mission hoặc giảm speed
 ```
 
-_(Lưu ý: warning text trong code dùng "> 6.0" nhưng threshold thực tế là 2.0)_
-
-**Cách fix:** Giảm APP_RATE hoặc SA_MIX_STD, hoặc tăng BOOM_W.
+**Cách fix:** Giảm tốc độ xe, hoặc kéo dài mission, hoặc giảm `SA_MIX_STD`/tăng `SA_TANK_VOL` cho phù hợp.
 
 ---
 
@@ -515,11 +500,11 @@ actual_flow  = volume_L / time_min (đo bằng bình + đồng hồ)
 **Ví dụ đã calib (lấy từ thực tế dự án):**
 
 | Lần      | old_CAL_FAC | Thể tích thực                 | Thời gian | Lưu lượng thực | GCS đọc    | new_CAL_FAC                  |
-| -------- | ----------- | ----------------------------- | --------- | -------------- | ---------- | ---------------------------- |
+| -------- | ------------ | ------------------------------ | ---------- | ---------------- | ----------- | ------------------------------ |
 | 1        | 3254.5      | 3 L                           | 3m00s     | 1.000 L/min    | 0.66 L/min | 3254.5×(0.66/1.0) = **2148** |
 | 2        | 2148        | 3 L                           | 2m50s     | 1.059 L/min    | 0.96 L/min | 2148×(0.96/1.059) = **1947** |
 | 3        | 1947        | 3 L                           | 2m30s     | 1.200 L/min    | 1.21 L/min | 1947×(1.21/1.20) = **1963**  |
-| ✅ Final | **1745**    | Kết quả hội tụ sau các lần đo |           |                |            |                              |
+| ✅ Final | **1745**    | Kết quả hội tụ sau các lần đo |            |                   |             |                                 |
 
 **Tiêu chí đạt:** `|GCS_reading − actual_flow| / actual_flow < 2%`
 
@@ -529,9 +514,9 @@ actual_flow  = volume_L / time_min (đo bằng bình + đồng hồ)
 
 - [ ] `SA_CAL_FAC = 1745` (đã calib)
 - [ ] `SA_FLOW_MODE = 1`, `SA_TANK_VOL = 16`
-- [ ] `SA_APP_RATE = 150`, `SA_BOOM_W = 2.0`
 - [ ] `SA_MIX_STD = 0.35`, `SA_MIX_CNT = 0.50`
 - [ ] `SA_FLOW_VEL = 0` (dùng vận tốc thật)
 - [ ] Upload mission, ARM → kiểm tra GCS message `SA FM1 OK`
-- [ ] Đảm bảo `dist < dist_max` (301 m < 1524 m với tank 16L)
-- [ ] Sau chạy: đo thực tế lượng vi sinh tiêu thụ, so với `vi~x.xL` trong GCS message
+- [ ] **Nấc giữa:** vận tốc mục tiêu ~1.3 m/s, đảm bảo `301m` nằm trong `(218m, 1456m)`
+- [ ] **Nấc cao:** vận tốc mục tiêu ~1.0 m/s (chậm hơn nấc giữa), đảm bảo `301m` nằm trong `(240m, 1600m)`
+- [ ] Sau chạy: đo thực tế lượng vi sinh tiêu thụ, so với `vi/run=x.xL` trong GCS message

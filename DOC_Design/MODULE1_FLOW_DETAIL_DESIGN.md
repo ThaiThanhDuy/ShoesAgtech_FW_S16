@@ -7,7 +7,7 @@
 **File nguồn:** `libraries/AP_ShoesAgtech/AP_ShoesAgtech.cpp/.h`
 **Loại:** `[x] Module mới   [ ] Bổ sung hệ thống   [ ] Sửa lỗi / thay đổi hành vi`
 **Tần suất update:** 10 Hz (`update()` gọi từ ArduPilot scheduler)
-**Ngày hoàn thành:** 2026-05-15 | **Cập nhật lần cuối:** 2026-07-08
+**Ngày hoàn thành:** 2026-05-15 | **Cập nhật lần cuối:** 2026-07-18
 
 ---
 
@@ -71,7 +71,7 @@ update() [10 Hz — ArduPilot scheduler]
 ---
 
 **`irq_handler()`** — static
-- **File:** `AP_ShoesAgtech.cpp : 400`
+- **File:** `AP_ShoesAgtech.cpp : 572`
 - **Được gọi bởi:** HAL GPIO interrupt (RISING edge trên SA_FLOW_PIN)
 - **Đầu vào:** không có (no-arg ISR)
 - **Xử lý:**
@@ -82,7 +82,7 @@ update() [10 Hz — ArduPilot scheduler]
 ---
 
 **`init()`**
-- **File:** `AP_ShoesAgtech.cpp : 371`
+- **File:** `AP_ShoesAgtech.cpp : 541`
 - **Được gọi bởi:** ArduPilot scheduler 1 lần khi boot
 - **Đầu vào:** không có
 - **Xử lý:**
@@ -90,6 +90,7 @@ update() [10 Hz — ArduPilot scheduler]
   2. Đọc `SA_FLOW_PIN`, gọi `hal.gpio->pinMode()` (INPUT) rồi `attach_interrupt(irq_handler, RISING)`
   3. Reset các biến flow (buffer, integral, avg)
   4. Gọi `_ph_init()` nếu SA_PH_EN=1
+  5. Đăng ký `hal.scheduler->register_io_process(_io_update)` — load/save dữ liệu ao (Module 2) chạy trong IO thread
 - **Đầu ra / Return:** `void`
   - Thành công: STATUSTEXT INFO "ShoesAgtech: Flow sensor ready"
   - Thất bại: STATUSTEXT CRITICAL "ShoesAgtech: IRQ attach failed"
@@ -98,7 +99,7 @@ update() [10 Hz — ArduPilot scheduler]
 ---
 
 **`update()`**
-- **File:** `AP_ShoesAgtech.cpp : 406`
+- **File:** `AP_ShoesAgtech.cpp : 578`
 - **Được gọi bởi:** ArduPilot scheduler @ 10 Hz
 - **Đầu vào:** không có
 - **Xử lý:**
@@ -118,7 +119,7 @@ update() [10 Hz — ArduPilot scheduler]
 ---
 
 **`_check_pump_config()`**
-- **File:** `AP_ShoesAgtech.cpp : 615`
+- **File:** `AP_ShoesAgtech.cpp : 833`
 - **Được gọi bởi:** `update()` mỗi chu kỳ
 - **Đầu vào:** không có (đọc `_pump_chan` từ param)
 - **Xử lý:**
@@ -132,7 +133,7 @@ update() [10 Hz — ArduPilot scheduler]
 ---
 
 **`_update_spray_mode()`**
-- **File:** `AP_ShoesAgtech.cpp : 658`
+- **File:** `AP_ShoesAgtech.cpp : 873`
 - **Được gọi bởi:** `update()`
 - **Đầu vào:** không có (đọc `_rc_chan` từ param)
 - **Xử lý:**
@@ -155,7 +156,7 @@ update() [10 Hz — ArduPilot scheduler]
   5. `q1 > 2.0` → reset PI, warning "keo dai mission hoac giam speed" + return 0
   6. `return constrain(q1, 0, 200)`
 - **Đầu ra / Return:** `float` — lưu lượng vi sinh target (L/min); 0 nếu bất kỳ điều kiện nào không đạt
-- **Ghi chú:** Warnings dùng chung timer `_tank_warn_ms`, throttle 5s giữa các lần in. SA_APP_RATE và SA_BOOM_W **không dùng** trong hàm này. `vi_per_run = TANK_VOL × r` là hằng số mỗi lần chạy mission, không phụ thuộc speed hay dist.
+- **Ghi chú:** Warnings dùng chung timer `_tank_warn_ms`, throttle 5s giữa các lần in. `vi_per_run = TANK_VOL × r` là hằng số mỗi lần chạy mission, không phụ thuộc speed hay dist.
 
 ---
 
@@ -178,7 +179,7 @@ update() [10 Hz — ArduPilot scheduler]
 ---
 
 **`_run_flow_pid(float target_lmin, float dt) → uint16_t`**
-- **File:** `AP_ShoesAgtech.cpp : 680`
+- **File:** `AP_ShoesAgtech.cpp : 895`
 - **Được gọi bởi:** `update()` (mode 1 và mode 2)
 - **Đầu vào:**
   - `target_lmin` — setpoint lưu lượng (L/min)
@@ -196,7 +197,7 @@ update() [10 Hz — ArduPilot scheduler]
 ---
 
 **`_write_pump_pwm(uint16_t pwm)`**
-- **File:** `AP_ShoesAgtech.cpp : 715`
+- **File:** `AP_ShoesAgtech.cpp : 925`
 - **Được gọi bởi:** `update()` (cả 3 mode)
 - **Đầu vào:**
   - `pwm` — giá trị µs (800–2200)
@@ -218,7 +219,7 @@ update() [10 Hz — ArduPilot scheduler]
 ---
 
 **`_get_mission_dist() → float`**
-- **File:** `AP_ShoesAgtech.cpp : 1293`
+- **File:** `AP_ShoesAgtech.cpp : 1073`
 - **Được gọi bởi:** `_compute_visin_target()`, `_print_fm1_arm_status()`, `_update_dosing_motor()`
 - **Đầu vào:** không có
 - **Xử lý:**
@@ -234,15 +235,17 @@ update() [10 Hz — ArduPilot scheduler]
 ---
 
 **`_run_simulation()`**
-- **File:** `AP_ShoesAgtech.cpp : 1251`
-- **Được gọi bởi:** `update()` khi SA_SIM=1
+- **File:** `AP_ShoesAgtech.cpp : 1978`
+- **Được gọi bởi:** `update()` khi SA_SIM=1 (thay cho `_ph_update()`)
 - **Xử lý:**
   1. `t = millis() / 1000.0` (giây từ boot)
   2. Module 1: `_flow_rate_filtered = 2.5 + 1.5×sin(2π×t/20)` (L/min, chu kỳ 20s)
   3. Module 1: `_sim_speed = constrain(1.0 + 0.8×sin(2π×t/30), 0.1, 2.0)` (m/s, chu kỳ 30s)
-  4. Module 2: `ph_sim`, `temp_sim`, `mv_sim`, `dkh_sim` theo sin với các chu kỳ khác nhau
+  4. Module 2: `ph_sim`, `temp_sim`, `mv_sim` (Nernst: `(7.0−ph_sim)×59.16`) theo sin với các chu kỳ khác nhau; gán thẳng vào `_ph_value`, `_ph_value_ma`, `_ph_mv`, `_ph_temp`
   5. Cập nhật `_ph_last_good_ms = now`
+  6. Gọi `_ph_update_daily_slots(ph_sim)` — chạy đủ pipeline slot sáng/chiều + tính kiềm theo ao active, giống hệt đường thật, để test PHAK/SA_PHK trong SITL
 - **Đầu ra / Return:** `void` — ghi trực tiếp vào `_flow_rate_filtered`, `_sim_speed`, `_ph_value`, v.v.
+- **Ghi chú:** Không tự tạo dữ liệu kiềm giả — kiềm vẫn được tính thật từ `ph_sim` qua slot sáng/chiều như dữ liệu cảm biến thật.
 
 ---
 
@@ -261,8 +264,6 @@ update() [10 Hz — ArduPilot scheduler]
 | `SA_PID_P` | 9 | Float | 80.0 | 0 | 500 | Hệ số P: µs PWM / (L/min sai số). |
 | `SA_PID_I` | 10 | Float | 20.0 | 0 | 200 | Hệ số I: µs PWM / (L/min·s). |
 | `SA_PID_LPF` | 11 | Float | 0.3 | 0.01 | 1.0 | Alpha LPF đầu ra PID (1.0 = không lọc). |
-| `SA_APP_RATE` | 12 | Float | 100.0 | 0 | 2000 | Tỉ lệ phun L/ha. **Không dùng trong FLOW_MODE=1.** Giữ lại cho tham khảo/tương lai. |
-| `SA_BOOM_W` | 13 | Float | 1.0 | 0 | 30 | Chiều rộng boom phun (m). **Không dùng trong FLOW_MODE=1.** Giữ lại cho tham khảo/tương lai. |
 | `SA_LOG_FL_MS` | 22 | Int16 | 1000 | 100 | 60000 | Chu kỳ console log lưu lượng (ms). |
 | `SA_SIM` | 32 | Int8 | 0 | 0 | 1 | Chế độ giả lập: 1=inject dữ liệu sin thay cảm biến thật. |
 | `SA_FLOW_PIN` | 33 | Int16 | 55 | 1 | 200 | Chân GPIO cảm biến. **Chỉ đọc khi init() — cần reboot khi thay đổi.** |
@@ -274,7 +275,7 @@ update() [10 Hz — ArduPilot scheduler]
 
 > **Param chỉ có hiệu lực sau reboot:** `SA_FLOW_PIN`
 >
-> **Param không dùng trong FLOW_MODE=1:** `SA_APP_RATE`, `SA_BOOM_W` — các tham số này vẫn còn trong hệ thống nhưng không tham gia tính lưu lượng khi FLOW_MODE=1.
+> **Param đã bị gỡ bỏ (không còn tồn tại):** `SA_APP_RATE` (slot 12, cũ), `SA_BOOM_W` (slot 13, cũ) — thay bằng `SA_MIX_STD`/`SA_MIX_CNT`. Slot 12 nay là `SA_PH_CAP_M` (Module 2); slot 13 bỏ trống.
 
 ---
 
@@ -432,8 +433,8 @@ pwm          = constrain(TRIM + lpf_output, MIN, MAX)
 | `data[3]` | `pump_pwm` | µs | Luôn | PWM thực xuất ra bơm; dải MIN–MAX từ SERVOx |
 | `data[4]` | `spray_mode` | 0/1/2 | Luôn | 0=PASSTHROUGH, 1=FLOW PID nấc giữa, 2=FLOW PID nấc cao |
 
-> `data[5..11]` — Module 2 (pH sensor). Xem MODULE2_PH_DETAIL_DESIGN.md.
-> `data[12..15]` — Module 3 (Dosing motor). Xem MODULE3_DOS_DETAIL_DESIGN.md.
+> `data[5..14]` — Module 2 (pH sensor + ao active). Xem MODULE2_PH_DETAIL_DESIGN.md.
+> `data[15..18]` — Module 3 (Dosing motor + ao active). Xem MODULE3_DOS_DETAIL_DESIGN.md.
 
 ### 4.2 DataFlash Log [DATA]
 

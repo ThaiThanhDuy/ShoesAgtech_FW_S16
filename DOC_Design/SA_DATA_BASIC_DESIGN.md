@@ -6,7 +6,7 @@
 > Người không biết lập trình cũng đọc được và hiểu hệ thống làm gì.
 
 **Dự án:** `ardupilot-jbdcan_testing_S16`
-**Ngày tạo:** 2026-05-01
+**Ngày tạo:** 2026-05-01 | **Cập nhật lần cuối:** 2026-07-16
 **Người viết:** ThaiThanhDuy
 **Trạng thái:** `[x] Draft   [ ] Review   [ ] Approved`
 
@@ -66,14 +66,16 @@ Mỗi chu kỳ stream dữ liệu EXTRA3 (cài đặt trong ArduPilot):
     ↓
 Kiểm tra: Hệ thống ShoesAgtech có đang bật không?
     ↓ Có
-Thu thập dữ liệu từ 3 module:
+Thu thập dữ liệu từ 3 module (pH/dosing lấy theo AO ĐANG ĐO — SA_POND_IDX):
     - Module 1: lưu lượng thực tế, lưu lượng mục tiêu, PWM bơm, chế độ phun
-    - Module 2: pH, nhiệt độ, kiềm, ΔpH, slot (chỉ khi cảm biến pH đang bật và có dữ liệu)
-    - Module 3: setpoint thức ăn, tỉ lệ quy đổi, PWM motor
+    - Module 2: pH, nhiệt độ, kiềm, ΔpH, số hiệu ao, pH sáng/chiều, ngày đo
+      (chỉ khi cảm biến pH đang bật và có dữ liệu)
+    - Module 3: setpoint thức ăn, tỉ lệ quy đổi, loại thức ăn, PWM motor
     ↓
-Đóng gói vào một mảng 58 số thực
+Đóng gói vào một mảng 58 số thực → gửi GCS (message DEBUG_FLOAT_ARRAY, tên "SA_DATA")
     ↓
-Gửi lên GCS qua MAVLink (message DEBUG_FLOAT_ARRAY, tên "SA_DATA")
+Riêng khi một ao vừa đo đủ dữ liệu sáng+chiều trong ngày (tính xong kiềm):
+Gửi thêm 1 gói riêng "SA_PHK" báo ngay kết quả kiềm của ao đó cho GCS/app
 ```
 
 ---
@@ -109,6 +111,12 @@ Gửi lên GCS qua MAVLink (message DEBUG_FLOAT_ARRAY, tên "SA_DATA")
 - **Điều kiện:** Cả hai trường hợp đều trả về 0.0 ở vị trí pH
 - **Hành vi hệ thống:** GCS không thể phân biệt từ SA_DATA — cần đọc tham số SA_PH_EN để xác nhận
 - **Output người dùng thấy:** Phát hiện bằng: pH=0 VÀ điện áp điện cực=0 VÀ nhiệt độ=0 → hiển thị cảnh báo "pH không có dữ liệu"
+
+### Case 6: Một ao vừa đo đủ dữ liệu trong ngày — gói SA_PHK
+
+- **Điều kiện:** Đang bật pH; ao đang đo (SA_POND_IDX) vừa có đủ cả pH sáng và chiều trong ngày, hệ thống vừa tính xong kiềm
+- **Hành vi hệ thống:** Ngoài gói SA_DATA gửi liên tục, hệ thống gửi thêm **một gói riêng "SA_PHK"** ngay tại thời điểm đó — mang đủ pH sáng/chiều, ΔpH, kiềm, tọa độ và số hiệu ao vừa đo xong
+- **Output người dùng thấy:** GCS/app nhận được thông báo kiềm mới ngay lập tức, không cần chờ tải lại log từ thẻ SD
 
 ---
 

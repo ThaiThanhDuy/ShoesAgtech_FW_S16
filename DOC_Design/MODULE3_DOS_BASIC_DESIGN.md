@@ -6,7 +6,7 @@
 > Người không biết lập trình cũng đọc được và hiểu hệ thống làm gì.
 
 **Dự án:** `ardupilot-jbdcan_testing_S16`
-**Ngày tạo:** 2026-05-01 | **Cập nhật lần cuối:** 2026-07-09
+**Ngày tạo:** 2026-05-01 | **Cập nhật lần cuối:** 2026-07-16
 **Người viết:** ThaiThanhDuy
 **Trạng thái:** `[x] Draft   [ ] Review   [ ] Approved`
 
@@ -36,7 +36,9 @@ Hỗ trợ 2 chế độ:
 - **Tốc độ cố định (DOS_MODE=0)**: Quay đều với tốc độ đặt sẵn, không phụ thuộc tốc độ xe hay tuyến đường
 - **Tỉ lệ theo tuyến đường (DOS_MODE=1)**: Tự điều chỉnh tốc độ theo tốc độ xe để phân bổ đều toàn tuyến
 
-**Tính năng khối lượng riêng:** Hệ thống phân tách thông số cơ học vít tải (thể tích tống ra) với đặc tính hạt thức ăn (khối lượng riêng g/mL). Mỗi loại thức ăn có thể cài riêng, không cần calibrate lại vít tải khi đổi loại hạt.
+**Tính năng khối lượng riêng:** Hệ thống phân tách thông số cơ học vít tải (thể tích tống ra) với đặc tính hạt thức ăn (khối lượng riêng g/mL). Mỗi loại thức ăn có thể cài riêng, không cần calibrate lại vít tải khi đổi loại hạt. Cả 2 chế độ tốc độ (cố định lẫn theo tuyến đường) đều dùng chung bộ thông số theo loại thức ăn này.
+
+**Tính năng theo ao:** Lượng thức ăn (setpoint) và loại thức ăn đang dùng được lưu **riêng cho từng ao** (chung cơ chế chọn ao với Module 2 — pH). Đổi ao đang đo sẽ tự nạp lại đúng lượng/loại thức ăn đã cài cho ao đó; sửa setpoint hoặc loại thức ăn sẽ lưu lại cho ao đang chọn, còn nguyên qua reboot.
 
 ---
 
@@ -70,14 +72,14 @@ Người lái nhấn nút RC để bật motor
     ↓
 Hệ thống kiểm tra cấu hình servo có đúng không
     ↓ Đúng
-Chọn loại thức ăn hiện tại (SA_DOS_FOOD = 1..7)
-    → Lấy thể tích vít tải (SA_DOS_RATE hoặc SA_DOS_Fx, mL/50us)
+Chọn loại thức ăn hiện tại của ao đang đo (SA_DOS_FOOD = 1..7, riêng theo ao)
+    → Lấy thể tích vít tải (SA_DOS_Fx, mL/50us) — dùng chung cho cả 2 chế độ
     → Lấy khối lượng riêng hạt (SA_DOS_Dx, g/mL)
     ↓
 Chọn chế độ tính tốc độ:
 ┌─────────────────────────────────────────────────────────────────────────┐
 │ Chế độ 0 (tốc độ cố định):                                             │
-│   offset(µs) = SA_DOS_SP(g) × 50 / (SA_DOS_RATE(mL/50us) × Dx(g/mL)) │
+│   offset(µs) = SA_DOS_SP(g) × 50 / (SA_DOS_Fx(mL/50us) × Dx(g/mL))   │
 │   Tốc độ motor không thay đổi theo vận tốc xe                           │
 │                                                                         │
 │ Chế độ 1 (tỉ lệ tuyến đường):                                         │
@@ -111,7 +113,7 @@ Trạng thái motor gửi lên GCS
 ### Case 3: Nút RC bật — Chế độ 0 (tốc độ cố định)
 
 - **Điều kiện:** Nút RC bật + DOS_MODE=0 + setpoint > 0
-- **Hành vi hệ thống:** Tính offset từ `SA_DOS_SP ÷ (SA_DOS_RATE × SA_DOS_Dx)` — motor quay đều. Khi đổi loại thức ăn (SA_DOS_FOOD), hệ thống tự dùng khối lượng riêng tương ứng (SA_DOS_D1..D7) mà không cần calibrate lại DOS_RATE
+- **Hành vi hệ thống:** Tính offset từ `SA_DOS_SP ÷ (SA_DOS_Fx × SA_DOS_Dx)` (x = loại thức ăn đang chọn) — motor quay đều. Khi đổi loại thức ăn (SA_DOS_FOOD), hệ thống tự dùng thể tích + khối lượng riêng tương ứng (SA_DOS_F1..F7 / SA_DOS_D1..D7) mà không cần calibrate lại
 - **Output người dùng thấy:** "Dosing motor ON"; GCS hiển thị PWM, setpoint, density của loại hạt đang dùng
 
 ### Case 4: Nút RC bật — Chế độ 1 (phân bổ theo tuyến đường) — đủ điều kiện
@@ -135,8 +137,14 @@ Trạng thái motor gửi lên GCS
 ### Case 7: Đổi loại thức ăn (SA_DOS_FOOD)
 
 - **Điều kiện:** Người dùng thay SA_DOS_FOOD từ 1 → 2 (hoặc bất kỳ)
-- **Hành vi hệ thống:** Hệ thống tự dùng SA_DOS_D2 (khối lượng riêng loại 2) và SA_DOS_F2 (thể tích loại 2, DOS_MODE=1). Không cần reboot, áp dụng ngay chu kỳ kế tiếp (100ms)
+- **Hành vi hệ thống:** Hệ thống tự dùng SA_DOS_D2 (khối lượng riêng loại 2) và SA_DOS_F2 (thể tích loại 2 — dùng cho cả 2 chế độ tốc độ). Không cần reboot, áp dụng ngay chu kỳ kế tiếp (100ms). Giá trị mới được lưu lại riêng cho ao đang chọn
 - **Output người dùng thấy:** GCS log hiển thị `F<n>` và `D:<x>g/mL` cập nhật theo loại hạt mới
+
+### Case 8: Đổi ao đang đo (SA_POND_IDX dùng chung với Module 2)
+
+- **Điều kiện:** Người vận hành đổi ao đang chọn
+- **Hành vi hệ thống:** Hệ thống tự nạp lại lượng thức ăn (SA_DOS_SP) và loại thức ăn (SA_DOS_FOOD) đã cài riêng cho ao mới, ghi đè lên giá trị đang hiển thị. Nếu sau đó người dùng sửa setpoint/loại thức ăn, giá trị mới được lưu lại cho ao đang chọn (không ảnh hưởng ao khác)
+- **Output người dùng thấy:** SA_DOS_SP và SA_DOS_FOOD trên GCS tự đổi theo giá trị đã lưu của ao mới; dữ liệu này còn nguyên qua reboot (lưu trên thẻ SD cùng dữ liệu ao của Module 2)
 
 ---
 

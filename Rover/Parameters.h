@@ -259,6 +259,15 @@ public:
     //
     k_param_auto_tune = 285,
 
+    //
+    // === SCHEDULED AUTO-RUN (AUTO_TIMER) ===
+    //
+    k_param_auto_timer = 286,
+    k_param_auto_timer_tz = 287,
+    k_param_auto_timer1 = 288,
+    k_param_auto_timer2 = 289,
+    k_param_auto_timer3 = 290,
+
   };
 
   AP_Int16 format_version;
@@ -320,6 +329,13 @@ public:
 
   // === AUTO MODE PID AUTO-TUNE ANALYZER ===
   AP_Int8 auto_tune; // 0: Disable, 1: Enable - thu thap + recommend PID 1 chu ky Auto
+
+  // === SCHEDULED AUTO-RUN (AUTO_TIMER) ===
+  AP_Int8 auto_timer;    // 0: Disable, 1: Enable
+  AP_Int8 auto_timer_tz; // UTC offset (h), Viet Nam = 7
+  AP_Float auto_timer1;  // Gio hen 1, nhap thang gio.phut (15.30 = 15h30). 0=tat
+  AP_Float auto_timer2;  // Gio hen 2
+  AP_Float auto_timer3;  // Gio hen 3
   Parameters() {}
 };
 

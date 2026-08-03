@@ -334,6 +334,54 @@ const AP_Param::Info Rover::var_info[] = {
     // @User: Advanced
     GSCALAR(auto_tune, "AUTO_TUNE", 0),
 
+    // =========================================================
+    // === SCHEDULED AUTO-RUN (AUTO_TIMER)
+    // =========================================================
+
+    // @Param: AUTO_TIMER
+    // @DisplayName: Scheduled auto-run enable
+    // @Description: Khi bat (1): theo doi gio dia phuong (can GPS/RTC), den
+    //   dung 1 trong 3 moc AUTO_TIMER1/2/3 ma dang o mode MANUAL va CHUA ARM
+    //   thi tu dong reset mission ve waypoint dau va chuyen sang mode AUTO
+    //   (KHONG tu dong ARM). Neu da ARM luc do gio thi chi canh bao, khong
+    //   doi mode. Kiem tra lai moi giay, moi moc chi kich hoat 1 lan/ngay.
+    // @Values: 0:Disabled, 1:Enabled
+    // @User: Standard
+    GSCALAR(auto_timer, "AUTO_TIMER", 0),
+
+    // @Param: AUTO_TIMER_TZ
+    // @DisplayName: Scheduled auto-run timezone offset
+    // @Description: Do lech gio dia phuong so voi UTC (gio), dung de tinh gio
+    //   hien tai khop voi AUTO_TIMER1/2/3. Viet Nam = 7.
+    // @Range: -12 14
+    // @Units: h
+    // @User: Standard
+    GSCALAR(auto_timer_tz, "AUTO_TIMER_TZ", 7),
+
+    // @Param: AUTO_TIMER1
+    // @DisplayName: Scheduled auto-run time slot 1
+    // @Description: Gio hen chay tu dong, nhap THANG gio.phut (vd 15.30 =
+    //   15h30p) - KHONG phai phan so gio. 0 = tat slot nay. Phan phut (2 chu
+    //   so sau dau cham) phai < 60, neu khong se bi coi la khong hop le va bi
+    //   bo qua (co canh bao GCS). Muon chay dung 0h00 (nua dem) thi nhap 24.00.
+    // @Range: 0 24
+    // @User: Standard
+    GSCALAR(auto_timer1, "AUTO_TIMER1", 0.0f),
+
+    // @Param: AUTO_TIMER2
+    // @DisplayName: Scheduled auto-run time slot 2
+    // @Description: Xem mo ta AUTO_TIMER1.
+    // @Range: 0 24
+    // @User: Standard
+    GSCALAR(auto_timer2, "AUTO_TIMER2", 0.0f),
+
+    // @Param: AUTO_TIMER3
+    // @DisplayName: Scheduled auto-run time slot 3
+    // @Description: Xem mo ta AUTO_TIMER1.
+    // @Range: 0 24
+    // @User: Standard
+    GSCALAR(auto_timer3, "AUTO_TIMER3", 0.0f),
+
     // variables not in the g class which contain EEPROM saved variables
 
     // @Group: COMPASS_

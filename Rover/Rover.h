@@ -462,6 +462,36 @@ private:
   void update_custom_flow(void);
   // [/AP_ShoesAgtech]
 
+  // Shoes_Agtech: 1Hz scheduler task - AUTO_TIMER scheduled auto-run.
+  // Yeu cau DA ARM san tai gio hen thi moi tu chuyen sang AUTO - xe se chay
+  // mission ngay lap tuc vi dang ARM. Neu dang disarm thi bo qua (an toan
+  // hon). Neu dang DA o mode AUTO san (do AUTO_TIMER khac hoac nguoi dung tu
+  // bat) thi bo qua, tranh xung dot/reset ngang mission dang chay.
+  void update_auto_timer(void);
+  // true khi phien AUTO hien tai la do AUTO_TIMER kich hoat (khac voi nguoi
+  // dung tu bat AUTO binh thuong) - dung de tu dong chuyen ve MANUAL khi
+  // mission nay hoan thanh, ma khong dong vao truong hop nguoi dung tu dung
+  // AUTO rieng.
+  bool _auto_timer_active = false;
+  // last local day (theo AUTO_TIMER_TZ) da xu ly cho tung moc gio - 0 = chua
+  // tung kich hoat. Dung de moi moc chi kich hoat toi da 1 lan/ngay.
+  uint32_t _auto_timer_triggered_day[3] = {0, 0, 0};
+  bool _auto_timer_boot_logged = false;
+  // rate-limit canh bao "gia tri khong hop le" (phut >=60) - 0 = chua canh bao
+  uint32_t _auto_timer_invalid_warn_ms[3] = {0, 0, 0};
+  // true neu hom nay DA TUNG quan sat duoc "chua toi gio" (local_h < target_h)
+  // truoc khi toi/qua gio hen - dung de phan biet "vua toi gio thuc su" voi
+  // "moi co GPS/RTC SAU KHI gio hen da troi qua" (vd boot tre trong ngay).
+  // Reset ve false khi sang ngay moi (theo _auto_timer_seen_day).
+  bool _auto_timer_seen_before[3] = {false, false, false};
+  uint32_t _auto_timer_seen_day = 0;
+  // Gia tri AUTO_TIMERx doc lan gan nhat, de phat hien nguoi dung vua sua
+  // tham so. Khi phat hien thay doi: reset _auto_timer_triggered_day[i]/
+  // _auto_timer_seen_before[i] de danh gia lai tu dau voi gio moi, va in 1
+  // dong INFO cap nhat (khong phai cho den ngay mai).
+  float _auto_timer_last_val[3] = {0, 0, 0};
+  bool _auto_timer_last_val_init[3] = {false, false, false};
+
 public:
   void failsafe_check();
   // Motor test

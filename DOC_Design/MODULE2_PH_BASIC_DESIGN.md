@@ -6,7 +6,7 @@
 > Người không biết lập trình cũng đọc được và hiểu hệ thống làm gì.
 
 **Dự án:** `ardupilot-jbdcan_testing_S16`
-**Ngày tạo:** 2026-05-01 | **Cập nhật lần cuối:** 2026-07-10
+**Ngày tạo:** 2026-05-01 | **Cập nhật lần cuối:** 2026-07-16
 **Người viết:** ThaiThanhDuy
 **Trạng thái:** `[x] Draft   [ ] Review   [ ] Approved`
 
@@ -32,9 +32,11 @@ Module 2 đọc và xử lý dữ liệu chất lượng nước từ cảm bi�
 - Đo **nhiệt độ nước** và **điện áp điện cực (mV)**
 - Tính **độ kiềm (alkalinity)** dựa trên pH sáng+chiều cùng ao
 - Tính **ΔpH ngày** (pH chiều − pH sáng) để đánh giá quang hợp / hoạt động sinh học
+- **Quản lý tối đa 100 ao** — mỗi ao lưu riêng pH sáng/chiều/kiềm/ngày, người vận hành chọn ao đang đo bằng một tham số (SA_POND_IDX)
+- **Lưu trữ dữ liệu ao vào thẻ SD**, còn nguyên qua reboot/mất điện — không cần đo lại từ đầu khi khởi động lại
 - **Ghi vào SD card** để phân tích theo thời gian và vị trí (từng ao)
 
-Dùng trong nuôi trồng thủy sản — người nuôi cần biết chất lượng nước realtime từ GCS/điện thoại mà không cần ra ao đo tay.
+Dùng trong nuôi trồng thủy sản — người nuôi cần biết chất lượng nước realtime từ GCS/điện thoại mà không cần ra ao đo tay, và có thể luân phiên đo nhiều ao trong ngày mà không mất dữ liệu ao trước.
 
 ---
 
@@ -43,9 +45,10 @@ Dùng trong nuôi trồng thủy sản — người nuôi cần biết chất l�
 | Phần hệ thống | Bị ảnh hưởng? | Mô tả thay đổi |
 |---|---|---|
 | Đọc cảm biến chất lượng nước | Có | Toàn bộ giao tiếp với cảm biến pH qua dây RS485 |
-| Giao tiếp GCS / MAVLink | Có | Gửi pH, nhiệt độ, mV lên màn hình liên tục |
-| Ghi SD card | Có | 3 loại bản ghi riêng biệt: realtime (PHWD), kiềm ngày (PHAK), điểm mẫu (PHSP) |
-| Định vị GPS | Có | Mỗi mẫu pH được gắn tọa độ GPS; kiềm chỉ tính khi sáng+chiều cùng ao |
+| Giao tiếp GCS / MAVLink | Có | Gửi pH, nhiệt độ, mV, kiềm của ao đang active lên màn hình liên tục |
+| Ghi SD card | Có | 2 loại bản ghi realtime/kiềm ngày (PHWD, PHAK) + 1 file trạng thái toàn bộ ao (SA_PONDS.bin) |
+| Quản lý nhiều ao | Có | Tối đa 100 ao, chọn bằng SA_POND_IDX; mỗi ao lưu riêng pH sáng/chiều/kiềm/ngày, tồn tại qua reboot |
+| Định vị GPS | Có | Mỗi mẫu pH được gắn tọa độ GPS; GPS dùng để cảnh báo lệch vị trí so với tâm ao, không dùng để tự động chọn ao |
 | Phần cứng / kết nối | Có | Thêm cảm biến pH và module chuyển đổi tín hiệu |
 | Điều khiển bơm / navigation | Không | Không liên quan |
 
@@ -74,25 +77,33 @@ Cảm biến trả về: pH, điện áp điện cực (mV), nhiệt độ
     ↓
 Kiểm tra tính hợp lệ (CRC) của dữ liệu nhận về
     ↓ Hợp lệ
-Tính pH trung bình (MA) → gửi GCS qua MAVLink
+Tính pH trung bình (MA, 10 mẫu) → gửi GCS qua MAVLink (ao đang active)
     │
     ├──► [Ghi vào SD card — PHWD]
     │         pH, pH-MA, nhiệt độ, mV, tọa độ GPS
-    │         Mỗi 2 giây liên tục
+    │         Mỗi 2 giây liên tục (không phân biệt ao)
     │
-    ├──► [Phân loại thời gian đo]
-    │         Trong cửa sổ sáng (SA_PH_MS..SA_PH_ME)?  → ghi slot sáng + GPS
-    │         Trong cửa sổ chiều (SA_PH_AS..SA_PH_AE)? → ghi slot chiều + GPS
-    │         Ngoài cả hai cửa sổ? → bỏ qua
-    │         ↓
-    │         Cả hai slot đủ VÀ cùng ao (≤ 300m)?
-    │         → Tính ΔpH và kiềm chính xác
-    │         → Ghi vào SD card — PHAK (1 lần/ngày)
-    │
-    └──► [Ghi điểm mẫu theo khoảng cách — PHSP]
-              Mỗi SA_PH_SAMP_D mét (hoặc khi đến WP mới)
-              → Ghi: WP.sub, pH, nhiệt độ, mV, GPS
-              Ví dụ: SA_PH_SAMP_D=8m, WP1→WP2=32m → thêm 3 điểm (1.1, 1.2, 1.3)
+    └──► [Chọn ao đang đo — SA_POND_IDX, 1-100, người vận hành đặt tay]
+              ↓
+         Ao vừa đổi (khác lần trước)? → thông báo "Chuyển sang ao #n"
+              → Nếu đã có ≥ 6 mẫu GPS trước đó: so tọa độ hiện tại với tâm ao
+                đã lưu — lệch quá SA_PH_POND_D mét → cảnh báo (chỉ để tham
+                khảo, KHÔNG chặn đo)
+              ↓
+         Đang ARM? (đứng yên/disarm không tính mẫu)
+              ↓ Có
+         Trong cửa sổ sáng (SA_PH_MS..SA_PH_ME) hoặc chiều (SA_PH_AS..SA_PH_AE)?
+              ↓ Có, và cách mẫu trước ≥ SA_PH_CAP_S giây
+         Ghi đè giá trị pH mới nhất vào slot (sáng hoặc chiều) của ao đó,
+         đếm số mẫu — đủ SA_PH_CAP_SAM mẫu → báo "hoàn thành slot"
+              ↓
+         Ao đã có ĐỦ CẢ sáng và chiều trong ngày hôm nay?
+              → Tính ΔpH và kiềm chính xác cho ao đó (1 lần/ngày/ao)
+              → Ghi vào SD card — PHAK
+              → Gửi SA_PHK qua MAVLink cho GCS
+    ↓
+Toàn bộ dữ liệu 100 ao được lưu định kỳ xuống thẻ SD (SA_PONDS.bin)
+để không mất khi tắt nguồn/reboot
 ```
 
 ---
@@ -123,65 +134,65 @@ Tính pH trung bình (MA) → gửi GCS qua MAVLink
 - **Hành vi hệ thống:** Chờ đợi; phát cảnh báo sau vài giây; không ghi SD card
 - **Output người dùng thấy:** Cảnh báo "pH sensor chưa có dữ liệu"; SD card trống (chưa có PHWD)
 
-### Case 5: Đủ dữ liệu sáng+chiều — cùng ao (FULL)
+### Case 5: Đủ dữ liệu sáng+chiều cho ao đang chọn (FULL)
 
-- **Điều kiện:** Đã ghi nhận pH sáng VÀ pH chiều trong cùng ngày, VÀ cả hai điểm đo cách nhau ≤ 300m (cùng ao)
-- **Hành vi hệ thống:** Tính ΔpH và kiềm chính xác; ghi 1 record PHAK vào SD card với tọa độ ao (vị trí sáng)
-- **Output người dùng thấy:** GCS hiển thị kiềm chính xác nhất; nhãn [FULL]; SD card có 1 dòng PHAK cho ao đó
+- **Điều kiện:** Ao đang chọn (SA_POND_IDX) đã ghi nhận đủ pH sáng VÀ pH chiều trong cùng ngày (đang ARM khi đo)
+- **Hành vi hệ thống:** Tính ΔpH và kiềm chính xác cho ao đó; ghi 1 record PHAK vào SD card với tọa độ ao (vị trí mẫu sáng cuối); gửi kèm qua MAVLink (SA_PHK) cho GCS/app
+- **Output người dùng thấy:** GCS hiển thị kiềm chính xác nhất; nhãn [FULL]; SD card có 1 dòng PHAK cho ao đó; chỉ tính 1 lần/ngày/ao
 
-### Case 6: Đủ dữ liệu sáng+chiều — khác ao
+### Case 6: Đổi ao đang đo (SA_POND_IDX) — cảnh báo lệch vị trí GPS
 
-- **Điều kiện:** Đã ghi nhận pH sáng và chiều nhưng hai điểm đo cách nhau > 300m (khác ao)
-- **Hành vi hệ thống:** KHÔNG tính kiềm — cảnh báo và chờ thêm dữ liệu cùng ao; không ghi PHAK
-- **Output người dùng thấy:** Cảnh báo "Kiem: sang/chieu khac ao (XXXm) - bo qua"; GCS không hiển thị kiềm ngày hôm đó
+- **Điều kiện:** Người vận hành đổi `SA_POND_IDX` sang một ao khác (hoặc vừa boot xong)
+- **Hành vi hệ thống:** Thông báo đã chuyển ao. Nếu ao đó đã có đủ lịch sử GPS (>5 mẫu), so tọa độ hiện tại với tâm ao đã lưu — lệch quá `SA_PH_POND_D` mét thì cảnh báo "cần kiểm tra lại vị trí ao", nhưng **KHÔNG chặn** việc đo/tính kiềm (đây là thông tin tham khảo, không phải điều kiện bắt buộc)
+- **Output người dùng thấy:** `[SA] Chuyen sang ao #n`; sau đó `[SA] Ao#n GPS OK (Xm)` hoặc `[SA] Ao#n GPS lech Xm - can check lai vi tri ao`
 
 ### Case 7: Chỉ có dữ liệu một buổi (MORN hoặc AFT)
 
-- **Điều kiện:** Chỉ đo được một buổi, chưa có buổi còn lại
-- **Hành vi hệ thống:** Không tính kiềm; chờ buổi còn lại; không ghi PHAK
-- **Output người dùng thấy:** GCS không hiển thị kiềm ngày; nhãn [MORN] hoặc [AFT]; cảnh báo cần chờ thêm
+- **Điều kiện:** Ao đang chọn chỉ đo được một buổi, chưa có buổi còn lại trong ngày
+- **Hành vi hệ thống:** Không tính kiềm; chờ buổi còn lại; không ghi PHAK. Khi vừa đủ số mẫu `SA_PH_CAP_SAM` của một buổi, hệ thống báo hoàn thành buổi đó một lần
+- **Output người dùng thấy:** GCS không hiển thị kiềm ngày; nhãn [MORN] hoặc [AFT]; thông báo "Ao#n pH sang/chieu: X (N mau)"
 
 ### Case 8: Dùng dữ liệu hôm qua (PREV)
 
-- **Điều kiện:** Sang ngày mới, chưa có dữ liệu hôm nay
+- **Điều kiện:** Sang ngày mới, ao đang chọn chưa có dữ liệu hôm nay nhưng đã có kiềm tính từ hôm trước
 - **Hành vi hệ thống:** Hiển thị kiềm hôm qua; không ghi PHAK hôm nay cho đến khi đủ sáng+chiều
 - **Output người dùng thấy:** GCS hiển thị kiềm hôm qua; nhãn [PREV]; SD card không có PHAK ngày hôm nay
 
 ### Case 9: Chưa từng có dữ liệu kiềm (NODATA)
 
-- **Điều kiện:** Lần đầu khởi động, chưa từng đo được slot nào
-- **Hành vi hệ thống:** Kiềm = 0; không tính ước tính realtime; không ghi PHAK
+- **Điều kiện:** Ao đang chọn chưa từng đo được slot nào (ao mới hoặc chưa từng đo)
+- **Hành vi hệ thống:** Kiềm = 0; không ghi PHAK
 - **Output người dùng thấy:** GCS hiển thị kiềm = 0; nhãn [NODATA]; không có PHAK trong log
 
-### Case 10: Chưa có tín hiệu GPS
+### Case 10: Chưa có tín hiệu GPS hoặc chưa có giờ
 
-- **Điều kiện:** FC chưa có GPS fix → không biết giờ và tọa độ
-- **Hành vi hệ thống:** Đọc và ghi PHWD với Lat=0, Lng=0; không phân slot sáng/chiều; không ghi điểm mẫu PHSP
-- **Output người dùng thấy:** Cảnh báo "Chưa có GPS time"; PHWD có lat/lng = 0
+- **Điều kiện:** FC chưa có GPS fix 3D hoặc chưa lấy được giờ UTC → không biết giờ địa phương và tọa độ
+- **Hành vi hệ thống:** Vẫn đọc và ghi PHWD (Lat/Lng = 0 nếu chưa fix); KHÔNG chọn ao, KHÔNG phân slot sáng/chiều, KHÔNG tính kiềm cho đến khi có GPS
+- **Output người dùng thấy:** Cảnh báo "Chua GPS - kiem doi GPS/gio" (tối đa mỗi 60s, chỉ khi SA_PH_LOG=1); PHWD có lat/lng = 0
 
 ### Case 11: Ghi realtime vào SD card (PHWD)
 
 - **Điều kiện:** SA_PH_EN=1 và pH sensor có dữ liệu hợp lệ
-- **Hành vi hệ thống:** Mỗi 2 giây ghi 1 record PHWD gồm pH, pH-MA, nhiệt độ, mV và tọa độ GPS tại thời điểm đó
+- **Hành vi hệ thống:** Mỗi 2 giây ghi 1 record PHWD gồm pH, pH-MA, nhiệt độ, mV và tọa độ GPS tại thời điểm đó (không phân biệt ao)
 - **Output người dùng thấy:** File .bin trên SD card; Mission Planner tab PHWD hiển thị đường pH theo thời gian có thể overlay lên bản đồ GPS
 
-### Case 12: Ghi kiềm ngày vào SD card (PHAK)
+### Case 12: Ghi kiềm ngày vào SD card (PHAK) + gửi GCS (SA_PHK)
 
-- **Điều kiện:** Slot FULL + cùng ao (≤ 300m) — lần đầu tiên trong ngày
-- **Hành vi hệ thống:** Ghi 1 record PHAK duy nhất với: pH sáng, pH chiều, ΔpH, kiềm dKH, kiềm mg/L, tọa độ ao (GPS buổi sáng)
-- **Output người dùng thấy:** Mission Planner tab PHAK: 1 dòng mỗi ao mỗi ngày; lọc theo Lat/Lng để xem kiềm từng ao
+- **Điều kiện:** Ao đang chọn vừa đủ cả sáng và chiều trong ngày (FULL) — lần đầu tiên trong ngày cho ao đó
+- **Hành vi hệ thống:** Ghi 1 record PHAK duy nhất với: pH sáng, pH chiều, ΔpH, kiềm dKH, kiềm mg/L, tọa độ ao (GPS mẫu sáng cuối), số thứ tự ao; đồng thời gửi 1 bản tin MAVLink riêng (SA_PHK) mang cùng dữ liệu cho GCS/app hiển thị ngay, không cần chờ tải log
+- **Output người dùng thấy:** Mission Planner tab PHAK: 1 dòng mỗi ao mỗi ngày; lọc theo Lat/Lng hoặc PondIdx để xem kiềm từng ao
 
-### Case 13: Ghi điểm mẫu theo khoảng cách (PHSP)
+### Case 13: Khôi phục dữ liệu ao sau khi mất điện / reboot
 
-- **Điều kiện:** SA_PH_SAMP_D > 0 và GPS fix và pH có dữ liệu
-- **Hành vi hệ thống:** Mỗi SA_PH_SAMP_D mét ghi 1 record PHSP với WP.sub (ví dụ 1.0, 1.1, 1.2, 2.0), pH-MA, nhiệt độ, mV, GPS. Khi đến WP mới → ghi "WP.0" và reset sub-counter
-- **Output người dùng thấy:** Mission Planner tab PHSP: chuỗi điểm đo dọc theo tuyến đường — đúng vị trí trong ao nào, khoảng nào
+- **Điều kiện:** FC vừa khởi động lại, đã từng có dữ liệu ao được lưu trước đó
+- **Hành vi hệ thống:** Đọc lại toàn bộ dữ liệu 100 ao từ thẻ SD (pH sáng/chiều, kiềm, ngày, setpoint/loại thức ăn riêng của từng ao) ngay khi boot; dữ liệu mới tiếp tục được lưu định kỳ (mỗi 5s nếu có thay đổi)
+- **Output người dùng thấy:** Thông báo "Load N ao tu SD card"; kiềm/PREV của các ao vẫn hiển thị đúng như trước khi mất điện
 
 ### Case 14: Chế độ thử nghiệm (SA_SIM=1)
 
 - **Điều kiện:** Bật chế độ giả lập
-- **Hành vi hệ thống:** Không giao tiếp RS485; dùng dữ liệu pH giả lập hình sin; ghi PHWD và PHSP bình thường với GPS thực; PHAK không ghi (không phân slot trong simulation)
-- **Output người dùng thấy:** pH và nhiệt độ dao động ổn định; console log có tiền tố [SIM]; SD card có PHWD với dữ liệu giả lập
+- **Hành vi hệ thống:** Không giao tiếp RS485; dùng dữ liệu pH giả lập hình sin; ghi PHWD bình thường với GPS thực; vẫn chạy đủ pipeline chọn ao/phân slot/tính kiềm như dữ liệu thật nên PHAK/SA_PHK vẫn được tạo ra để kiểm tra trong SITL
+- **Output người dùng thấy:** pH và nhiệt độ dao động ổn định; console log có tiền tố [SIM]; SD card có PHWD và PHAK với dữ liệu giả lập
 
 ---
 
