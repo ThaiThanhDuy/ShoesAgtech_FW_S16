@@ -470,16 +470,53 @@ private:
   bool _autotune_running;
   uint32_t _autotune_start_ms;
   uint32_t _autotune_sample_count;
-  float _autotune_xte_sum;      // signed sum -> bias/mean (cho STR_I)
-  float _autotune_xte_sum_sq;
-  float _autotune_xte_max;
-  float _autotune_xte_last;
-  uint32_t _autotune_osc_count;
-  uint32_t _autotune_speed_sample_count;
-  float _autotune_speed_err_sum;    // signed sum -> bias/mean (cho SPEED_FF)
-  float _autotune_speed_err_sum_sq;
-  float _autotune_speed_err_last;
-  uint32_t _autotune_speed_osc_count;
+  // Shoes_Agtech: mang 3 phan tu ung voi tung dai toc do - xem SpeedBand
+  // (0=NORMAL, 1=LOW, 2=HIGH) - tach rieng de AUTO_TUNE recommend dung theo
+  // dung bo tham so dang active luc lay mau (ATC_STR_RAT_*/AUTO_STRLO_*/
+  // AUTO_STRHI_* va ATC_SPEED_*/AUTO_SPDLO_*/AUTO_SPDHI_*)
+  uint32_t _autotune_xte_count[3];
+  float _autotune_xte_sum[3];      // signed sum -> bias/mean (cho STR_I)
+  float _autotune_xte_sum_sq[3];
+  float _autotune_xte_max[3];
+  float _autotune_xte_last[3];
+  uint32_t _autotune_osc_count[3];
+  uint32_t _autotune_speed_sample_count[3];
+  float _autotune_speed_err_sum[3];    // signed sum -> bias/mean (cho SPEED_FF)
+  float _autotune_speed_err_sum_sq[3];
+  float _autotune_speed_err_last[3];
+  uint32_t _autotune_speed_osc_count[3];
+
+  // Shoes_Agtech: AUTO_SPD_* - chon bo PID toc do (throttle) VA PID lai
+  // (steering rate) theo dai toc do da dat (WP_SPEED/DO_CHANGE_SPEED), dung
+  // CHUNG 1 dai cho ca 2 bo PID - xem _apply_speed_band() trong mode_auto.cpp
+  enum class SpeedBand : uint8_t { NORMAL = 0, LOW = 1, HIGH = 2 };
+  void _apply_speed_band();
+  void _speed_band_set_gains(SpeedBand band);
+
+  SpeedBand _spdband_current = SpeedBand::NORMAL;
+  SpeedBand _spdband_candidate = SpeedBand::NORMAL;
+  uint32_t _spdband_candidate_ms;
+  uint32_t _spdband_invalid_warn_ms;
+  // Shoes_Agtech: in 1 dong xac nhan "toc do -> dai PID dang dung" khi VUA
+  // arm, VUA vao mode Auto (_enter()), hoac toc do da dat vua doi - KHONG in
+  // dinh ky lien tuc, tranh spam log
+  bool _spdband_print_pending = true;
+  bool _spdband_was_armed;
+  bool _spdband_last_printed_speed_valid;
+  float _spdband_last_printed_speed;
+  bool _spdband_normal_cached;
+  float _spdband_normal_p;
+  float _spdband_normal_i;
+  float _spdband_normal_d;
+  float _spdband_normal_ff;
+  float _spdband_normal_imax;
+  // gain BINH THUONG goc cua PID lai (ATC_STR_RAT_*), cache cung luc voi
+  // _spdband_normal_* o tren
+  float _spdband_str_normal_p;
+  float _spdband_str_normal_i;
+  float _spdband_str_normal_d;
+  float _spdband_str_normal_ff;
+  float _spdband_str_normal_imax;
 };
 
 class ModeCircle : public Mode {

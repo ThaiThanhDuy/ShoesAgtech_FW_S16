@@ -268,6 +268,34 @@ public:
     k_param_auto_timer2 = 289,
     k_param_auto_timer3 = 290,
 
+    //
+    // === AUTO MODE SPEED-BAND PID SCHEDULING ===
+    //
+    k_param_auto_spd_en = 291,
+    k_param_auto_spd_min = 292,
+    k_param_auto_spd_max = 293,
+    k_param_auto_spd_dly = 294,
+    k_param_auto_spdlo_p = 295,
+    k_param_auto_spdlo_i = 296,
+    k_param_auto_spdlo_d = 297,
+    k_param_auto_spdlo_ff = 298,
+    k_param_auto_spdlo_imax = 299,
+    k_param_auto_spdhi_p = 300,
+    k_param_auto_spdhi_i = 301,
+    k_param_auto_spdhi_d = 302,
+    k_param_auto_spdhi_ff = 303,
+    k_param_auto_spdhi_imax = 304,
+    k_param_auto_strlo_p = 305,
+    k_param_auto_strlo_i = 306,
+    k_param_auto_strlo_d = 307,
+    k_param_auto_strlo_ff = 308,
+    k_param_auto_strlo_imax = 309,
+    k_param_auto_strhi_p = 310,
+    k_param_auto_strhi_i = 311,
+    k_param_auto_strhi_d = 312,
+    k_param_auto_strhi_ff = 313,
+    k_param_auto_strhi_imax = 314,
+
   };
 
   AP_Int16 format_version;
@@ -336,6 +364,34 @@ public:
   AP_Float auto_timer1;  // Gio hen 1, nhap thang gio.phut (15.30 = 15h30). 0=tat
   AP_Float auto_timer2;  // Gio hen 2
   AP_Float auto_timer3;  // Gio hen 3
+
+  // === AUTO MODE SPEED-BAND PID SCHEDULING ===
+  AP_Int8 auto_spd_en;    // 0: Disable, 1: Enable
+  AP_Float auto_spd_min;  // Nguong duoi (m/s) - duoi muc nay dung bo PID THAP
+  AP_Float auto_spd_max;  // Nguong tren (m/s) - tren muc nay dung bo PID CAO
+  AP_Int16 auto_spd_dly;  // Do tre xac nhan doi dai (ms), chong nhay qua lai
+  AP_Float auto_spdlo_p;    // PID THAP: P
+  AP_Float auto_spdlo_i;    // PID THAP: I
+  AP_Float auto_spdlo_d;    // PID THAP: D
+  AP_Float auto_spdlo_ff;   // PID THAP: FF
+  AP_Float auto_spdlo_imax; // PID THAP: IMAX
+  AP_Float auto_spdhi_p;    // PID CAO: P
+  AP_Float auto_spdhi_i;    // PID CAO: I
+  AP_Float auto_spdhi_d;    // PID CAO: D
+  AP_Float auto_spdhi_ff;   // PID CAO: FF
+  AP_Float auto_spdhi_imax; // PID CAO: IMAX
+  // PID lai (steering rate) theo dai toc do - dung CHUNG dai voi PID toc do
+  // (AUTO_SPD_MIN/MAX/DLY), khong co nguong rieng
+  AP_Float auto_strlo_p;    // PID LAI THAP: P
+  AP_Float auto_strlo_i;    // PID LAI THAP: I
+  AP_Float auto_strlo_d;    // PID LAI THAP: D
+  AP_Float auto_strlo_ff;   // PID LAI THAP: FF
+  AP_Float auto_strlo_imax; // PID LAI THAP: IMAX
+  AP_Float auto_strhi_p;    // PID LAI CAO: P
+  AP_Float auto_strhi_i;    // PID LAI CAO: I
+  AP_Float auto_strhi_d;    // PID LAI CAO: D
+  AP_Float auto_strhi_ff;   // PID LAI CAO: FF
+  AP_Float auto_strhi_imax; // PID LAI CAO: IMAX
   Parameters() {}
 };
 

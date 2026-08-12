@@ -382,6 +382,180 @@ const AP_Param::Info Rover::var_info[] = {
     // @User: Standard
     GSCALAR(auto_timer3, "AUTO_TIMER3", 0.0f),
 
+    // =========================================================
+    // === AUTO MODE — SPEED-BAND PID SCHEDULING
+    // =========================================================
+
+    // @Param: AUTO_SPD_EN
+    // @DisplayName: Auto speed-band PID scheduling enable
+    // @Description: Khi bat (1): so sanh toc do da dat (WP_SPEED/DO_CHANGE_SPEED)
+    //   voi AUTO_SPD_MIN/MAX de chon 1 trong 3 bo PID toc do trong Auto Mode:
+    //   duoi AUTO_SPD_MIN dung bo AUTO_SPDLO_*, tren AUTO_SPD_MAX dung bo
+    //   AUTO_SPDHI_*, con lai (binh thuong) dung ATC_SPEED_* nhu hien tai.
+    //   Doi bo PID co do tre AUTO_SPD_DLY de tranh nhay qua lai lien tuc.
+    // @Values: 0:Disabled, 1:Enabled
+    // @User: Standard
+    GSCALAR(auto_spd_en, "AUTO_SPD_EN", 0),
+
+    // @Param: AUTO_SPD_MIN
+    // @DisplayName: Speed-band lower threshold
+    // @Description: Nguong duoi (m/s). Toc do da dat thap hon muc nay ->
+    //   dung bo PID AUTO_SPDLO_*. Neu AUTO_SPD_MAX <= AUTO_SPD_MIN thi coi
+    //   nhu cau hinh khong hop le, giu nguyen ATC_SPEED_* (co canh bao GCS).
+    // @Range: 0 50
+    // @Units: m/s
+    // @User: Standard
+    GSCALAR(auto_spd_min, "AUTO_SPD_MIN", 1.0f),
+
+    // @Param: AUTO_SPD_MAX
+    // @DisplayName: Speed-band upper threshold
+    // @Description: Nguong tren (m/s). Toc do da dat cao hon muc nay ->
+    //   dung bo PID AUTO_SPDHI_*. Xem them mo ta AUTO_SPD_MIN.
+    // @Range: 0 50
+    // @Units: m/s
+    // @User: Standard
+    GSCALAR(auto_spd_max, "AUTO_SPD_MAX", 1.5f),
+
+    // @Param: AUTO_SPD_DLY
+    // @DisplayName: Speed-band switch delay
+    // @Description: Toc do da dat phai lien tuc nam trong 1 dai moi (THAP/
+    //   BINH THUONG/CAO) it nhat khoang thoi gian nay truoc khi thuc su doi
+    //   bo PID - tranh doi qua lai lien tuc khi toc do dao dong sat nguong.
+    // @Range: 0 10000
+    // @Units: ms
+    // @User: Advanced
+    GSCALAR(auto_spd_dly, "AUTO_SPD_DLY", 1000),
+
+    // @Param: AUTO_SPDLO_P
+    // @DisplayName: Low-speed-band throttle P
+    // @Description: He so P bo PID toc do dung khi toc do da dat < AUTO_SPD_MIN.
+    // @User: Advanced
+    GSCALAR(auto_spdlo_p, "AUTO_SPDLO_P", 0.20f),
+
+    // @Param: AUTO_SPDLO_I
+    // @DisplayName: Low-speed-band throttle I
+    // @Description: He so I bo PID toc do dung khi toc do da dat < AUTO_SPD_MIN.
+    // @User: Advanced
+    GSCALAR(auto_spdlo_i, "AUTO_SPDLO_I", 0.20f),
+
+    // @Param: AUTO_SPDLO_D
+    // @DisplayName: Low-speed-band throttle D
+    // @Description: He so D bo PID toc do dung khi toc do da dat < AUTO_SPD_MIN.
+    // @User: Advanced
+    GSCALAR(auto_spdlo_d, "AUTO_SPDLO_D", 0.0f),
+
+    // @Param: AUTO_SPDLO_FF
+    // @DisplayName: Low-speed-band throttle FF
+    // @Description: He so FF bo PID toc do dung khi toc do da dat < AUTO_SPD_MIN.
+    // @User: Advanced
+    GSCALAR(auto_spdlo_ff, "AUTO_SPDLO_FF", 0.0f),
+
+    // @Param: AUTO_SPDLO_IMAX
+    // @DisplayName: Low-speed-band throttle IMAX
+    // @Description: Gioi han tich phan bo PID toc do dung khi toc do da dat
+    //   < AUTO_SPD_MIN.
+    // @Range: 0 1
+    // @User: Advanced
+    GSCALAR(auto_spdlo_imax, "AUTO_SPDLO_IMAX", 1.0f),
+
+    // @Param: AUTO_SPDHI_P
+    // @DisplayName: High-speed-band throttle P
+    // @Description: He so P bo PID toc do dung khi toc do da dat > AUTO_SPD_MAX.
+    // @User: Advanced
+    GSCALAR(auto_spdhi_p, "AUTO_SPDHI_P", 0.20f),
+
+    // @Param: AUTO_SPDHI_I
+    // @DisplayName: High-speed-band throttle I
+    // @Description: He so I bo PID toc do dung khi toc do da dat > AUTO_SPD_MAX.
+    // @User: Advanced
+    GSCALAR(auto_spdhi_i, "AUTO_SPDHI_I", 0.20f),
+
+    // @Param: AUTO_SPDHI_D
+    // @DisplayName: High-speed-band throttle D
+    // @Description: He so D bo PID toc do dung khi toc do da dat > AUTO_SPD_MAX.
+    // @User: Advanced
+    GSCALAR(auto_spdhi_d, "AUTO_SPDHI_D", 0.0f),
+
+    // @Param: AUTO_SPDHI_FF
+    // @DisplayName: High-speed-band throttle FF
+    // @Description: He so FF bo PID toc do dung khi toc do da dat > AUTO_SPD_MAX.
+    // @User: Advanced
+    GSCALAR(auto_spdhi_ff, "AUTO_SPDHI_FF", 0.0f),
+
+    // @Param: AUTO_SPDHI_IMAX
+    // @DisplayName: High-speed-band throttle IMAX
+    // @Description: Gioi han tich phan bo PID toc do dung khi toc do da dat
+    //   > AUTO_SPD_MAX.
+    // @Range: 0 1
+    // @User: Advanced
+    GSCALAR(auto_spdhi_imax, "AUTO_SPDHI_IMAX", 1.0f),
+
+    // @Param: AUTO_STRLO_P
+    // @DisplayName: Low-speed-band steering rate P
+    // @Description: He so P bo PID lai (steering rate) dung khi toc do da dat
+    //   < AUTO_SPD_MIN (dung chung dai voi AUTO_SPDLO_*).
+    // @User: Advanced
+    GSCALAR(auto_strlo_p, "AUTO_STRLO_P", 0.20f),
+
+    // @Param: AUTO_STRLO_I
+    // @DisplayName: Low-speed-band steering rate I
+    // @Description: He so I bo PID lai dung khi toc do da dat < AUTO_SPD_MIN.
+    // @User: Advanced
+    GSCALAR(auto_strlo_i, "AUTO_STRLO_I", 0.20f),
+
+    // @Param: AUTO_STRLO_D
+    // @DisplayName: Low-speed-band steering rate D
+    // @Description: He so D bo PID lai dung khi toc do da dat < AUTO_SPD_MIN.
+    // @User: Advanced
+    GSCALAR(auto_strlo_d, "AUTO_STRLO_D", 0.0f),
+
+    // @Param: AUTO_STRLO_FF
+    // @DisplayName: Low-speed-band steering rate FF
+    // @Description: He so FF bo PID lai dung khi toc do da dat < AUTO_SPD_MIN.
+    // @User: Advanced
+    GSCALAR(auto_strlo_ff, "AUTO_STRLO_FF", 0.20f),
+
+    // @Param: AUTO_STRLO_IMAX
+    // @DisplayName: Low-speed-band steering rate IMAX
+    // @Description: Gioi han tich phan bo PID lai dung khi toc do da dat
+    //   < AUTO_SPD_MIN.
+    // @Range: 0 1
+    // @User: Advanced
+    GSCALAR(auto_strlo_imax, "AUTO_STRLO_IMAX", 1.0f),
+
+    // @Param: AUTO_STRHI_P
+    // @DisplayName: High-speed-band steering rate P
+    // @Description: He so P bo PID lai dung khi toc do da dat > AUTO_SPD_MAX
+    //   (dung chung dai voi AUTO_SPDHI_*).
+    // @User: Advanced
+    GSCALAR(auto_strhi_p, "AUTO_STRHI_P", 0.20f),
+
+    // @Param: AUTO_STRHI_I
+    // @DisplayName: High-speed-band steering rate I
+    // @Description: He so I bo PID lai dung khi toc do da dat > AUTO_SPD_MAX.
+    // @User: Advanced
+    GSCALAR(auto_strhi_i, "AUTO_STRHI_I", 0.20f),
+
+    // @Param: AUTO_STRHI_D
+    // @DisplayName: High-speed-band steering rate D
+    // @Description: He so D bo PID lai dung khi toc do da dat > AUTO_SPD_MAX.
+    // @User: Advanced
+    GSCALAR(auto_strhi_d, "AUTO_STRHI_D", 0.0f),
+
+    // @Param: AUTO_STRHI_FF
+    // @DisplayName: High-speed-band steering rate FF
+    // @Description: He so FF bo PID lai dung khi toc do da dat > AUTO_SPD_MAX.
+    // @User: Advanced
+    GSCALAR(auto_strhi_ff, "AUTO_STRHI_FF", 0.20f),
+
+    // @Param: AUTO_STRHI_IMAX
+    // @DisplayName: High-speed-band steering rate IMAX
+    // @Description: Gioi han tich phan bo PID lai dung khi toc do da dat
+    //   > AUTO_SPD_MAX.
+    // @Range: 0 1
+    // @User: Advanced
+    GSCALAR(auto_strhi_imax, "AUTO_STRHI_IMAX", 1.0f),
+
     // variables not in the g class which contain EEPROM saved variables
 
     // @Group: COMPASS_
