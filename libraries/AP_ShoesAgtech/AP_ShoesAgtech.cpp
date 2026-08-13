@@ -766,7 +766,7 @@ void AP_ShoesAgtech::update(void) {
           _tank_warn_ms = now;
           float dist_m = (_tank_vol.get() / _flow_target) * speed_ms2 * 60.0f;
           gcs().send_text(
-              MAV_SEVERITY_INFO, "SA: Tank đủ ~%.0fm (%.1fL @%.1fL/min)",
+              MAV_SEVERITY_INFO, "SA: Tank lasts ~%.0fm (%.1fL @%.1fL/min)",
               (double)dist_m, (double)_tank_vol.get(), (double)_flow_target);
         }
       }
@@ -790,7 +790,7 @@ void AP_ShoesAgtech::update(void) {
           _tank_empty_detected = true;
           gcs().send_text(
               MAV_SEVERITY_CRITICAL,
-              "SA: THÙNG HẾT VI SINH - flow %.1fL/ph > 1.7 trong 3s",
+              "SA: TANK EMPTY - flow %.1fL/min > 1.7 for 3s",
               (double)_flow_rate_filtered);
         }
       } else {
@@ -822,8 +822,8 @@ void AP_ShoesAgtech::update(void) {
       float dmax =
           (spd > 0.1f) ? (_tank_vol.get() * r * spd * 60.0f / 0.3f) : 0.0f;
       gcs().send_text(MAV_SEVERITY_INFO,
-                      "%s FM1 r:%.2f q1:%.2fL/ph miss:%.0fm dmax:%.0fm "
-                      "spd:%.2fm/s vi/run:%.1fL",
+                      "%s FM1 r:%.2f q1:%.2fL/min miss:%.0fm dmax:%.0fm "
+                      "spd:%.2fm/s bio/run:%.1fL",
                       flow_pfx, (double)r, (double)q1_now, (double)mdist,
                       (double)dmax, (double)spd, (double)vi_per_run);
     }
@@ -977,7 +977,7 @@ float AP_ShoesAgtech::_compute_visin_target(float r) {
     if (now - _tank_warn_ms >= 5000U) {
       _tank_warn_ms = now;
       gcs().send_text(MAV_SEVERITY_WARNING,
-                      "SA FM1: chưa có mission - bơm dừng");
+                      "SA FM1: no mission - pump stopped");
     }
     return 0.0f;
   }
@@ -997,7 +997,7 @@ float AP_ShoesAgtech::_compute_visin_target(float r) {
       _tank_warn_ms = now;
       gcs().send_text(
           MAV_SEVERITY_WARNING,
-          "SA FM1: q1=%.2fL/ph < 0.3 - rút ngắn mission hoặc tăng speed",
+          "SA FM1: q1=%.2fL/min < 0.3 - shorten mission or increase speed",
           (double)q1);
     }
     return 0.0f;
@@ -1009,7 +1009,7 @@ float AP_ShoesAgtech::_compute_visin_target(float r) {
       _tank_warn_ms = now;
       gcs().send_text(
           MAV_SEVERITY_WARNING,
-          "SA FM1: q1=%.2fL/ph > 2.0 - kéo dài mission hoặc giảm speed",
+          "SA FM1: q1=%.2fL/min > 2.0 - lengthen mission or reduce speed",
           (double)q1);
     }
     return 0.0f;
@@ -1028,7 +1028,7 @@ void AP_ShoesAgtech::_print_fm1_arm_status(float r) {
 
   if (dist <= 1.0f) {
     gcs().send_text(MAV_SEVERITY_WARNING,
-                    "SA FM1: chưa có mission - bơm sẽ dừng");
+                    "SA FM1: no mission - pump will stay stopped");
     return;
   }
 
@@ -1037,8 +1037,8 @@ void AP_ShoesAgtech::_print_fm1_arm_status(float r) {
   float speed = _get_spray_speed();
   if (speed <= 0.1f) {
     gcs().send_text(MAV_SEVERITY_INFO,
-                    "SA FM1 SẴN SÀNG: r=%.2f miss=%.0fm vi/run=%.1fL | vận "
-                    "tốc=0 bơm chờ xe chạy",
+                    "SA FM1 READY: r=%.2f miss=%.0fm bio/run=%.1fL | "
+                    "speed=0 pump waiting for vehicle to move",
                     (double)r, (double)dist, (double)vi_per_run);
     return;
   }
@@ -1048,7 +1048,7 @@ void AP_ShoesAgtech::_print_fm1_arm_status(float r) {
 
   if (q1 < 0.3f) {
     gcs().send_text(MAV_SEVERITY_WARNING,
-                    "SA FM1: q1=%.2fL/ph < 0.3 @%.1fm/s dist=%.0fm - rút ngắn "
+                    "SA FM1: q1=%.2fL/min < 0.3 @%.1fm/s dist=%.0fm - shorten "
                     "mission (dmax=%.0fm)",
                     (double)q1, (double)speed, (double)dist, (double)dist_max);
     return;
@@ -1056,7 +1056,7 @@ void AP_ShoesAgtech::_print_fm1_arm_status(float r) {
   if (q1 > 2.0f) {
     float dist_min = _tank_vol.get() * r * speed * 60.0f / 2.0f;
     gcs().send_text(MAV_SEVERITY_WARNING,
-                    "SA FM1: q1=%.2fL/ph > 2.0 @%.1fm/s dist=%.0fm - kéo dài "
+                    "SA FM1: q1=%.2fL/min > 2.0 @%.1fm/s dist=%.0fm - lengthen "
                     "mission (dmin=%.0fm)",
                     (double)q1, (double)speed, (double)dist, (double)dist_min);
     return;
@@ -1067,8 +1067,8 @@ void AP_ShoesAgtech::_print_fm1_arm_status(float r) {
   uint32_t eta_sec = eta_s % 60U;
 
   gcs().send_text(MAV_SEVERITY_INFO,
-                  "SA FM1 OK: r=%.2f q1=%.2fL/ph miss=%.0fm dmax=%.0fm "
-                  "~%um%02us vi/run=%.1fL",
+                  "SA FM1 OK: r=%.2f q1=%.2fL/min miss=%.0fm dmax=%.0fm "
+                  "~%um%02us bio/run=%.1fL",
                   (double)r, (double)q1, (double)dist, (double)dist_max,
                   (unsigned)eta_min, (unsigned)eta_sec, (double)vi_per_run);
 }
@@ -1230,11 +1230,11 @@ void AP_ShoesAgtech::_ph_update(void) {
         _ph_nodata_warn_ms = now;
         if (_ph_last_good_ms == 0) {
           gcs().send_text(MAV_SEVERITY_WARNING,
-                          "SA: pH sensor chưa có dữ liệu - kiểm tra dây RS485");
+                          "SA: pH sensor no data yet - check RS485 wiring");
         } else {
           gcs().send_text(
               MAV_SEVERITY_WARNING,
-              "SA: pH sensor mất kết nối (%.0fs) - kiểm tra dây RS485",
+              "SA: pH sensor lost connection (%.0fs) - check RS485 wiring",
               (double)((now - _ph_last_good_ms) / 1000U));
         }
       }
@@ -1331,7 +1331,7 @@ void AP_ShoesAgtech::_ph_update(void) {
       int as_h = (int)as_, as_m = (int)((as_ - (int)as_) * 60.0f + 0.5f);
       int ae_h = (int)ae, ae_m = (int)((ae - (int)ae) * 60.0f + 0.5f);
       gcs().send_text(MAV_SEVERITY_INFO,
-                      "%s Sang:%d:%02d-%d:%02d Chieu:%d:%02d-%d:%02d", ph_pfx,
+                      "%s AM:%d:%02d-%d:%02d PM:%d:%02d-%d:%02d", ph_pfx,
                       ms_h, ms_m, me_h, me_m, as_h, as_m, ae_h, ae_m);
     }
   }
@@ -1354,7 +1354,7 @@ void AP_ShoesAgtech::_ph_update_daily_slots(float ph_cal) {
   if (!AP::rtc().get_utc_usec(utc_usec)) {
     if (_ph_log_enable.get() > 0 && now - _slot_warn_ms >= 60000) {
       _slot_warn_ms = now;
-      gcs().send_text(MAV_SEVERITY_INFO, "[WM] Chưa GPS - kiềm đợi GPS/giờ");
+      gcs().send_text(MAV_SEVERITY_INFO, "[WM] No GPS - alkalinity waiting for GPS/time");
     }
     return;
   }
@@ -1365,7 +1365,7 @@ void AP_ShoesAgtech::_ph_update_daily_slots(float ph_cal) {
   if (gps_inst.status(0) < AP_GPS::GPS_OK_FIX_3D) {
     if (_ph_log_enable.get() > 0 && now - _slot_warn_ms >= 60000) {
       _slot_warn_ms = now;
-      gcs().send_text(MAV_SEVERITY_INFO, "[WM] Chưa GPS - kiềm đợi GPS/giờ");
+      gcs().send_text(MAV_SEVERITY_INFO, "[WM] No GPS - alkalinity waiting for GPS/time");
     }
     return;
   }
@@ -1417,8 +1417,8 @@ void AP_ShoesAgtech::_ph_update_daily_slots(float ph_cal) {
   // ---- Thông báo khi ao thay đổi (kể cả lần đầu boot) — in 1 lần ----
   if (pond_idx != _active_pond_idx || !_pond_first_detect_done) {
     _pond_first_detect_done = true;
-    gcs().send_text(MAV_SEVERITY_INFO, "[SA] Chuyen sang ao #%u%s", disp_idx,
-                    pond_is_new ? " (ao moi)" : "");
+    gcs().send_text(MAV_SEVERITY_INFO, "[SA] Switched to pond #%u%s", disp_idx,
+                    pond_is_new ? " (new pond)" : "");
     if (pond.gps_count > 5) {
       const float DEG2M = 111320.0f;
       const float coslat = cosf(cur_lat_f * DEG_TO_RAD);
@@ -1427,11 +1427,11 @@ void AP_ShoesAgtech::_ph_update_daily_slots(float ph_cal) {
       float dist_m = sqrtf(dlat_m * dlat_m + dlng_m * dlng_m);
       float pond_thr = constrain_float(_ph_pond_dist.get(), 10.0f, 5000.0f);
       if (dist_m <= pond_thr) {
-        gcs().send_text(MAV_SEVERITY_INFO, "[SA] Ao#%u GPS OK (%.0fm)",
+        gcs().send_text(MAV_SEVERITY_INFO, "[SA] Pond#%u GPS OK (%.0fm)",
                         disp_idx, (double)dist_m);
       } else {
         gcs().send_text(MAV_SEVERITY_INFO,
-                        "[SA] Ao#%u GPS lech %.0fm - can check lai vi tri ao",
+                        "[SA] Pond#%u GPS off by %.0fm - check pond location",
                         disp_idx, (double)dist_m);
       }
     }
@@ -1482,7 +1482,7 @@ void AP_ShoesAgtech::_ph_update_daily_slots(float ph_cal) {
       _ponds_dirty = true;
       if (pond.morn_count == cap_min && !pond.morn_reported) {
         pond.morn_reported = true;
-        gcs().send_text(MAV_SEVERITY_INFO, "[SA] Ao#%u pH sang: %.2f (%u mau)",
+        gcs().send_text(MAV_SEVERITY_INFO, "[SA] Pond#%u pH AM: %.2f (%u samples)",
                         disp_idx, (double)pond.ph_morn, (unsigned)cap_min);
       }
     } else if (in_aft && now - pond.aft_last_ms >= cap_ms) {
@@ -1493,7 +1493,7 @@ void AP_ShoesAgtech::_ph_update_daily_slots(float ph_cal) {
       _ponds_dirty = true;
       if (pond.aft_count == cap_min && !pond.aft_reported) {
         pond.aft_reported = true;
-        gcs().send_text(MAV_SEVERITY_INFO, "[SA] Ao#%u pH chieu: %.2f (%u mau)",
+        gcs().send_text(MAV_SEVERITY_INFO, "[SA] Pond#%u pH PM: %.2f (%u samples)",
                         disp_idx, (double)pond.ph_aft, (unsigned)cap_min);
       }
     }
@@ -1514,10 +1514,10 @@ void AP_ShoesAgtech::_ph_update_daily_slots(float ph_cal) {
     _delta_ph = pond.delta_ph;
     _alk_dkh = pond.alk_dkh;
     _alk_mgl = pond.alk_mgl;
-    gcs().send_text(MAV_SEVERITY_INFO, "[SA] Ao#%u S:%.2f C:%.2f dPH:%.2f",
+    gcs().send_text(MAV_SEVERITY_INFO, "[SA] Pond#%u AM:%.2f PM:%.2f dPH:%.2f",
                     disp_idx, (double)pond.ph_morn, (double)pond.ph_aft,
                     (double)pond.delta_ph);
-    gcs().send_text(MAV_SEVERITY_INFO, "[SA] Ao#%u kiem:%.1fdKH/%.0fmgL",
+    gcs().send_text(MAV_SEVERITY_INFO, "[SA] Pond#%u Alk:%.1fdKH/%.0fmgL",
                     disp_idx, (double)pond.alk_dkh, (double)pond.alk_mgl);
   }
 
@@ -1686,7 +1686,7 @@ bool AP_ShoesAgtech::_pond_save(void) {
   // người dùng biết dữ liệu ao KHÔNG được lưu, thay vì âm thầm mất dữ liệu.
   if (hdr_written != (ssize_t)sizeof(hdr) || data_written != (ssize_t)data_len) {
     gcs().send_text(MAV_SEVERITY_WARNING,
-                    "SA: khong the luu du lieu ao xuong SD (the day/loi?)");
+                    "SA: could not save pond data to SD (card full/error?)");
     return false;
   }
   return true;
@@ -1718,7 +1718,7 @@ void AP_ShoesAgtech::_pond_load(void) {
     _ponds[i].gcs_alk_pending = false;
   }
 
-  gcs().send_text(MAV_SEVERITY_INFO, "[SA] Load %u ao tu SD card",
+  gcs().send_text(MAV_SEVERITY_INFO, "[SA] Loaded %u ponds from SD card",
                   (unsigned)_pond_count);
 }
 
@@ -1767,7 +1767,7 @@ void AP_ShoesAgtech::_check_dosing_config(void) {
   if (_dos_config_ok) {
     if (!_dos_was_ok) {
       gcs().send_text(MAV_SEVERITY_INFO,
-                      "SA: SERVO%d setup thành công - dosing motor sẵn sàng",
+                      "SA: SERVO%d setup OK - dosing motor ready",
                       (int)chan);
     }
     _dos_was_ok = true;
@@ -1782,25 +1782,25 @@ void AP_ShoesAgtech::_check_dosing_config(void) {
   _dos_warn_ms = now;
 
   if (!have_chan) {
-    gcs().send_text(MAV_SEVERITY_WARNING, "SA: SERVO%d không tồn tại",
+    gcs().send_text(MAV_SEVERITY_WARNING, "SA: SERVO%d does not exist",
                     (int)chan);
     return;
   }
   if (!func_ok) {
     gcs().send_text(MAV_SEVERITY_WARNING,
-                    "SA: SERVO%d FUNCTION=%d, cần đặt =0 (None)", (int)chan,
+                    "SA: SERVO%d FUNCTION=%d, must set =0 (None)", (int)chan,
                     (int)func_val);
   }
   if (!min_ok) {
-    gcs().send_text(MAV_SEVERITY_WARNING, "SA: SERVO%d MIN=%u, cần đặt =800",
+    gcs().send_text(MAV_SEVERITY_WARNING, "SA: SERVO%d MIN=%u, must set =800",
                     (int)chan, (unsigned)ch->get_output_min());
   }
   if (!trim_ok) {
-    gcs().send_text(MAV_SEVERITY_WARNING, "SA: SERVO%d TRIM=%u, cần đặt =1500",
+    gcs().send_text(MAV_SEVERITY_WARNING, "SA: SERVO%d TRIM=%u, must set =1500",
                     (int)chan, (unsigned)ch->get_trim());
   }
   if (!max_ok) {
-    gcs().send_text(MAV_SEVERITY_WARNING, "SA: SERVO%d MAX=%u, cần đặt =2200",
+    gcs().send_text(MAV_SEVERITY_WARNING, "SA: SERVO%d MAX=%u, must set =2200",
                     (int)chan, (unsigned)ch->get_output_max());
   }
 }
@@ -1929,11 +1929,11 @@ void AP_ShoesAgtech::_update_dosing_motor(void) {
           if (mission_dist <= 1.0f) {
             gcs().send_text(
                 MAV_SEVERITY_WARNING,
-                "SA DOS1: chưa có mission (dist=%.1fm) - motor dừng",
+                "SA DOS1: no mission (dist=%.1fm) - motor stopped",
                 (double)mission_dist);
           } else {
             gcs().send_text(MAV_SEVERITY_WARNING,
-                            "SA DOS1: tốc độ quá thấp (%.2fm/s) - motor dừng",
+                            "SA DOS1: speed too low (%.2fm/s) - motor stopped",
                             (double)speed_ms);
           }
         }
@@ -1958,13 +1958,13 @@ void AP_ShoesAgtech::_update_dosing_motor(void) {
       if (_dos_mode.get() == 0) {
         gcs().send_text(
             MAV_SEVERITY_INFO,
-            "[DOS] M0 F%d SERVO%d %s Rate:%.0fg/ph D:%.2fg/mL PWM:%u",
+            "[DOS] M0 F%d SERVO%d %s Rate:%.0fg/min D:%.2fg/mL PWM:%u",
             (int)dos_food_active, (int)_dos_chan.get(),
             motor_on ? "ON" : "OFF", (double)dos_rate_gpm,
             (double)_dos_dr[food_log].get(), (unsigned)_dos_pwm);
       } else {
         gcs().send_text(MAV_SEVERITY_INFO,
-                        "[DOS] M1 F%d SERVO%d %s SP:%.0fg Rate:%.2fg/ph "
+                        "[DOS] M1 F%d SERVO%d %s SP:%.0fg Rate:%.2fg/min "
                         "D:%.2fg/mL PWM:%u",
                         (int)dos_food_active, (int)_dos_chan.get(),
                         motor_on ? "ON" : "OFF", (double)dos_sp_active,
