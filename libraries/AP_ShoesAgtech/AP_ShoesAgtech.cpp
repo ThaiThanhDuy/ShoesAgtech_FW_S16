@@ -395,60 +395,130 @@ const AP_Param::GroupInfo AP_ShoesAgtech::var_info[] = {
 
     // @Param: DOS_FOOD
     // @DisplayName: Active food type selector (1-7) for the active pond
-    // @Description: Selects SA_DOS_Fx (volume rate) and SA_DOS_Dx (bulk
-    //   density) used to compute the PWM offset. Each pond keeps its own
-    //   value: switching ponds (POND_IDX) loads that pond's stored food
-    //   type here; editing this saves back to the active pond.
+    // @Description: Selects SA_DOS_Fx (fill factor) and SA_DOS_Dx (bulk
+    //   density) used with SA_DOS_V to compute the PWM offset. Each pond
+    //   keeps its own value: switching ponds (POND_IDX) loads that pond's
+    //   stored food type here; editing this saves back to the active pond.
     // @Range: 1 7
     // @User: Standard
     AP_GROUPINFO("DOS_FOOD", 40, AP_ShoesAgtech, _dos_food, 1),
 
-    // @Param: DOS_F1
-    // @DisplayName: Auger volume rate for food type 1 (mL/50us)
-    // @Description: Used with SA_DOS_D1 to compute PWM offset in both
-    //   DOS_MODE=0 and DOS_MODE=1. Calibrate per food type.
+    // Cách tính SA_DOS_V từ phần cứng trục vít (đo/tính LẠI 1 LẦN mỗi khi
+    // thay trục vít khác — không phụ thuộc loại thức ăn):
+    //
+    //   1. Thể tích quét lý thuyết mỗi vòng quay (thuần hình học vít tải):
+    //        V_per_rev(mL/vòng) = (pi/4) x (D_ngoai^2 - D_truc^2) x pitch
+    //      D_ngoai = đường kính cánh vít (cm, đo trực tiếp trên trục vít).
+    //      D_truc  = đường kính trục/lõi giữa vít (cm); = 0 nếu vít không
+    //                có trục giữa (vít dạng lò xo/shaftless).
+    //      pitch   = bước ren — khoảng cách DỌC TRỤC vít di chuyển được
+    //                sau đúng 1 vòng quay (cm/vòng, đo trên chính trục vít).
+    //      (1 cm^3 = 1 mL nên công thức trên ra thẳng đơn vị mL/vòng.)
+    //
+    //   2. Hệ số vòng quay theo PWM offset của riêng bộ động cơ/servo đang
+    //      lắp (RPM_per_50us, vòng/phút ứng với mỗi 50us PWM lệch tâm
+    //      1500) — phải ĐO THỰC TẾ bằng máy đo vòng quay (tachometer) ở
+    //      vài mức PWM offset khác nhau rồi lấy độ dốc trung bình. Đây là
+    //      đặc tính của bộ động cơ/servo, KHÔNG suy được từ hình học vít.
+    //
+    //   3. SA_DOS_V (mL/50us) = V_per_rev x RPM_per_50us
+    //
+    //   Ví dụ bằng số (khớp với giá trị mặc định 100.0 bên dưới): vít
+    //   D_ngoai=3.0cm, D_truc=0.8cm, pitch=2.5cm
+    //     -> V_per_rev = 0.785 x (3.0^2 - 0.8^2) x 2.5 = 0.785 x 8.36 x 2.5
+    //                  ~= 16.4 mL/vòng
+    //   Đo được động cơ quay ~6.1 vòng/phút ứng với mỗi 50us PWM offset:
+    //     -> SA_DOS_V = 16.4 x 6.1 ~= 100 mL/50us
+    //
+    //   Đây là giá trị LÝ THUYẾT ở fill=100% (vít lấp đầy hoàn toàn, không
+    //   khoảng trống) — sai lệch giữa số này và thực tế đo được (do khoảng
+    //   trống không khí giữa các hạt thức ăn) chính là phần SA_DOS_Fx
+    //   (hệ số điền đầy) xử lý riêng theo từng loại thức ăn.
+
+    // slot 13 (DOS_V) — never previously allocated (Module 3's own numbered
+    // range 25-54 is full; slot 27 is retired and must not be reused per its
+    // own comment below). Placed here, next to DOS_Fx, since that's where it
+    // conceptually belongs.
+    // @Param: DOS_V
+    // @DisplayName: Auger volumetric constant (shared, mL/50us at 100% fill)
+    // @Description: Theoretical volumetric output of the auger screw per 50us
+    //   PWM offset at full (100%) fill — pure geometry (screw diameter/pitch)
+    //   plus the PWM-offset-to-speed mapping. Shared across ALL food types:
+    //   it depends only on the physical screw, not on what is flowing
+    //   through it. Change this ONLY when the physical auger is replaced
+    //   with a different size. Effective volumetric rate used in the dosing
+    //   formula = SA_DOS_V x SA_DOS_Fx (fill factor of the active food type).
     // @Range: 0.1 10000
     // @User: Standard
-    AP_GROUPINFO("DOS_F1", 41, AP_ShoesAgtech, _dos_fr[0], 100.0f),
+    AP_GROUPINFO("DOS_V", 13, AP_ShoesAgtech, _dos_v, 100.0f),
+
+    // Fill-factor calibration (slots 41-47). Effective volumetric rate used
+    // in the dosing formula = SA_DOS_V x SA_DOS_Fx. Default 1.0 keeps a
+    // freshly-flashed/uncalibrated unit numerically identical to the old
+    // single-number SA_DOS_Fx default (100.0 = SA_DOS_V default x 1.0).
+    // IMPORTANT: any unit already field-calibrated under the OLD meaning of
+    // SA_DOS_Fx (a ~100-scale mL/50us number) MUST be recalibrated after
+    // updating to this firmware — the old stored value is silently
+    // reinterpreted as a fill factor and will cause wrong dosing otherwise.
+    // See the runtime sanity-check warning in _update_dosing_motor().
+
+    // @Param: DOS_F1
+    // @DisplayName: Auger fill factor for food type 1 (relative to SA_DOS_V)
+    // @Description: Packing/fill-factor coefficient for food type 1, relative
+    //   to the auger's physical volumetric constant SA_DOS_V (effective rate
+    //   = SA_DOS_V x SA_DOS_F1). Typically 0.3-1.0: smaller/rounder grains
+    //   pack tighter (closer to 1.0), larger/irregular grains leave more air
+    //   gap (lower). Calibrate by running the motor, weighing actual output,
+    //   and solving SA_DOS_F1 = measured_effective_rate / SA_DOS_V.
+    // @Range: 0.05 2.0
+    // @Increment: 0.01
+    // @User: Standard
+    AP_GROUPINFO("DOS_F1", 41, AP_ShoesAgtech, _dos_fr[0], 1.0f),
 
     // @Param: DOS_F2
-    // @DisplayName: Auger volume rate for food type 2 (mL/50us)
-    // @Range: 0.1 10000
+    // @DisplayName: Auger fill factor for food type 2 (relative to SA_DOS_V)
+    // @Range: 0.05 2.0
+    // @Increment: 0.01
     // @User: Standard
-    AP_GROUPINFO("DOS_F2", 42, AP_ShoesAgtech, _dos_fr[1], 100.0f),
+    AP_GROUPINFO("DOS_F2", 42, AP_ShoesAgtech, _dos_fr[1], 1.0f),
 
     // @Param: DOS_F3
-    // @DisplayName: Auger volume rate for food type 3 (mL/50us)
-    // @Range: 0.1 10000
+    // @DisplayName: Auger fill factor for food type 3 (relative to SA_DOS_V)
+    // @Range: 0.05 2.0
+    // @Increment: 0.01
     // @User: Standard
-    AP_GROUPINFO("DOS_F3", 43, AP_ShoesAgtech, _dos_fr[2], 100.0f),
+    AP_GROUPINFO("DOS_F3", 43, AP_ShoesAgtech, _dos_fr[2], 1.0f),
 
     // @Param: DOS_F4
-    // @DisplayName: Auger volume rate for food type 4 (mL/50us)
-    // @Range: 0.1 10000
+    // @DisplayName: Auger fill factor for food type 4 (relative to SA_DOS_V)
+    // @Range: 0.05 2.0
+    // @Increment: 0.01
     // @User: Standard
-    AP_GROUPINFO("DOS_F4", 44, AP_ShoesAgtech, _dos_fr[3], 100.0f),
+    AP_GROUPINFO("DOS_F4", 44, AP_ShoesAgtech, _dos_fr[3], 1.0f),
 
     // @Param: DOS_F5
-    // @DisplayName: Auger volume rate for food type 5 (mL/50us)
-    // @Range: 0.1 10000
+    // @DisplayName: Auger fill factor for food type 5 (relative to SA_DOS_V)
+    // @Range: 0.05 2.0
+    // @Increment: 0.01
     // @User: Standard
-    AP_GROUPINFO("DOS_F5", 45, AP_ShoesAgtech, _dos_fr[4], 100.0f),
+    AP_GROUPINFO("DOS_F5", 45, AP_ShoesAgtech, _dos_fr[4], 1.0f),
 
     // @Param: DOS_F6
-    // @DisplayName: Auger volume rate for food type 6 (mL/50us)
-    // @Range: 0.1 10000
+    // @DisplayName: Auger fill factor for food type 6 (relative to SA_DOS_V)
+    // @Range: 0.05 2.0
+    // @Increment: 0.01
     // @User: Standard
-    AP_GROUPINFO("DOS_F6", 46, AP_ShoesAgtech, _dos_fr[5], 100.0f),
+    AP_GROUPINFO("DOS_F6", 46, AP_ShoesAgtech, _dos_fr[5], 1.0f),
 
     // @Param: DOS_F7
-    // @DisplayName: Auger volume rate for food type 7 (mL/50us)
-    // @Range: 0.1 10000
+    // @DisplayName: Auger fill factor for food type 7 (relative to SA_DOS_V)
+    // @Range: 0.05 2.0
+    // @Increment: 0.01
     // @User: Standard
-    AP_GROUPINFO("DOS_F7", 47, AP_ShoesAgtech, _dos_fr[6], 100.0f),
+    AP_GROUPINFO("DOS_F7", 47, AP_ShoesAgtech, _dos_fr[6], 1.0f),
 
     // Bulk density per food type (slots 48-54).
-    // offset(us) = SP(g) * 50 / (vol_rate(mL/50us) x density(g/mL)).
+    // offset(us) = SP(g) * 50 / (SA_DOS_V(mL/50us) x fill_factor(-) x density(g/mL)).
     // Default 1.0 g/mL is backward-compatible with the old g/50us formula.
 
     // @Param: DOS_D1
@@ -1728,14 +1798,17 @@ void AP_ShoesAgtech::_pond_load(void) {
 //
 // RC SA_DOS_RC bật/tắt: PWM > 1500 -> bật, PWM <= 1500 -> tắt (xuất 1500).
 //
-// Quy đổi lượng thức ăn (SA_DOS_SP, gam) -> độ lệch PWM. SA_DOS_Fx
-// (mL/50us) + SA_DOS_Dx (g/mL) chọn theo SA_DOS_FOOD, dùng chung cho
-// cả 2 mode (calib riêng theo từng loại thức ăn):
+// Quy đổi lượng thức ăn (SA_DOS_SP, gam) -> độ lệch PWM. Lưu lượng thể
+// tích hiệu dụng của vít tải = SA_DOS_V(mL/50us, hằng số hình học DÙNG
+// CHUNG cho mọi loại thức ăn, chỉ đổi khi thay trục vít) x SA_DOS_Fx
+// (hệ số điền đầy hạt, không thứ nguyên, ~0.05-2.0, RIÊNG theo từng loại
+// thức ăn — hạt to/tròn/trơn khác nhau lấp khoảng trống trong vít khác
+// nhau). SA_DOS_Dx (g/mL) chọn theo SA_DOS_FOOD, dùng chung cho cả 2 mode:
 //   DOS_MODE=0 (toc do co dinh):
-//     offset = SA_DOS_SP * 50 / (SA_DOS_Fx(mL/50us) x SA_DOS_Dx(g/mL))
+//     offset = SA_DOS_SP * 50 / (SA_DOS_V x SA_DOS_Fx x SA_DOS_Dx(g/mL))
 //   DOS_MODE=1 (phan bo deu theo mission):
 //     dos_gpm = SA_DOS_SP * speed * 60 / mission_dist
-//     offset  = dos_gpm * 50 / (SA_DOS_Fx(mL/50us) x SA_DOS_Dx(g/mL))
+//     offset  = dos_gpm * 50 / (SA_DOS_V x SA_DOS_Fx x SA_DOS_Dx(g/mL))
 //
 // Chiều quay theo SA_DOS_REV (servo 360°, 1500 = dừng):
 //   0 = thuận: pwm = constrain(1500 - offset,  800, 1500)
@@ -1892,14 +1965,35 @@ void AP_ShoesAgtech::_update_dosing_motor(void) {
   if (motor_on) {
     float pwm_f = 1500.0f;
 
-    // Tốc độ vít tải + mật độ đều lấy theo loại thức ăn đang active
-    // (SA_DOS_Fx/SA_DOS_Dx), dùng chung cho cả 2 mode — calib
-    // SA_DOS_Fx/SA_DOS_Dx riêng cho từng loại thức ăn.
+    // Lưu lượng thể tích hiệu dụng của vít tải = SA_DOS_V (hằng số hình
+    // học, DÙNG CHUNG mọi loại thức ăn — chỉ đổi khi thay trục vít khác)
+    // x SA_DOS_Fx (hệ số điền đầy hạt, RIÊNG theo loại thức ăn đang
+    // active — bù cho khoảng trống không khí giữa các hạt trong vít).
+    // Mật độ SA_DOS_Dx cũng lấy theo loại thức ăn đang active, dùng
+    // chung cho cả 2 mode.
     uint8_t food_idx = (uint8_t)_clamp_food(dos_food_active) - 1;
-    float vol_rate = _dos_fr[food_idx].get();
-    if (vol_rate < 0.1f) {
-      vol_rate = 0.1f;
+    float fill_k = _dos_fr[food_idx].get();
+    if (fill_k < 0.01f) {
+      fill_k = 0.01f;
     }
+    // SA_DOS_Fx trước đây (trước khi tách ra SA_DOS_V x SA_DOS_Fx) là một
+    // số ở thang mL/50us, thường cỡ ~100 — nếu máy đã hiệu chuẩn từ trước
+    // và chưa đo lại theo công thức mới, SA_DOS_Fx sẽ vẫn còn giá trị lớn
+    // kiểu này, bị hiểu nhầm thành hệ số điền đầy => cho ăn sai (thường là
+    // quá ít). Cảnh báo rate-limit 5s để kỹ thuật viên biết cần hiệu
+    // chuẩn lại SA_DOS_Fx sau khi cập nhật firmware.
+    if (fill_k > 5.0f && now - _dos_warn_ms >= 5000U) {
+      _dos_warn_ms = now;
+      gcs().send_text(MAV_SEVERITY_WARNING,
+                      "SA: SA_DOS_F%d=%.1f looks uncalibrated for new V x "
+                      "fill-factor formula (expected ~0.05-2.0)",
+                      (int)(food_idx + 1), (double)fill_k);
+    }
+    float v_const = _dos_v.get();
+    if (v_const < 0.1f) {
+      v_const = 0.1f;
+    }
+    float vol_rate = v_const * fill_k;
     float density = _dos_dr[food_idx].get();
     if (density < 0.01f) {
       density = 0.01f;

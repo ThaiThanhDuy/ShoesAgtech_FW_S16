@@ -205,11 +205,20 @@ Heuristic GCS: data[5]==0 AND data[6]==0 AND data[7]==0 → cảnh báo "pH khô
 | Index | Tên | Đơn vị | Mô tả chi tiết |
 |---|---|---|---|
 | 15 | `dos_sp` | gam | Setpoint của **ao đang active** (đồng bộ 2 chiều với SA_DOS_SP) |
-| 16 | `dos_rate` | mL/50µs | `SA_DOS_Fx` của loại thức ăn ao active đang dùng |
+| 16 | `dos_rate` | — (hệ số điền đầy, không thứ nguyên) ⚠️ | `SA_DOS_Fx` của loại thức ăn ao active đang dùng |
 | 17 | `dos_pwm` | µs | PWM thực xuất; 1500=dừng |
 | 18 | `dos_food` | 1–7 | Loại thức ăn của ao active (đồng bộ 2 chiều với SA_DOS_FOOD) |
 
 | 19–57 | — | — | Luôn = 0.0 (zero-padded, dự phòng) |
+
+> **⚠️ Đổi ý nghĩa/đơn vị `data[16]` (từ bản 2026-08-19):** trước đây `SA_DOS_Fx`
+> (nguồn của `dos_rate`) là thể tích vít tải tuyệt đối (mL/50µs, ~100). Từ
+> bản này `SA_DOS_Fx` đổi thành hệ số điền đầy hạt (không thứ nguyên, ~1.0),
+> phần hình học tách riêng ra `SA_DOS_V` (không có trong SA_DATA). Getter
+> `get_active_dos_rate()` KHÔNG đổi (vẫn trả thẳng `SA_DOS_Fx`) nên giá trị
+> `data[16]` app/web nhận được đổi hoàn toàn dù field/tên không đổi — xem
+> chi tiết và các hướng xử lý ở `MODULE3_DOS_DETAIL_DESIGN.md` mục 4.1
+> (chưa chọn hướng nào, cần người phụ trách app/web quyết định).
 
 ### 4.2 MAVLink SA_PHK — Layout phk[58] (array_id=1, mới)
 

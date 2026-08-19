@@ -134,7 +134,7 @@ private:
   AP_Int8  _ph_cap_sam;     // SA_PH_CAP_SAM so mau tich luy de tinh trung binh (default 20)
   AP_Int8  _ph_cap_m;       // SA_PH_CAP_M   ban kinh capture (m), 1-100 - chi dung cho app, firmware khong doc
 
-  // ---- MODULE 3: dosing motor (vit tai thuc an tom) — servo xoay lien tuc 360° (slots 25-26, 28-31, 36, 40-54; slot 27 retired) ----
+  // ---- MODULE 3: dosing motor (vit tai thuc an tom) — servo xoay lien tuc 360° (slots 13, 25-26, 28-31, 36, 40-54; slot 27 retired) ----
   AP_Int8  _dos_chan;   // SA_DOS_CHAN   servo output channel (1-indexed)
   AP_Int8  _dos_rc;     // SA_DOS_RC     RC channel bat/tat motor (1-indexed)
   AP_Float _dos_sp;     // SA_DOS_SP     setpoint: luong thuc an muon cap, gam
@@ -143,7 +143,8 @@ private:
   AP_Int16 _dos_log_ms;     // SA_DOS_LOG_MS  khoang thoi gian giua hai lan in log (ms)
   AP_Int8  _dos_mode;       // SA_DOS_MODE    0=fixed PWM, 1=variable theo speed+mission
   AP_Int8  _dos_food;       // SA_DOS_FOOD    chon loai thuc an 1-7
-  AP_Float _dos_fr[7];      // SA_DOS_F1..F7  the tich vit tai (mL/50us) theo tung loai thuc an
+  AP_Float _dos_v;          // SA_DOS_V       hang so hinh hoc vit tai (mL/50us tai fill=100%), DUNG CHUNG cho ca 7 loai - chi doi khi thay truc vit khac
+  AP_Float _dos_fr[7];      // SA_DOS_F1..F7  he so dien day hat k_x (khong thu nguyen, ~0.05-2.0) theo tung loai thuc an - effective = SA_DOS_V * k_x
   AP_Float _dos_dr[7];      // SA_DOS_D1..D7  khoi luong rieng (g/mL) theo tung loai thuc an
 
   // ---- SIMULATION (slot 32) ----

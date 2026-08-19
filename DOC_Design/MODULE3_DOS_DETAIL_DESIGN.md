@@ -7,7 +7,7 @@
 **File nguồn:** `libraries/AP_ShoesAgtech/AP_ShoesAgtech.cpp/.h`
 **Loại:** `[x] Module mới   [ ] Bổ sung hệ thống   [ ] Sửa lỗi / thay đổi hành vi`
 **Tần suất update:** 10 Hz (`_update_dosing_motor()` gọi từ `update()`)
-**Ngày hoàn thành:** 2026-05-15 | **Cập nhật lần cuối:** 2026-07-18
+**Ngày hoàn thành:** 2026-05-15 | **Cập nhật lần cuối:** 2026-08-19
 
 ---
 
@@ -43,7 +43,9 @@ update() [Module 1, 10 Hz]
               └──► (motor_on=true)
                         │
                         ├──► food_idx = clamp(dos_food_active, 1, 7) − 1  (0-indexed)
-                        ├──► vol_rate = max(SA_DOS_Fx[food_idx], 0.1)     (mL/50us)
+                        ├──► fill_k   = max(SA_DOS_Fx[food_idx], 0.01)    (hệ số điền đầy, không thứ nguyên, RIÊNG theo loại thức ăn)
+                        ├──► v_const  = max(SA_DOS_V, 0.1)                (mL/50us, hằng số hình học, DÙNG CHUNG mọi loại thức ăn)
+                        ├──► vol_rate = v_const × fill_k                   (mL/50us hiệu dụng)
                         ├──► density  = max(SA_DOS_Dx[food_idx], 0.01)   (g/mL)
                         ├──► effective = vol_rate × density               (g/50us — dùng chung CẢ 2 mode)
                         │
@@ -125,7 +127,7 @@ update() [Module 1, 10 Hz]
   6. Nếu state thay đổi → STATUSTEXT ON/OFF
   7. Nếu `!motor_on` → `_dos_pwm = 1500`; xuất; log; return
   8. `food_idx = clamp(dos_food_active, 1, 7) − 1` (0-indexed, dùng chung cho cả 2 mode)
-  9. `vol_rate = max(SA_DOS_Fx[food_idx], 0.1)` (mL/50us); `density = max(SA_DOS_Dx[food_idx], 0.01)` (g/mL); `effective = vol_rate × density` — **giống hệt công thức cho cả DOS_MODE=0 và 1**
+  9. `fill_k = max(SA_DOS_Fx[food_idx], 0.01)` (hệ số điền đầy hạt, không thứ nguyên, RIÊNG theo loại thức ăn); nếu `fill_k > 5.0` → STATUSTEXT cảnh báo nghi chưa hiệu chuẩn lại theo công thức mới (rate-limit 5s, dùng chung `_dos_warn_ms`); `v_const = max(SA_DOS_V, 0.1)` (mL/50us, hằng số hình học vít tải, DÙNG CHUNG mọi loại thức ăn); `vol_rate = v_const × fill_k`; `density = max(SA_DOS_Dx[food_idx], 0.01)` (g/mL); `effective = vol_rate × density` — **giống hệt công thức cho cả DOS_MODE=0 và 1**
   10. **DOS_MODE=0:** `dos_rate_gpm = dos_sp_active` (SP CHÍNH LÀ tốc độ, g/phút); `offset_us = dos_rate_gpm × 50 / effective`
   11. **DOS_MODE=1:**
       - `mission_dist = _get_mission_dist()`
@@ -138,7 +140,7 @@ update() [Module 1, 10 Hz]
   - `dos_rate_gpm` (biến cục bộ, khởi tạo 0.0f đầu hàm) được giữ lại đến bước in log (14) để hiển thị tốc độ tức thời — không có getter public, chỉ dùng nội bộ cho console log
   14. Console log nếu SA_DOS_LOG=1
 - **Đầu ra / Return:** `void` — side effects: `_dos_pwm`, servo output
-- **Ghi chú:** Từ bản này, **DOS_MODE=0 và DOS_MODE=1 dùng chung một nguồn thông số** (`SA_DOS_Fx`/`SA_DOS_Dx` theo loại thức ăn) — không còn tham số `SA_DOS_RATE` riêng cho mode cố định.
+- **Ghi chú:** Từ bản này, **DOS_MODE=0 và DOS_MODE=1 dùng chung một nguồn thông số** (`SA_DOS_V` dùng chung + `SA_DOS_Fx`/`SA_DOS_Dx` theo loại thức ăn) — không còn tham số `SA_DOS_RATE` riêng cho mode cố định. `SA_DOS_Fx` đổi ý nghĩa từ bản này (xem mục 2 và 3.5).
 
 ---
 
@@ -154,10 +156,13 @@ update() [Module 1, 10 Hz]
 | `SA_DOS_LOG_MS` | 31 | Int16 | 1000 | 100 | 60000 | Chu kỳ console log dosing (ms). |
 | `SA_DOS_MODE` | 36 | Int8 | 0 | 0 | 1 | **0**=tốc độ cố định, **1**=tỉ lệ theo vận tốc + mission. Cả 2 mode đều dùng chung `SA_DOS_Fx`/`SA_DOS_Dx`. |
 | `SA_DOS_FOOD` | 40 | Int8 | 1 | 1 | 7 | Loại thức ăn đang dùng **cho ao đang chọn**. Đổi ao sẽ nạp lại giá trị đã lưu của ao đó; sửa giá trị này sẽ lưu lại cho ao đang chọn. |
-| `SA_DOS_F1..F7` | 41–47 | Float | 100.0 | 0.1 | 10000 | **Thể tích vít tải (mL/50us) theo loại thức ăn** — dùng cho CẢ DOS_MODE=0 và 1. Cho phép calib riêng nếu loại hạt khác nhau ảnh hưởng đến ma sát vít tải. |
+| `SA_DOS_V` | 13 | Float | 100.0 | 0.1 | 10000 | **Hằng số hình học vít tải (mL/50us, ở fill=100%)** — DÙNG CHUNG cho MỌI loại thức ăn, chỉ đổi khi thay trục vít vật lý khác. Tính từ đường kính cánh vít, đường kính trục và bước ren, hoặc đo thực nghiệm (xem mục 3.5, 3.6). |
+| `SA_DOS_F1..F7` | 41–47 | Float | 1.0 | 0.05 | 2.0 | **Hệ số điền đầy hạt (không thứ nguyên) theo loại thức ăn** — dùng cho CẢ DOS_MODE=0 và 1. Bù cho khoảng trống không khí giữa các hạt thức ăn trong vít (hạt to/không đều → hệ số thấp hơn). Lưu lượng hiệu dụng = `SA_DOS_V × SA_DOS_Fx`. |
 | `SA_DOS_D1..D7` | 48–54 | Float | 1.0 | 0.1 | 5.0 | **Khối lượng riêng (g/mL) theo loại thức ăn** — mặc định 1.0. Đo: đổ đầy 1000mL, cân → chia 1000. Thức ăn tôm viên thực tế ≈ 0.5–0.7 g/mL. |
 
 > **Param đã bị gỡ bỏ (không còn tồn tại):** `SA_DOS_RATE` (slot 27, cũ) — trước đây là thể tích vít tải dùng riêng cho DOS_MODE=0. Từ bản này, DOS_MODE=0 dùng chung `SA_DOS_Fx`/`SA_DOS_Dx` (theo `SA_DOS_FOOD`) với DOS_MODE=1 — không còn công thức/param riêng cho từng mode. Slot 27 hiện bỏ trống, không tái sử dụng.
+>
+> **⚠️ Đổi ý nghĩa tham số (từ bản 2026-08-19):** `SA_DOS_Fx` trước đây LÀ trực tiếp thể tích vít tải hiệu dụng (mL/50us, mặc định 100.0, đo bằng cách chạy motor + cân sản lượng). Từ bản này, `SA_DOS_Fx` đổi thành **hệ số điền đầy hạt** (không thứ nguyên, mặc định 1.0), và phần hình học tách riêng ra tham số mới `SA_DOS_V` (mL/50us, mặc định 100.0 — giữ đúng hành vi mặc định `V × Fx = 100 × 1.0 = 100` như số mặc định cũ, nên máy MỚI/CHƯA hiệu chuẩn không bị ảnh hưởng). **Máy đã hiệu chuẩn `SA_DOS_Fx` theo công thức CŨ (giá trị ~100) bắt buộc phải hiệu chuẩn lại** sau khi cập nhật firmware này, nếu không lượng thức ăn cấp ra sẽ sai (thường là quá ít, vì lưu lượng hiệu dụng bị tính vọt lên gấp nhiều lần thực tế) — xem quy trình hiệu chuẩn mới ở mục 3.6. Firmware có cảnh báo tự động qua STATUSTEXT nếu phát hiện `SA_DOS_Fx > 5.0` (xem mục 3.7, 4.4) nhưng **không thay thế được việc hiệu chuẩn lại thủ công**, chỉ là lưới an toàn phát hiện trường hợp rõ ràng chưa cập nhật.
 >
 > **Tham số dùng chung với Module 2:** `SA_POND_IDX` (slot 59) chọn ao — quyết định `SA_DOS_SP`/`SA_DOS_FOOD` đang áp dụng (xem `_sync_dosing_setpoint()` và MODULE2_PH_DETAIL_DESIGN.md).
 
@@ -205,10 +210,20 @@ Mỗi chu kỳ _sync_dosing_setpoint():
 
 ### 3.5 Công thức tính PWM
 
-**Khái niệm tách biệt cơ học và hạt (dùng chung cho cả 2 mode):**
+**Tách biệt hình học vít tải, hệ số điền đầy hạt, và mật độ hạt (dùng chung cho cả 2 mode):**
 ```
-vol_rate  = thể tích vít tải (mL/50us) — SA_DOS_Fx (x = SA_DOS_FOOD của ao active)
-           Đặc tính của vít tải: calibrate 1 lần, không đổi khi thay loại hạt.
+v_const   = hằng số hình học vít tải (mL/50us, ở fill=100%) — SA_DOS_V
+           Đặc tính THUẦN CƠ KHÍ của trục vít: tính/đo 1 lần, DÙNG CHUNG cho
+           MỌI loại thức ăn, chỉ đổi khi thay trục vít vật lý khác.
+
+fill_k    = hệ số điền đầy hạt (không thứ nguyên, ~0.05–2.0) — SA_DOS_Fx
+           (x = SA_DOS_FOOD của ao active)
+           Đặc tính RIÊNG của từng loại thức ăn: bù cho khoảng trống không
+           khí giữa các hạt thức ăn trong vít — trục vít KHÔNG THỂ lấp đầy
+           100% hạt thức ăn thực tế như v_const giả định (lý thuyết). Thay
+           loại hạt thì cập nhật giá trị này.
+
+vol_rate  = v_const × fill_k   (mL/50us hiệu dụng, đã trừ khoảng trống hạt)
 
 density   = khối lượng riêng hạt (g/mL) — SA_DOS_Dx
            Đặc tính của loại thức ăn: thay loại hạt thì cập nhật giá trị này.
@@ -216,16 +231,56 @@ density   = khối lượng riêng hạt (g/mL) — SA_DOS_Dx
 effective = vol_rate × density   (g/phút — lượng dispensed khi offset đúng bằng 50µs)
 ```
 
-> **Lưu ý đơn vị `SA_DOS_Fx`:** dù tên gọi "mL/50us" gợi ý một hằng số hình học, giá trị này thực chất được calib để `effective = vol_rate × density` ra đúng **gam/phút** đạt được ở offset=50µs (xem `dos_gpm` bên dưới, đơn vị g/phút, dùng chung `effective` này). Vì vậy khi calib (mục 3.6) phải đo trong đúng 1 phút.
+> **Lưu ý đơn vị:** dù tên gọi "mL/50us" gợi ý một hằng số hình học thuần túy, `vol_rate` (và trước đây là `SA_DOS_Fx` khi còn mang trực tiếp ý nghĩa này) thực chất được calib để `effective = vol_rate × density` ra đúng **gam/phút** đạt được ở offset=50µs (xem `dos_gpm` bên dưới, đơn vị g/phút, dùng chung `effective` này). Vì vậy khi calib (mục 3.6) phải đo trong đúng 1 phút.
+
+**Cách tính `SA_DOS_V` từ phần cứng trục vít** (đo/tính lại 1 lần mỗi khi
+thay trục vít khác — hoàn toàn không phụ thuộc loại thức ăn):
+
+1. **Thể tích quét lý thuyết mỗi vòng quay** (thuần hình học vít tải):
+   ```
+   V_per_rev(mL/vòng) = (π/4) × (D_ngoài² − D_trục²) × pitch
+   ```
+   - `D_ngoài` = đường kính cánh vít (cm, đo trực tiếp trên trục vít).
+   - `D_trục` = đường kính trục/lõi giữa vít (cm); = 0 nếu vít không có
+     trục giữa (vít dạng lò xo/shaftless).
+   - `pitch` = bước ren — khoảng cách DỌC TRỤC vít di chuyển được sau đúng
+     1 vòng quay (cm/vòng, đo trên chính trục vít).
+   - (1 cm³ = 1 mL nên công thức trên ra thẳng đơn vị mL/vòng.)
+
+2. **Hệ số vòng quay theo PWM offset** của riêng bộ động cơ/servo đang lắp
+   (`RPM_per_50us`, vòng/phút ứng với mỗi 50µs PWM lệch tâm 1500) — phải
+   **đo thực tế** bằng máy đo vòng quay (tachometer) ở vài mức PWM offset
+   khác nhau rồi lấy độ dốc trung bình. Đây là đặc tính của bộ động
+   cơ/servo, KHÔNG suy được từ hình học vít.
+
+3. **`SA_DOS_V (mL/50us) = V_per_rev × RPM_per_50us`**
+
+**Ví dụ bằng số** (khớp với giá trị mặc định 100.0): vít
+`D_ngoài=3.0cm, D_trục=0.8cm, pitch=2.5cm`
+```
+V_per_rev = 0.785 × (3.0² − 0.8²) × 2.5 = 0.785 × 8.36 × 2.5 ≈ 16.4 mL/vòng
+```
+Đo được động cơ quay ~6.1 vòng/phút ứng với mỗi 50µs PWM offset:
+```
+SA_DOS_V = 16.4 × 6.1 ≈ 100 mL/50us
+```
+
+`SA_DOS_V` là giá trị **lý thuyết ở fill=100%** (vít lấp đầy hoàn toàn,
+không khoảng trống) — sai lệch giữa số này và thực tế đo được (do khoảng
+trống không khí giữa các hạt thức ăn) chính là phần `SA_DOS_Fx` xử lý riêng
+theo từng loại thức ăn (xem quy trình hiệu chuẩn ở mục 3.6).
 
 **DOS_MODE=0 (tốc độ cố định):**
 ```
 food_idx = clamp(dos_food_active, 1, 7) − 1
-vol_rate = max(SA_DOS_Fx[food_idx], 0.1)   (mL/50us, ngầm định /phút — xem lưu ý trên)
+fill_k   = max(SA_DOS_Fx[food_idx], 0.01)  (hệ số điền đầy, không thứ nguyên)
+v_const  = max(SA_DOS_V, 0.1)              (mL/50us, hằng số hình học, DÙNG CHUNG)
+vol_rate = v_const × fill_k                (mL/50us hiệu dụng, ngầm định /phút — xem lưu ý trên)
 density  = max(SA_DOS_Dx[food_idx], 0.01)  (g/mL)
 offset_us = dos_sp_active(g) × 50 / (vol_rate × density)
 
-Ví dụ: SP=500, F1=100mL/50us, D1=0.6g/mL
+Ví dụ: SP=500, V=100mL/50us, F1=1.0 (fill_k), D1=0.6g/mL
+  → vol_rate = 100 × 1.0 = 100
   → offset = 500 × 50 / (100 × 0.6) = 416.7µs
   → pwm = 1500 - 417 = 1083µs (DOS_REV=0)
 ```
@@ -254,20 +309,48 @@ SA_DOS_REV=1 (ngược):  pwm = constrain(1500 + offset_us, 1500, 2200)
 
 ### 3.6 Workflow calibrate
 
-**Calibrate SA_DOS_Fx (thể tích vít tải theo loại thức ăn) — làm khi calib loại hạt mới:**
+**Bước 1 — Calibrate `SA_DOS_V` (hằng số hình học vít tải) — làm 1 LẦN khi
+lắp hoặc thay trục vít khác, KHÔNG phụ thuộc loại thức ăn:**
+
+Cách A — tính từ hình học (công thức đầy đủ ở mục 3.5):
 ```
-1. Cài SA_DOS_REV đúng chiều, DOS_SP=0 → tạm dừng motor
-2. Chọn SA_DOS_FOOD = x (loại đang calib), đặt tạm SA_DOS_Fx = 100, SA_DOS_Dx = 1.0
-3. DOS_MODE=0, đặt DOS_SP = giá trị thử nghiệm bất kỳ (vd 500) — nhớ: SP ở mode 0
-   là TỐC ĐỘ (g/phút), không phải tổng gam, nên chỉ dùng để tạo ra 1 offset_thực_us cố định
-4. Chạy motor ĐÚNG 1 PHÚT ở offset đó → thu thức ăn vào bình đong
-   → đo thể tích V (mL) và khối lượng M (g) thu được TRONG 1 PHÚT đó
-   (bắt buộc đúng 1 phút vì SA_DOS_Fx/hiệu dụng được định nghĩa theo đơn vị g/phút — xem mục 3.5)
-5. density_actual = M / V  → cập nhật SA_DOS_Dx
-6. Fx_actual = V(mL/phút) × 50us / offset_thực_us → cập nhật SA_DOS_Fx
+1. Đo D_ngoài, D_trục, pitch trực tiếp trên trục vít (cm)
+2. Tính V_per_rev = (π/4) × (D_ngoài² − D_trục²) × pitch   (mL/vòng)
+3. Đo RPM_per_50us bằng tachometer ở vài mức PWM offset, lấy độ dốc trung bình
+4. SA_DOS_V = V_per_rev × RPM_per_50us
 ```
 
-**Calibrate SA_DOS_Dx (khối lượng riêng hạt) — làm khi đổi loại hạt:**
+Cách B — đo thực nghiệm bằng vật liệu chảy tự do gần lấp đầy 100% (hạt mịn,
+đều, không kết dính — coi tạm `fill_k ≈ 1.0`):
+```
+1. Đặt tạm SA_DOS_Fx = 1.0 (mọi loại), SA_DOS_REV đúng chiều, DOS_SP=0
+2. DOS_MODE=0, đặt DOS_SP = giá trị thử nghiệm bất kỳ (vd 500 g/phút)
+3. Chạy motor ĐÚNG 1 PHÚT ở offset đó, dùng vật liệu chảy tự do trên
+   → đo thể tích thu được Vt (mL) trong 1 phút đó
+4. SA_DOS_V = Vt(mL/phút) × 50us / offset_thực_us
+```
+
+**Bước 2 — Calibrate `SA_DOS_Fx` (hệ số điền đầy hạt) — làm RIÊNG cho MỖI
+loại thức ăn mới, làm SAU khi đã có `SA_DOS_V` đúng ở Bước 1:**
+```
+1. SA_DOS_V đã có giá trị đúng (Bước 1), SA_DOS_REV đúng chiều, DOS_SP=0
+2. Chọn SA_DOS_FOOD = x (loại đang calib), đặt tạm SA_DOS_Fx = 1.0, SA_DOS_Dx = 1.0
+3. DOS_MODE=0, đặt DOS_SP = giá trị thử nghiệm bất kỳ (vd 500) — nhớ: SP ở mode 0
+   là TỐC ĐỘ (g/phút), không phải tổng gam, nên chỉ dùng để tạo ra 1 offset_thực_us cố định
+4. Chạy motor ĐÚNG 1 PHÚT ở offset đó → thu thức ăn thật (loại x) vào bình đong
+   → đo thể tích Vx (mL) và khối lượng M (g) thu được TRONG 1 PHÚT đó
+   (bắt buộc đúng 1 phút vì hiệu dụng được định nghĩa theo đơn vị g/phút — xem mục 3.5)
+5. density_actual = M / Vx  → cập nhật SA_DOS_Dx
+6. Fx_actual = [Vx(mL/phút) × 50us / offset_thực_us] / SA_DOS_V → cập nhật SA_DOS_Fx
+```
+
+> **Lợi ích của việc tách 2 bước:** trước đây mỗi loại thức ăn mới phải đo
+> lại TOÀN BỘ `SA_DOS_Fx` (thể tích vít tải tuyệt đối) từ đầu. Từ nay,
+> Bước 1 chỉ làm 1 lần cho cả trục vít; thêm loại thức ăn mới chỉ cần lặp
+> lại Bước 2 (nhanh hơn, ít bước hơn).
+
+**Calibrate SA_DOS_Dx (khối lượng riêng hạt) — làm khi đổi loại hạt (thuộc
+Bước 2, không đổi ở Bước 1):**
 ```
 1. Đổ đầy bình đong 1000mL bằng hạt thức ăn loại x
 2. Cân bình → trừ tara → được M(g)
@@ -282,7 +365,8 @@ VD: cân được 620g → SA_DOS_D1 = 0.62
 | Bất kỳ 1 trong 4 điều kiện servo sai | Không xuất PWM (giữ 1500) | STATUSTEXT cụ thể lỗi, mỗi 5s |
 | `RC_DOS PWM = 0` (mất tín hiệu) | Xuất 1500 (dừng) | data[17]=1500 |
 | `SA_DOS_SP = 0` (của ao active) | offset_us = 0 → pwm = 1500 | data[17]=1500 |
-| `SA_DOS_Fx < 0.1` hoặc `SA_DOS_Dx < 0.01` | Clamp về giá trị min → tránh chia cho 0 | PWM tính được (không crash) |
+| `SA_DOS_Fx < 0.01` hoặc `SA_DOS_V < 0.1` hoặc `SA_DOS_Dx < 0.01` | Clamp về giá trị min → tránh chia cho 0 | PWM tính được (không crash) |
+| `SA_DOS_Fx > 5.0` (nghi vẫn còn giá trị cũ, chưa hiệu chuẩn lại theo công thức `V × Fx`) | Vẫn tính PWM bình thường theo giá trị hiện tại — KHÔNG tự sửa | STATUSTEXT cảnh báo, mỗi 5s |
 | `SA_DOS_MODE=1` & dist ≤ 1m | offset_us=0 → motor dừng | STATUSTEXT warning mỗi 5s |
 | `SA_DOS_MODE=1` & speed < 0.05 | offset_us=0 → motor dừng | STATUSTEXT warning mỗi 5s |
 | `SA_SIM=1` | `_get_spray_speed()` trả `_sim_speed` thay `groundspeed()` | Tính toán vẫn chạy bình thường |
@@ -302,9 +386,11 @@ VD: cân được 620g → SA_DOS_D1 = 0.62
 | Index | Tên | Đơn vị | Điều kiện ghi | Mô tả |
 |---|---|---|---|---|
 | `data[15]` | `dos_sp` | gam | Luôn | `get_active_dos_sp()`; setpoint của ao đang active (đồng bộ 2 chiều với SA_DOS_SP) |
-| `data[16]` | `dos_rate` | mL/50us | Luôn | `get_active_dos_rate()`; `SA_DOS_Fx` của loại thức ăn ao active đang dùng |
+| `data[16]` | `dos_rate` | — (hệ số điền đầy, không thứ nguyên) ⚠️ đổi ý nghĩa | Luôn | `get_active_dos_rate()`; trả thẳng `SA_DOS_Fx` (hệ số điền đầy) của loại thức ăn ao active đang dùng |
 | `data[17]` | `dos_pwm` | µs | Luôn | PWM thực tế đang xuất; 1500=dừng |
 | `data[18]` | `dos_food` | 1–7 | Luôn | `get_active_dos_food()`; loại thức ăn của ao active (đồng bộ 2 chiều với SA_DOS_FOOD) |
+
+> **⚠️ Cần xác nhận lại với app/web (chưa xử lý ở bản này):** `get_active_dos_rate()` (nguồn của `data[16]`) trước đây trả `SA_DOS_Fx` ở đơn vị mL/50us (~100); từ bản 2026-08-19 trả hệ số điền đầy không thứ nguyên (~1.0) — **giá trị số thay đổi hoàn toàn dù tên trường và getter không đổi**. Nếu companion app/trang web đang hiển thị field này với nhãn "mL/50us" hoặc dùng nó để tính toán gì khác, cần cập nhật theo — không phải lỗi firmware, chỉ là đổi ý nghĩa con số. Có 2 hướng xử lý, cần người phụ trách app/web quyết định: (a) sửa `get_active_dos_rate()` để trả thẳng `SA_DOS_V × SA_DOS_Fx` (giữ nguyên đơn vị mL/50us hiệu dụng như cũ cho app), hoặc (b) giữ nguyên getter, chỉ cập nhật cách app hiển thị/diễn giải con số này. **Chưa chọn hướng nào ở bản này.**
 
 ### 4.2 DataFlash Log [DATA]
 
@@ -338,18 +424,24 @@ Ví dụ (DOS_MODE=1, F1, D1=0.62, SP=3860g cho mission 301m @1.3m/s → tốc �
 
 ### 4.4 STATUSTEXT — Toàn bộ thông báo
 
+> **Lưu ý:** toàn bộ STATUSTEXT trong code đã được dịch sang tiếng Anh (bản
+> 2026-08-15, xem `DEBUG_LOG_GIAI_THICH.md`) — bảng dưới đây liệt kê đúng
+> câu chữ tiếng Anh hiện có trong code, kèm giải thích tiếng Việt ở cột Điều
+> kiện.
+
 | Nội dung thông báo | Mức | Điều kiện | Tần suất |
 |---|---|---|---|
-| `SA: SERVO<m> setup thanh cong - dosing motor san sang` | INFO | 4 điều kiện OK (edge rising) | 1 lần/lần vừa đúng |
-| `SA: SERVO<m> không tồn tại` | WARNING | Không tìm thấy kênh servo | Mỗi 5s |
-| `SA: SERVO<m> FUNCTION=<x>, cần đặt =0 (None)` | WARNING | FUNCTION sai | Mỗi 5s |
-| `SA: SERVO<m> MIN=<x>, cần đặt =800` | WARNING | MIN sai | Mỗi 5s |
-| `SA: SERVO<m> TRIM=<x>, cần đặt =1500` | WARNING | TRIM sai | Mỗi 5s |
-| `SA: SERVO<m> MAX=<x>, cần đặt =2200` | WARNING | MAX sai | Mỗi 5s |
+| `SA: SERVO<m> setup OK - dosing motor ready` | INFO | 4 điều kiện OK (edge rising) | 1 lần/lần vừa đúng |
+| `SA: SERVO<m> does not exist` | WARNING | Không tìm thấy kênh servo | Mỗi 5s |
+| `SA: SERVO<m> FUNCTION=<x>, must set =0 (None)` | WARNING | FUNCTION sai | Mỗi 5s |
+| `SA: SERVO<m> MIN=<x>, must set =800` | WARNING | MIN sai | Mỗi 5s |
+| `SA: SERVO<m> TRIM=<x>, must set =1500` | WARNING | TRIM sai | Mỗi 5s |
+| `SA: SERVO<m> MAX=<x>, must set =2200` | WARNING | MAX sai | Mỗi 5s |
 | `SA: Dosing motor ON` | INFO | RC bật (edge rising) | 1 lần/lần bật |
 | `SA: Dosing motor OFF` | INFO | RC tắt (edge falling) | 1 lần/lần tắt |
-| `SA DOS1: chưa có mission (dist=<x>m) - motor dừng` | WARNING | DOS_MODE=1, dist ≤ 1m | Mỗi 5s |
-| `SA DOS1: tốc độ quá thấp (<x>m/s) - motor dừng` | WARNING | DOS_MODE=1, speed < 0.05 | Mỗi 5s |
+| `SA DOS1: no mission (dist=<x>m) - motor stopped` | WARNING | DOS_MODE=1, dist ≤ 1m | Mỗi 5s |
+| `SA DOS1: speed too low (<x>m/s) - motor stopped` | WARNING | DOS_MODE=1, speed < 0.05 | Mỗi 5s |
+| `SA: SA_DOS_F<n>=<x> looks uncalibrated for new V x fill-factor formula (expected ~0.05-2.0)` | WARNING | `SA_DOS_Fx` của loại thức ăn active > 5.0 — nghi vẫn còn giá trị cũ (thang mL/50us, thường ~100) từ trước khi tách `SA_DOS_V × SA_DOS_Fx`, chưa được hiệu chuẩn lại (xem mục 2, 3.6) | Mỗi 5s |
 
 ---
 
@@ -364,7 +456,8 @@ SERVOx_MAX      = 2200                     ┘
 SA_DOS_MODE=1: mission đã upload lên FC VÀ speed ≥ 0.05m/s
                thiếu 1 trong 2 → motor dừng (offset=0)
 
-SA_DOS_Fx > 0.1 mL/50us    (firmware clamp, không crash)
+SA_DOS_V  > 0.1            (firmware clamp, không crash) — mL/50us, DÙNG CHUNG mọi loại thức ăn
+SA_DOS_Fx > 0.01           (firmware clamp, không crash) — hệ số điền đầy, RIÊNG theo loại thức ăn
 SA_DOS_Dx > 0.01 g/mL      (firmware clamp, không crash)
 
 SA_DOS_SP/SA_DOS_FOOD hiển thị trên GCS luôn phản ánh ao đang chọn (SA_POND_IDX)
@@ -406,6 +499,7 @@ FC config (x = SA_DOS_CHAN):
 | DOS_MODE=1, warn label | Đề cập chung | Warn cụ thể lý do (dist hoặc speed) với giá trị thực | Người dùng biết cụ thể vấn đề |
 | Công thức tốc độ cố định (DOS_MODE=0) | `g/50us` gộp chung, sau đó tách `vol_rate(mL/50us) × density(g/mL)` với `SA_DOS_RATE` riêng | **Gỡ bỏ hoàn toàn `SA_DOS_RATE`** — DOS_MODE=0 dùng chung `SA_DOS_Fx`/`SA_DOS_Dx` với DOS_MODE=1 | Không còn lý do calib 2 bộ thông số khác nhau cho cùng 1 vít tải; đơn giản hoá cấu hình |
 | SA_DOS_F1..F7 | mL/50us theo loại hạt, chỉ dùng ở DOS_MODE=1 | **Dùng cho CẢ 2 mode** | Thống nhất công thức, giảm tham số cần nhớ |
+| SA_DOS_Fx — cấu trúc calib (2026-08-19) | Không có — 1 con số/loại thức ăn gộp cả hình học vít và điền đầy hạt | **Tách thành `SA_DOS_V` (mL/50us, DÙNG CHUNG mọi loại thức ăn, đặc tính cơ khí trục vít) × `SA_DOS_Fx` (hệ số điền đầy, không thứ nguyên, RIÊNG theo loại thức ăn)** | Bù đúng bản chất vật lý: trục vít không lấp đầy 100% hạt thức ăn (có khoảng trống không khí) — tách hình học (đo 1 lần) khỏi hệ số điền đầy (đo lại mỗi loại hạt mới) giúp hiệu chuẩn nhanh hơn khi thêm loại thức ăn |
 | SA_DOS_D1..D7 | Khối lượng riêng (g/mL) cho 7 loại thức ăn | Không đổi — vẫn 7 loại, mặc định 1.0 | — |
 | Setpoint/loại thức ăn theo ao | Không có — 1 giá trị SA_DOS_SP/SA_DOS_FOOD chung toàn hệ thống | **Lưu riêng theo từng ao** (`PondEntry.dos_sp/.dos_food`), đồng bộ 2 chiều qua `_sync_dosing_setpoint()`, tồn tại qua reboot (SD) | Mỗi ao có thể cần lượng/loại thức ăn khác nhau; tránh phải nhập lại tay mỗi lần đổi ao |
 | SA_DATA index | data[12..15] | **data[15..18]** (dịch do Module 2 tăng từ 7 lên 10 field) | Module 2 (pond, ph_morn/aft/last_day) chiếm thêm chỗ trong mảng |
