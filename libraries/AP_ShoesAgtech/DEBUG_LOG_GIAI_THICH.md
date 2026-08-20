@@ -32,11 +32,10 @@
 | `ShoesAgtech: Flow sensor ready`                                            | INFO                                      | Khởi tạo cảm biến flow (YF-S402B) thành công.                                                                                                                                           |
 | `SA: SERVO<n>_FUNCTION=<x> must be 0(None)!`                                | WARNING                                   | Kênh servo bơm chưa đặt `SERVOx_FUNCTION=0`, PWM ghi trực tiếp sẽ bị hệ thống servo ghi đè. Lặp mỗi 5s.                                                                                 |
 | `SA: SERVO<n> OK Min:<x> Trim:<y> Max:<z>`                                  | INFO                                      | Cấu hình servo bơm hợp lệ.                                                                                                                                                              |
-| `SA: TANK EMPTY - flow %.1fL/min > 1.7 for 3s`                              | CRITICAL                                  | Phát hiện hết vi sinh trong thùng: lưu lượng thực tế đo được > 1.7 L/ph liên tục 3 giây dù đang bơm — dấu hiệu bơm chạy không tải (thùng cạn).                                          |
+| `SA: TANK EMPTY - flow %.1fL/min > 1.7 for 5s`                              | CRITICAL                                  | Phát hiện hết vi sinh trong thùng: lưu lượng thực tế đo được > 1.7 L/ph liên tục 5 giây (tăng từ 3s, 2026-08-19) dù đang bơm — dấu hiệu bơm chạy không tải (thùng cạn).                 |
 | `SA: Tank lasts ~<x>m (<y>L @<z>L/min)`                                     | INFO                                      | (Chỉ Mode 2, khi `SA_TANK_VOL>0`) Ước tính còn bơm được bao nhiêu mét với tốc độ/lưu lượng hiện tại. Lặp mỗi 30s.                                                                       |
 | `SA FM1: no mission - pump stopped`                                         | WARNING                                   | **Mode 1 + `SA_FLOW_MODE=1`**: `mission_dist ≤ 1m` — chưa upload mission lên FC, hoặc mission không có ≥2 waypoint NAV hợp lệ (tọa độ khác 0,0). `flow_target=0`, bơm dừng. Lặp mỗi 5s. |
 | `SA FM1: q1=<x>L/min < 0.3 - shorten mission or increase speed`             | WARNING                                   | q1 tính ra quá thấp (dưới ngưỡng an toàn 0.3 L/ph) — mission quá dài so với `SA_TANK_VOL × SA_MIX_STD × tốc độ`. Bơm dừng để tránh phun quá loãng.                                      |
-| `SA FM1: q1=<x>L/min > 2.0 - lengthen mission or reduce speed`              | WARNING                                   | q1 tính ra quá cao (trên ngưỡng an toàn 2.0 L/ph) — mission quá ngắn so với tank/tốc độ. Bơm dừng để tránh phun quá đậm đặc. **Xem mục 5 bên dưới — đây là lỗi bạn đã gặp.**            |
 | `SA FM1 READY: r=<x> miss=<y>m bio/run=<z>L                                 | speed=0 pump waiting for vehicle to move` | INFO                                                                                                                                                                                    | In một lần khi ARM: mission hợp lệ nhưng xe đang đứng yên, bơm chờ xe di chuyển. |
 | `SA FM1 OK: r=<x> q1=<y>L/min miss=<z>m dmax=<w>m ~<mm>m<ss>s bio/run=<v>L` | INFO                                      | In một lần khi ARM: mọi điều kiện hợp lệ, kèm ETA hoàn thành mission.                                                                                                                   |
 | `%s M<n> Tgt:<x> Act:<y> Avg:<z> PWM:<w>`                                   | INFO                                      | Log định kỳ (`SA_FLOW_LOG`): `%s`=`[FLOW]`/`[SIM][FLOW]`, `n`=spray_mode, Tgt=setpoint, Act=lưu lượng thực đo (đã lọc), Avg=trung bình trượt, PWM=xung ra bơm.                          |
@@ -81,7 +80,7 @@
 | `SA: SERVO<m> MAX=<x>, must set =2200`                                    | WARNING | Sai `SERVOx_MAX`.                                                                                              |
 | `SA: Dosing motor ON` / `OFF`                                             | INFO    | RC bật/tắt motor cho ăn thủ công.                                                                              |
 | `SA DOS1: no mission (dist=<x>m) - motor stopped`                         | WARNING | **`SA_DOS_MODE=1`**: chưa upload mission (tương tự lỗi FM1 ở Module 1) — motor dừng (PWM=1500). Lặp mỗi 5s.    |
-| `SA DOS1: speed too low (<x>m/s) - motor stopped`                         | WARNING | **`SA_DOS_MODE=1`**: xe đứng yên hoặc tốc độ < 0.05 m/s — motor dừng. Lặp mỗi 5s.                              |
+| `SA DOS1: speed too low (<x>m/s < <y>m/s min) - motor stopped`            | WARNING | **`SA_DOS_MODE=1`**: tốc độ chưa đạt `<y>` = max(0.05 m/s, `SA_DOS_SPD_PCT`% tốc độ ĐẶT cho mission, mặc định 50%) — motor chưa rải (tránh dồn liều lúc xe mới tăng tốc/qua cua). Đặt `SA_DOS_SPD_PCT=0` để tắt kiểm tra này, về hành vi cũ (chỉ cần vượt 0.05 m/s). Cập nhật 2026-08-19, trước đây ngưỡng cố định 0.05 m/s. Lặp mỗi 5s. |
 | `[DOS] M0 F<n> SERVO<c> <ON/OFF> Rate:<x>g/min D:<y>g/mL PWM:<w>`         | INFO    | Log định kỳ `SA_DOS_MODE=0`: F=loại thức ăn active, Rate=tốc độ cấp cố định (g/phút), D=tỷ trọng, PWM=xung ra. |
 | `[DOS] M1 F<n> SERVO<c> <ON/OFF> SP:<x>g Rate:<y>g/min D:<z>g/mL PWM:<w>` | INFO    | Log định kỳ `SA_DOS_MODE=1`: SP=tổng gam cho cả mission, Rate=tốc độ tức thời suy ra từ speed/mission_dist.    |
 | `SA: SA_DOS_F<n>=<x> looks uncalibrated for new V x fill-factor formula (expected ~0.05-2.0)` | WARNING | **Chỉ xuất hiện sau khi đổi công thức hiệu chuẩn (xem mục 6)**: `SA_DOS_Fx` đang lớn hơn 5.0 — nghi vẫn còn giá trị cũ (thang mL/50us, thường ~100) từ trước khi tách `SA_DOS_V x SA_DOS_Fx`, chưa được đo/hiệu chuẩn lại theo công thức mới. Nếu không sửa, lượng thức ăn cấp ra sẽ sai (thường là quá ít). Lặp mỗi 5s. |
@@ -89,6 +88,11 @@
 ---
 
 ## 5. Phân tích lỗi đã gặp: setpoint = 0 khi `SA_FLOW_MODE=1` lúc chạy AUTO
+
+> **⚠️ Đã thay đổi (2026-08-19):** ngưỡng trần trên `q1 > 2.0` mô tả dưới đây
+> **đã được gỡ bỏ khỏi code** theo yêu cầu — bơm không còn tự khóa khi mission
+> quá ngắn nữa. Mục này giữ lại làm lịch sử/tham khảo cơ chế cũ; xem ghi chú
+> cuối mục để biết hành vi hiện tại.
 
 **Triệu chứng:** Đặt `SA_FLOW_MODE=1`, khi xe chạy AUTO thì `flow_target` (setpoint bơm) về 0, bơm không chạy dù xe đang di chuyển theo mission.
 
@@ -143,11 +147,27 @@ này với độ dài mission hiện tại để biết cần kéo dài thêm ba
 - Trường hợp `speed < 0.1 m/s` (xe đứng yên) cũng khiến `flow_target = 0`
   nhưng **không in cảnh báo nào** ra GCS (khác với 2 case còn lại) — nếu sau
   này gặp bơm dừng mà không rõ nguyên nhân và không thấy log `SA FM1: ...`,
-  nhiều khả năng đây là do tốc độ đo được (`SA_FLOW_VEL` hoặc AHRS
-  groundspeed) đang dưới 0.1 m/s.
+  nhiều khả năng đây là do tốc độ dùng trong công thức (`SA_FLOW_VEL`, hoặc
+  từ 2026-08-19 là **tốc độ ĐẶT `WP_SPEED`** — xem mục dưới, không phải GPS
+  tức thời nữa) đang dưới 0.1 m/s.
 - Nếu `SA_TANK_VOL = 0` (giá trị mặc định), code **không** vào công thức
   trên — setpoint sẽ fallback về `SA_FLOW_SP` (mặc định 5.0 L/ph), không
   bao giờ về 0 trong trường hợp đó.
+- **Hành vi hiện tại (từ 2026-08-19):** cảnh báo `q1 > 2.0` và việc khóa bơm
+  khi mission quá ngắn **không còn tồn tại**. `q1` chỉ còn bị chặn ở sàn dưới
+  `0.3 L/phút` (mission quá dài/xe quá chậm); không còn trần trên — bơm sẽ
+  chạy dù `q1` tính ra rất cao (phun đậm đặc trên mission ngắn), không tự
+  dừng và không cảnh báo cho trường hợp này nữa. Nếu cần giới hạn liều lượng
+  tối đa, phải tự theo dõi thủ công (log `[FLOW]`/`[SIM][FLOW]` định kỳ vẫn
+  in `q1` thực tế, xem mục 2).
+- **Nguồn `speed` trong công thức đổi từ 2026-08-19:** trước đây `speed` là
+  tốc độ GPS TỨC THỜI (`AP::ahrs().groundspeed()`), khiến `q1`/setpoint bơm
+  dao động theo từng cú tăng/giảm tốc, vào cua — gây phun không đều dọc
+  tuyến. Từ nay dùng tốc độ **ĐẶT** cho mission (`WP_SPEED`, cập nhật qua
+  `DO_CHANGE_SPEED`/GCS `SET_SPEED`) — ổn định suốt cả đoạn, chỉ đổi khi kỹ
+  thuật viên chủ động đổi tốc độ. `SA_SIM`/`SA_FLOW_VEL` vẫn ưu tiên như cũ
+  để hiệu chỉnh/test khi xe đứng yên. Xem `MODULE1_FLOW_DETAIL_DESIGN.md`
+  mục 1.2 (`_get_dosing_ref_speed()`) để biết chi tiết.
 
 ---
 

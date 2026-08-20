@@ -529,6 +529,13 @@ void Rover::one_second_loop(void) {
 
 // [AP_ShoesAgtech] -------------------------------------------------------
 void Rover::update_custom_flow(void) {
+  // Tốc độ ĐẶT cho mission (WP_SPEED, cập nhật qua DO_CHANGE_SPEED/GCS
+  // SET_SPEED) — dùng cho công thức FLOW_MODE=1 thay vì tốc độ GPS tức
+  // thời, để lưu lượng phun không dao động theo từng cú tăng/giảm tốc/vào
+  // cua. get_speed_max() phản ánh đúng tốc độ ĐẶT hiện hành (KHÔNG dùng
+  // get_default_speed() — chỉ là giá trị tĩnh của WP_SPEED, không cập nhật
+  // khi đổi tốc độ giữa mission).
+  g2.custom_nav.set_target_speed(g2.wp_nav.get_speed_max());
   g2.custom_nav.update();       // flow calc + spray control + pH poll + console log
 #if HAL_LOGGING_ENABLED
   Log_Write_Flow_Realtime();    // write FLWD to SD card

@@ -7,7 +7,7 @@
 **File nguồn:** `libraries/AP_ShoesAgtech/AP_ShoesAgtech.cpp/.h`
 **Loại:** `[x] Module mới   [ ] Bổ sung hệ thống   [ ] Sửa lỗi / thay đổi hành vi`
 **Tần suất update:** 10 Hz (`update()` gọi từ ArduPilot scheduler)
-**Ngày hoàn thành:** 2026-05-15 | **Cập nhật lần cuối:** 2026-07-18
+**Ngày hoàn thành:** 2026-05-15 | **Cập nhật lần cuối:** 2026-08-19
 
 ---
 
@@ -40,14 +40,17 @@ update() [10 Hz — ArduPilot scheduler]
     │         mode 0 ──► _write_pump_pwm(RC_passthrough)
     │         mode 1 ──► [FLOW_MODE=0] flow_target = SA_FLOW_SP
     │         (nấc giữa)  [FLOW_MODE=1] _compute_visin_target(SA_MIX_STD)
-    │                         └──► _get_mission_dist()
-    │                              kiểm tra mission / speed / sensor range [0.3–2.0]
+    │                         ├──► _get_mission_dist()
+    │                         ├──► _get_dosing_ref_speed() [tốc độ ĐẶT WP_SPEED,
+    │                         │      KHÔNG phải GPS tức thời — xem 1.2/3.5]
+    │                         └──► kiểm tra mission / speed / q1 ≥ 0.3 (không còn trần trên)
     │                     _run_flow_pid(flow_target, dt)
     │                     └──► return pwm  ──► _write_pump_pwm(pwm)
     │         mode 2 ──► [FLOW_MODE=0] flow_target = SA_FLOW_SP × (MIX_CNT/MIX_STD)
     │         (nấc cao)  [FLOW_MODE=1] _compute_visin_target(SA_MIX_CNT)
-    │                         └──► _get_mission_dist()
-    │                              kiểm tra mission / speed / sensor range [0.3–2.0]
+    │                         ├──► _get_mission_dist()
+    │                         ├──► _get_dosing_ref_speed() [tốc độ ĐẶT WP_SPEED]
+    │                         └──► kiểm tra mission / speed / q1 ≥ 0.3 (không còn trần trên)
     │                     _run_flow_pid(flow_target, dt)
     │                     └──► return pwm  ──► _write_pump_pwm(pwm)
     │
@@ -59,7 +62,7 @@ update() [10 Hz — ArduPilot scheduler]
     │
     ├──► [Tank-empty detection — inline trong update(), sau switch]
     │         Điều kiện: spray_mode 1 hoặc 2 + đang ARM + !_tank_empty_detected
-    │         _flow_rate_filtered > 1.7 L/min liên tục ≥ 3s → CRITICAL + set flag
+    │         _flow_rate_filtered > 1.7 L/min liên tục ≥ 5s → CRITICAL + set flag
     │         Nếu flow ≤ 1.7: reset _tank_empty_ms về 0
     │
     └──► [Console log — SA_FLOW_LOG=1]
@@ -149,12 +152,11 @@ update() [10 Hz — ArduPilot scheduler]
 - **Đầu vào:** `r` — tỉ lệ vi sinh trong tổng lưu lượng (0.01–1.0, sau clamp)
 - **Xử lý (theo thứ tự ưu tiên):**
   1. `dist = _get_mission_dist()` — nếu ≤ 1m → reset PI, warning + return 0
-  2. `speed_ms = _get_spray_speed()` — nếu < 0.1 m/s → reset PI, return 0 (không cảnh báo)
+  2. `speed_ms = _get_dosing_ref_speed()` (tốc độ ĐẶT cho mission, KHÔNG phải GPS tức thời — xem 1.2/3.5) — nếu < 0.1 m/s → reset PI, return 0 (không cảnh báo)
   3. `q1 = TANK_VOL × r × speed_ms × 60 / dist` (L/min)
      - Ý nghĩa: để phân phối đúng `TANK_VOL × r` lít đều trên `dist` mét, cần lưu lượng này
   4. `q1 < 0.3` → reset PI, warning "rut ngan mission hoac tang speed" + return 0
-  5. `q1 > 2.0` → reset PI, warning "keo dai mission hoac giam speed" + return 0
-  6. `return constrain(q1, 0, 200)`
+  5. `return constrain(q1, 0, 200)` — **KHÔNG còn giới hạn trên q1 > 2.0** (đã gỡ bỏ theo yêu cầu 2026-08-19; chấp nhận phun đậm đặc trên mission ngắn thay vì chặn bơm). Cận trên 200 chỉ còn là chặn an toàn tuyệt đối (giá trị vô lý), không phải ngưỡng nghiệp vụ.
 - **Đầu ra / Return:** `float` — lưu lượng vi sinh target (L/min); 0 nếu bất kỳ điều kiện nào không đạt
 - **Ghi chú:** Warnings dùng chung timer `_tank_warn_ms`, throttle 5s giữa các lần in. `vi_per_run = TANK_VOL × r` là hằng số mỗi lần chạy mission, không phụ thuộc speed hay dist.
 
@@ -166,13 +168,12 @@ update() [10 Hz — ArduPilot scheduler]
 - **Xử lý:**
   1. `dist = _get_mission_dist()` — nếu ≤ 1m → WARNING "chua co mission - bom se dung", return
   2. `vi_per_run = TANK_VOL × r`
-  3. `speed = _get_spray_speed()` — nếu ≤ 0.1 m/s → INFO "van toc=0 bom cho xe chay", return
+  3. `speed = _get_dosing_ref_speed()` (tốc độ ĐẶT cho mission) — nếu ≤ 0.1 m/s → INFO "van toc=0 bom cho xe chay", return
   4. `q1 = TANK_VOL × r × speed × 60 / dist`
   5. `dist_max = TANK_VOL × r × speed × 60 / 0.3` (khoảng cách tối đa trước khi q1 < 0.3)
   6. Nếu `q1 < 0.3` → WARNING "rut ngan mission (dmax=Xm)", return
-  7. Nếu `q1 > 2.0` → `dist_min = TANK_VOL × r × speed × 60 / 2.0` → WARNING "keo dai mission (dmin=Xm)", return
-  8. Tính `eta_s = dist / speed`, `eta_min`, `eta_sec`
-  9. INFO "FM1 OK: r q1 miss dmax ~XmXXs vi/run:XL"
+  7. Tính `eta_s = dist / speed`, `eta_min`, `eta_sec` (KHÔNG còn bước kiểm tra `q1 > 2.0`/`dmin` — đã gỡ bỏ)
+  8. INFO "FM1 OK: r q1 miss dmax ~XmXXs vi/run:XL"
 - **Đầu ra / Return:** `void` — side effect: 1 STATUSTEXT
 - **Ghi chú:** Chỉ in 1 lần/ARM nhờ `_was_armed` edge detection. Bị gọi lại nếu disarm rồi arm lại.
 
@@ -209,12 +210,28 @@ update() [10 Hz — ArduPilot scheduler]
 ---
 
 **`_get_spray_speed() → float`**
-- **Được gọi bởi:** `_compute_visin_target()`, `_print_fm1_arm_status()`, console log
+- **Được gọi bởi:** ước tính "Tank lasts" ở mode 2 (else-branch FLOW_MODE), `_update_dosing_motor()` (Module 3, DOS_MODE=1)
 - **Đầu vào:** không có
-- **Xử lý:**
-  1. Nếu SA_FLOW_VEL > 0 → return SA_FLOW_VEL (override, dùng khi calib đứng yên)
-  2. Ngược lại → return `AP::ahrs().groundspeed()` (m/s)
+- **Xử lý (ưu tiên):**
+  1. `SA_SIM=1` → return `_sim_speed` (sóng sin, test màn hình)
+  2. `SA_FLOW_VEL > 0` → return SA_FLOW_VEL (override, dùng khi calib đứng yên)
+  3. Ngược lại → return `AP::ahrs().groundspeed()` (m/s, tốc độ GPS TỨC THỜI)
 - **Đầu ra / Return:** `float` m/s
+- **Ghi chú:** Dùng cho các chỗ CẦN tốc độ thực tức thời (ước tính quãng đường còn lại, dosing Module 3). **KHÔNG** dùng trong công thức `_compute_visin_target()` nữa — xem `_get_dosing_ref_speed()` bên dưới.
+
+---
+
+**`_get_dosing_ref_speed() → float`** — mới, 2026-08-19
+- **File:** `AP_ShoesAgtech.cpp : 1027`
+- **Được gọi bởi:** `_compute_visin_target()`, `_print_fm1_arm_status()`, log định kỳ `[FLOW] FM1 ...`
+- **Đầu vào:** không có
+- **Xử lý (ưu tiên):**
+  1. `SA_SIM=1` → return `_sim_speed`
+  2. `SA_FLOW_VEL > 0` → return SA_FLOW_VEL (override, dùng khi calib đứng yên)
+  3. Ngược lại → return `_target_speed` (tốc độ **ĐẶT** cho mission — WP_SPEED đã cập nhật qua DO_CHANGE_SPEED/GCS SET_SPEED, do `Rover::update_custom_flow()` bơm vào qua `set_target_speed()` mỗi chu kỳ, TRƯỚC khi gọi `update()`, từ `g2.wp_nav.get_speed_max()`)
+- **Đầu ra / Return:** `float` m/s
+- **Lý do tách riêng khỏi `_get_spray_speed()`:** công thức `q1 = TANK_VOL × r × speed × 60 / mission_dist` trước đây dùng tốc độ GPS tức thời — mỗi lần xe tăng/giảm tốc hoặc vào cua, `q1` (và setpoint bơm) đổi theo ngay, gây phun không đều dọc tuyến dù `TANK_VOL`/`mission_dist` không đổi. Dùng tốc độ **ĐẶT** (ổn định suốt 1 đoạn mission, chỉ đổi khi kỹ thuật viên chủ động đổi `WP_SPEED`/`DO_CHANGE_SPEED`) giúp setpoint bơm ổn định hơn nhiều, đánh đổi lấy sai số nhỏ nếu tốc độ thực tế lệch nhiều so với tốc độ đặt (dốc, cản gió...).
+- **Không đổi:** 2 tầng ưu tiên đầu (SIM, SA_FLOW_VEL) — vẫn dùng để hiệu chỉnh/test khi xe đứng yên, giống hệt `_get_spray_speed()`.
 
 ---
 
@@ -348,23 +365,35 @@ SA_FLOW_MODE=1 và SA_TANK_VOL>0:
 1. dist = _get_mission_dist()
    dist ≤ 1m → reset PI, cảnh báo "chua co mission - bom dung", return 0
 
-2. speed = _get_spray_speed()
+2. speed = _get_dosing_ref_speed()   [tốc độ ĐẶT WP_SPEED, KHÔNG phải GPS
+   tức thời — xem 1.2 và ghi chú "Nguồn tốc độ" bên dưới]
    speed < 0.1 m/s → reset PI, return 0  (xe dừng, không cảnh báo)
 
 3. q1 = TANK_VOL × r × speed × 60 / dist   (L/min)
    — phân phối đều TANK_VOL×r lít trên mission_dist mét —
 
 4. q1 < 0.3 → reset PI, cảnh báo "rut ngan mission hoac tang speed", return 0
-   q1 > 2.0 → reset PI, cảnh báo "keo dai mission hoac giam speed", return 0
+   (KHÔNG còn kiểm tra q1 > 2.0 — đã gỡ bỏ giới hạn trên theo yêu cầu 2026-08-19)
 
 5. return constrain(q1, 0.0, 200.0)
-   → đây là setpoint cho _run_flow_pid()
+   → đây là setpoint cho _run_flow_pid() (cận 200 chỉ là chặn an toàn tuyệt
+     đối, không phải ngưỡng nghiệp vụ)
 
 Tính sẵn cho thông tin (không dùng trong PID):
    vi_per_run = TANK_VOL × r   (lít mỗi lần chạy mission — luôn cố định)
    dist_max = TANK_VOL × r × speed × 60 / 0.3   (m — khoảng tối đa trước khi q1 < 0.3)
-   dmin     = TANK_VOL × r × speed × 60 / 2.0   (m — mission ngắn nhất để q1 ≤ 2.0)
 ```
+
+> **Nguồn tốc độ (từ 2026-08-19):** `speed` ở bước 2 lấy từ
+> `_get_dosing_ref_speed()`, KHÔNG phải `_get_spray_speed()` (tốc độ GPS
+> tức thời) như trước. Lý do: dùng tốc độ tức thời khiến `q1` (và setpoint
+> bơm) đổi theo từng cú tăng/giảm tốc, vào cua của xe → phun không đều dọc
+> tuyến dù `TANK_VOL`/mission không đổi. `_get_dosing_ref_speed()` dùng tốc
+> độ **ĐẶT** cho mission (`WP_SPEED`, cập nhật qua `DO_CHANGE_SPEED`/GCS
+> `SET_SPEED`, Rover.cpp bơm vào qua `set_target_speed()` từ
+> `g2.wp_nav.get_speed_max()`) — ổn định suốt cả đoạn, chỉ đổi khi kỹ thuật
+> viên chủ động đổi tốc độ mission. `SA_SIM`/`SA_FLOW_VEL` vẫn ưu tiên như
+> cũ (không đổi) để hiệu chỉnh/test khi xe đứng yên.
 
 **ARM edge detection (inline trong update()):**
 ```
@@ -391,10 +420,10 @@ _was_armed = now_armed
 
 if _flow_rate_filtered > 1.7 L/min:
     if _tank_empty_ms == 0:
-        _tank_empty_ms = now           // bắt đầu đếm 3s
-    else if now - _tank_empty_ms >= 3000ms:
+        _tank_empty_ms = now           // bắt đầu đếm 5s
+    else if now - _tank_empty_ms >= 5000ms:
         _tank_empty_detected = true
-        gcs().send_text(CRITICAL, "SA: THUNG HET VI SINH - flow X.XL/ph > 1.7 trong 3s")
+        gcs().send_text(CRITICAL, "SA: TANK EMPTY - flow X.XL/min > 1.7 for 5s")
         — bơm KHÔNG dừng —
 else:
     _tank_empty_ms = 0                 // reset nếu flow về dưới 1.7
@@ -480,12 +509,13 @@ Ví dụ FLOW_MODE=1, r=0.35, TANK_VOL=16L, mission=301m, speed=0.3 m/s:
 | `SA FM1: chua co mission - bom se dung` | WARNING | FLOW_MODE=1, dist ≤ 1m, khi ARM | 1 lần/ARM |
 | `SA FM1: van toc=0 bom cho xe chay` | INFO | FLOW_MODE=1, speed ≤ 0.1, khi ARM | 1 lần/ARM |
 | `SA FM1: q1=X.XXL/ph < 0.3 @Xm/s dist=XXXm - rut ngan mission (dmax=XXXm)` | WARNING | FLOW_MODE=1, q1 < 0.3, khi ARM | 1 lần/ARM |
-| `SA FM1: q1=X.XXL/ph > 2.0 @Xm/s dist=XXXm - keo dai mission (dmin=XXXm)` | WARNING | FLOW_MODE=1, q1 > 2.0, khi ARM | 1 lần/ARM |
-| `SA FM1 OK: r=X.XX q1=X.XXL/ph miss=XXXm dmax=XXXm ~XmXXs vi/run=X.XL` | INFO | FLOW_MODE=1, q1 trong dải, khi ARM | 1 lần/ARM |
+| `SA FM1 OK: r=X.XX q1=X.XXL/ph miss=XXXm dmax=XXXm ~XmXXs vi/run=X.XL` | INFO | FLOW_MODE=1, q1 ≥ 0.3, khi ARM | 1 lần/ARM |
 | `SA FM1: chua co mission - bom dung` | WARNING | FLOW_MODE=1, dist ≤ 1m, đang chạy | Mỗi 5s |
 | `SA FM1: q1=X.XXL/ph < 0.3 - rut ngan mission hoac tang speed` | WARNING | FLOW_MODE=1, q1 < 0.3, đang chạy | Mỗi 5s |
-| `SA FM1: q1=X.XXL/ph > 2.0 - keo dai mission hoac giam speed` | WARNING | FLOW_MODE=1, q1 > 2.0, đang chạy | Mỗi 5s |
-| `SA: THUNG HET VI SINH - flow X.XL/ph > 1.7 trong 3s` | CRITICAL | flow > 1.7 liên tục 3s, spray_mode 1/2, đang ARM | 1 lần/ARM |
+| `SA: TANK EMPTY - flow X.XL/min > 1.7 for 5s` | CRITICAL | flow > 1.7 liên tục 5s, spray_mode 1/2, đang ARM | 1 lần/ARM |
+
+> **Đã gỡ bỏ (2026-08-19):** 2 cảnh báo `q1 > 2.0` (khi ARM và khi đang chạy)
+> — không còn giới hạn trên cho q1, xem mục 5 và 3.5.
 
 ---
 
@@ -494,8 +524,9 @@ Ví dụ FLOW_MODE=1, r=0.35, TANK_VOL=16L, mission=301m, speed=0.3 m/s:
 ```
 SERVOx_FUNCTION = 0     (x = SA_PUMP_CHAN)  → sai: cảnh báo mỗi 5s (không block)
 SA_FLOW_PIN: chỉ áp dụng khi boot          → đổi giá trị cần reboot
-SA_FLOW_MODE=1 yêu cầu: SA_TANK_VOL > 0 + mission đã upload + speed ≥ 0.1 m/s + 0.3 ≤ q1 ≤ 2.0
-                         thiếu 1 trong 4 điều kiện → flow_target = 0 (bơm dừng)
+SA_FLOW_MODE=1 yêu cầu: SA_TANK_VOL > 0 + mission đã upload + speed ≥ 0.1 m/s + q1 ≥ 0.3
+                         (KHÔNG còn trần trên cho q1 — đã gỡ bỏ 2026-08-19)
+                         thiếu 1 trong các điều kiện trên → flow_target = 0 (bơm dừng)
 Tank-empty: chỉ cảnh báo, bơm vẫn tiếp tục — người lái tự quyết định
 ```
 
@@ -536,9 +567,10 @@ FC config:
 | Anti-windup PI | Clamp khi chạm trần/sàn | Clamp integral `±(range/(2×I_gain))` | Chuẩn hóa theo dải PWM thực tế |
 | Điều kiện van (Chống nghẹt / Mặc định) | Basic Design Case 9–10, param SA_SPRAY_MODE | **Tích hợp vào nấc RC**: nấc giữa = MIX_STD, nấc cao = MIX_CNT. SA_SPRAY_MODE và SA_SP_PCT được thay thế | Loại bỏ param riêng; người dùng chọn trực tiếp bằng tay RC |
 | FLOW_MODE=1 công thức | `q1 = r × APP_RATE × speed × BOOM_W × 0.006` + `dist_max = TANK_VOL × 10000 / (r × APP_RATE × BOOM_W)` | `q1 = TANK_VOL × r × speed × 60 / mission_dist` | SA_APP_RATE và SA_BOOM_W loại khỏi công thức; vi_per_run = TANK_VOL×r hằng số; dist_max theo tốc độ thực tế |
-| FLOW_MODE=1 dải q1 | q1 > 6.0 → dừng (giới hạn cảm biến YF-S402B) | q1 > 2.0 → dừng | Thực tế sử dụng, YF-S402B chạy tốt nhất 0.3–2.0 L/min; 2–6 L/min không ổn định |
-| Hết thùng vi sinh | Không có | Tank-empty detection: flow > 1.7 L/min liên tục 3s → CRITICAL, bơm không dừng | Bơm hút không khí → bánh xe quay nhanh bất thường → cảnh báo người lái |
+| FLOW_MODE=1 dải q1 | q1 > 6.0 → dừng (giới hạn cảm biến YF-S402B) | q1 chỉ còn sàn dưới 0.3 (không còn trần trên) | Ban đầu áp trần 2.0 (YF-S402B chạy ổn nhất 0.3–2.0 L/min); từ 2026-08-19 bỏ hẳn trần trên theo yêu cầu — chấp nhận phun đậm đặc trên mission ngắn thay vì chặn bơm |
+| Hết thùng vi sinh | Không có | Tank-empty detection: flow > 1.7 L/min liên tục 5s (tăng từ 3s ban đầu, 2026-08-19) → CRITICAL, bơm không dừng | Bơm hút không khí → bánh xe quay nhanh bất thường → cảnh báo người lái; tăng thời gian xác nhận để giảm báo động giả do dao động lưu lượng tức thời |
 | ARM status | Không có | `_print_fm1_arm_status()` in 1 lần/ARM với q1 dự báo, thời gian, vi/run | Giúp người lái xác nhận hệ thống đúng trước khi chạy |
+| Nguồn tốc độ cho công thức FLOW_MODE=1 (2026-08-19) | Không có | Tách hàm riêng `_get_dosing_ref_speed()`: dùng tốc độ **ĐẶT** (`WP_SPEED`/`g2.wp_nav.get_speed_max()`) thay vì tốc độ GPS tức thời (`_get_spray_speed()`) | Tốc độ tức thời dao động theo cua/tăng giảm tốc khiến q1 (setpoint bơm) đổi liên tục → phun không đều dọc tuyến; tốc độ ĐẶT ổn định suốt đoạn mission, giống cách AUTO_SPD đã dùng |
 | Mission cache reset | Không đề cập | Reset `_mission_ncmds=0` khi disarm | Đảm bảo tính lại nếu thay đổi mission khi đất |
 
 ---

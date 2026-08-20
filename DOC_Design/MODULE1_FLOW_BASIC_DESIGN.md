@@ -81,7 +81,7 @@ Cảm biến đếm xung liên tục → hệ thống tính lưu lượng thực
     ↓
 Bơm điều chỉnh PWM theo PID
     ↓
-Nếu phát hiện hút không khí (lưu lượng đột ngột > 1.7 L/min trong 3s)
+Nếu phát hiện hút không khí (lưu lượng đột ngột > 1.7 L/min trong 5s)
     → Cảnh báo CRITICAL "THÙNG HẾT VI SINH" (bơm vẫn tiếp tục)
     ↓
 Dữ liệu lưu lượng + trạng thái bơm gửi lên GCS liên tục
@@ -112,9 +112,9 @@ Dữ liệu lưu lượng + trạng thái bơm gửi lên GCS liên tục
 
 ### Case 4 — Nấc giữa hoặc cao, FLOW_MODE=1: không đủ điều kiện bơm
 
-- **Điều kiện:** FLOW_MODE=1 nhưng: chưa upload mission / xe đứng yên / q1 tính ra < 0.3 L/min (mission quá dài hoặc xe quá chậm) / q1 > 2.0 L/min (mission quá ngắn hoặc xe quá nhanh)
+- **Điều kiện:** FLOW_MODE=1 nhưng: chưa upload mission / xe đứng yên / q1 tính ra < 0.3 L/min (mission quá dài hoặc xe quá chậm). (Từ 2026-08-19: **không còn** trần trên q1 — mission quá ngắn/xe quá nhanh không còn bị chặn, bơm vẫn chạy dù q1 lớn.)
 - **Hành vi:** Bơm DỪNG + cảnh báo GCS giải thích lý do cụ thể
-- **Output GCS:** Cảnh báo kèm gợi ý sửa: "rút ngắn mission", "kéo dài mission", "chờ xe chạy"
+- **Output GCS:** Cảnh báo kèm gợi ý sửa: "rút ngắn mission", "chờ xe chạy"
 
 ### Case 5 — Nấc cao, FLOW_MODE=0: setpoint Chống nghẹt
 
@@ -136,9 +136,9 @@ Dữ liệu lưu lượng + trạng thái bơm gửi lên GCS liên tục
 
 ### Case 8 — Phát hiện hết thùng vi sinh (cả 2 FLOW_MODE)
 
-- **Điều kiện:** Spray_mode 1 hoặc 2 + đang ARM + lưu lượng đột ngột > 1.7 L/min liên tục 3 giây
-- **Hành vi:** Bơm hút không khí khi thùng cạn → bánh xe cảm biến quay nhanh bất thường → lưu lượng đọc tăng vọt. Sau 3s liên tục → in cảnh báo CRITICAL 1 lần duy nhất. **Bơm KHÔNG dừng** (người lái tự quyết định)
-- **Output GCS:** `SA: THUNG HET VI SINH - flow X.XL/ph > 1.7 trong 3s`
+- **Điều kiện:** Spray_mode 1 hoặc 2 + đang ARM + lưu lượng đột ngột > 1.7 L/min liên tục 5 giây
+- **Hành vi:** Bơm hút không khí khi thùng cạn → bánh xe cảm biến quay nhanh bất thường → lưu lượng đọc tăng vọt. Sau 5s liên tục → in cảnh báo CRITICAL 1 lần duy nhất. **Bơm KHÔNG dừng** (người lái tự quyết định)
+- **Output GCS:** `SA: TANK EMPTY - flow X.XL/min > 1.7 for 5s`
 - **Reset:** Disarm → ARM lại → detector hoạt động bình thường trở lại
 
 ### Case 9 — Chế độ giả lập (SA_SIM=1)

@@ -13,6 +13,14 @@ public:
   void init(void);
   void update(void);
 
+  // Tốc độ ĐẶT cho mission (WP_SPEED, đã cập nhật qua DO_CHANGE_SPEED/GCS
+  // SET_SPEED) — Rover.cpp gọi mỗi chu kỳ TRƯỚC update() (từ
+  // g2.wp_nav.get_speed_max()). Dùng làm nguồn tốc độ tham chiếu cho công
+  // thức FLOW_MODE=1 (_compute_visin_target()) thay cho tốc độ GPS tức
+  // thời, để lưu lượng phun không dao động theo từng cú tăng/giảm tốc/vào
+  // cua — chỉ đổi khi tốc độ ĐẶT cho mission thực sự đổi.
+  void set_target_speed(float speed) { _target_speed = speed; }
+
   // ---- MODULE 1: Flow sensor getters — YF-S402B, dãy hoạt động 0.3–6 L/min ----
   float    get_flow_rate_lmin(void) const { return _flow_rate_filtered; }
   float    get_flow_rate_avg(void)  const { return _flow_rate_avg; }
@@ -134,11 +142,12 @@ private:
   AP_Int8  _ph_cap_sam;     // SA_PH_CAP_SAM so mau tich luy de tinh trung binh (default 20)
   AP_Int8  _ph_cap_m;       // SA_PH_CAP_M   ban kinh capture (m), 1-100 - chi dung cho app, firmware khong doc
 
-  // ---- MODULE 3: dosing motor (vit tai thuc an tom) — servo xoay lien tuc 360° (slots 13, 25-26, 28-31, 36, 40-54; slot 27 retired) ----
+  // ---- MODULE 3: dosing motor (vit tai thuc an tom) — servo xoay lien tuc 360° (slots 13, 19, 25-26, 28-31, 36, 40-54; slot 27 retired) ----
   AP_Int8  _dos_chan;   // SA_DOS_CHAN   servo output channel (1-indexed)
   AP_Int8  _dos_rc;     // SA_DOS_RC     RC channel bat/tat motor (1-indexed)
   AP_Float _dos_sp;     // SA_DOS_SP     setpoint: luong thuc an muon cap, gam
   AP_Int8  _dos_rev;    // SA_DOS_REV    chieu quay: 0=thuan, 1=nguoc
+  AP_Int8  _dos_spd_pct; // SA_DOS_SPD_PCT  % toc do dat (WP_SPEED) toi thieu de bat dau rai (DOS_MODE=1), 1-100, default 50
   AP_Int8  _dos_log_enable; // SA_DOS_LOG     console log enable cho dosing motor
   AP_Int16 _dos_log_ms;     // SA_DOS_LOG_MS  khoang thoi gian giua hai lan in log (ms)
   AP_Int8  _dos_mode;       // SA_DOS_MODE    0=fixed PWM, 1=variable theo speed+mission
@@ -192,6 +201,10 @@ private:
   bool     _was_armed;
   bool     _tank_empty_detected;
   uint32_t _tank_empty_ms;
+  // Tốc độ ĐẶT cho mission (WP_SPEED), do Rover.cpp bơm vào qua
+  // set_target_speed() mỗi chu kỳ trước update(). 0 nếu chưa từng được set
+  // (vd chưa vào Auto lần nào) — dùng cho công thức FLOW_MODE=1.
+  float    _target_speed;
 
   // ---- SIMULATION state (sim_speed used in M1 spray calculations) ----
   float    _sim_speed;
@@ -292,6 +305,7 @@ private:
   uint16_t _run_flow_pid(float target_lmin, float dt);
   void     _write_pump_pwm(uint16_t pwm);
   float    _get_spray_speed(void);
+  float    _get_dosing_ref_speed(void);
   float    _compute_visin_target(float r);
   void     _print_fm1_arm_status(float r);
   float    _get_mission_dist(void);

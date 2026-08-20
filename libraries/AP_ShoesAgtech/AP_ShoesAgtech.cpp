@@ -368,6 +368,25 @@ const AP_Param::GroupInfo AP_ShoesAgtech::var_info[] = {
     // @User: Standard
     AP_GROUPINFO("DOS_REV", 29, AP_ShoesAgtech, _dos_rev, 0),
 
+    // slot 19 — never previously allocated (Module 3's own numbered range
+    // 25-54 is full; slot 27 is retired and must not be reused). Placed
+    // here, next to DOS_REV, since that's where it conceptually belongs.
+    // @Param: DOS_SPD_PCT
+    // @DisplayName: Minimum speed to start spreading in DOS_MODE=1 (% of target mission speed)
+    // @Description: DOS_MODE=1 (mission-proportional) only starts spreading
+    //   once ground speed reaches this percentage of the target/set mission
+    //   speed (WP_SPEED, updated by DO_CHANGE_SPEED/GCS SET_SPEED) — not
+    //   just any nonzero speed. Prevents dumping extra feed while the
+    //   vehicle is still accelerating from a stop or coming out of a turn.
+    //   0 disables this check entirely (reverts to old behaviour: any speed
+    //   above the absolute 0.05 m/s floor starts spreading). The absolute
+    //   0.05 m/s floor always applies regardless of this setting (matters
+    //   when no target speed is available yet, e.g. before entering Auto).
+    // @Range: 0 100
+    // @Units: %
+    // @User: Standard
+    AP_GROUPINFO("DOS_SPD_PCT", 19, AP_ShoesAgtech, _dos_spd_pct, 50),
+
     // @Param: DOS_LOG
     // @DisplayName: Dosing motor console log enable
     // @Description: Prints motor state, setpoint and PWM at SA_DOS_LOG_MS
@@ -586,7 +605,8 @@ AP_ShoesAgtech::AP_ShoesAgtech()
       _last_pump_func_val(-1), _pump_config_ok(false), _last_warn_ms(0),
       _mission_dist_m(0.0f), _mission_ncmds(0), _tank_warn_ms(0),
       _arm_dist_warned(false), _was_armed(false), _tank_empty_detected(false),
-      _tank_empty_ms(0), _sim_speed(0.0f), _ph_uart(nullptr), _ph_update_ms(0),
+      _tank_empty_ms(0), _target_speed(0.0f), _sim_speed(0.0f),
+      _ph_uart(nullptr), _ph_update_ms(0),
       _ph_req_sent_ms(0), _ph_req_pending(false), _ph_last_good_ms(0),
       _ph_nodata_warn_ms(0), _ph_last_log_ms(0), _ph_value(0.0f),
       _ph_value_ma(0.0f), _ph_mv(0), _ph_temp(25.0f), _ph_buf_idx(0),
@@ -856,11 +876,11 @@ void AP_ShoesAgtech::update(void) {
       if (_flow_rate_filtered > 1.7f) {
         if (_tank_empty_ms == 0) {
           _tank_empty_ms = now;
-        } else if (now - _tank_empty_ms >= 3000U) {
+        } else if (now - _tank_empty_ms >= 5000U) {
           _tank_empty_detected = true;
           gcs().send_text(
               MAV_SEVERITY_CRITICAL,
-              "SA: TANK EMPTY - flow %.1fL/min > 1.7 for 3s",
+              "SA: TANK EMPTY - flow %.1fL/min > 1.7 for 5s",
               (double)_flow_rate_filtered);
         }
       } else {
@@ -884,7 +904,7 @@ void AP_ShoesAgtech::update(void) {
         _tank_vol.get() > 0.0f) {
       float r = (_spray_mode == 2) ? _mix_cnt.get() : _mix_std.get();
       float mdist = _get_mission_dist();
-      float spd = _get_spray_speed();
+      float spd = _get_dosing_ref_speed();
       float vi_per_run = _tank_vol.get() * r;
       float q1_now = (mdist > 1.0f && spd > 0.1f)
                          ? (_tank_vol.get() * r * spd * 60.0f / mdist)
@@ -1024,6 +1044,31 @@ float AP_ShoesAgtech::_get_spray_speed(void) {
 }
 
 // =============================================================
+// TỐC ĐỘ THAM CHIẾU CHO CÔNG THỨC FLOW_MODE=1 — ưu tiên: SA_SIM >
+// SA_FLOW_VEL > tốc độ ĐẶT cho mission (_target_speed, = WP_SPEED đã cập
+// nhật qua DO_CHANGE_SPEED/GCS SET_SPEED, do Rover.cpp bơm vào qua
+// set_target_speed() mỗi chu kỳ).
+//
+// KHÁC với _get_spray_speed(): tầng cuối dùng tốc độ ĐẶT thay vì tốc độ
+// GPS TỨC THỜI — để q1 (và do đó setpoint bơm) không bị dao động theo
+// từng cú tăng/giảm tốc, vào cua của xe (gây phun không đều dọc tuyến),
+// chỉ đổi khi tốc độ ĐẶT cho mission thực sự đổi. Chỉ dùng cho
+// _compute_visin_target()/_print_fm1_arm_status()/log FM1 định kỳ — CÁC
+// nơi khác (ước tính "Tank lasts" ở mode 2, DOS_MODE=1 Module 3) vẫn dùng
+// _get_spray_speed() (tốc độ thực) như cũ, không đổi.
+// =============================================================
+float AP_ShoesAgtech::_get_dosing_ref_speed(void) {
+  if (_simulation.get() > 0) {
+    return _sim_speed;
+  }
+  float vel = _flow_vel.get();
+  if (vel > 0.0f) {
+    return vel;
+  }
+  return _target_speed;
+}
+
+// =============================================================
 // MỤC TIÊU VI SINH — FLOW_MODE=1 (nấc giữa/cao)
 //
 // Công thức: q1 = TANK_VOL * r * speed * 60 / mission_dist
@@ -1032,13 +1077,15 @@ float AP_ShoesAgtech::_get_spray_speed(void) {
 // Kiểm tra trước khi chạy PID:
 //   1. Mission: dist <= 1m → cảnh báo + dừng
 //   2. Speed:   < 0.1 m/s → reset PID, dừng
-//   3. Range:   q1 < 0.3 hoặc q1 > 2.0 → cảnh báo + dừng
+//   3. Range:   q1 < 0.3 → cảnh báo + dừng (KHÔNG còn giới hạn trên — bỏ
+//      ngưỡng q1 > 2.0 theo yêu cầu, chấp nhận phun đậm đặc trên mission
+//      ngắn thay vì chặn bơm)
 // =============================================================
 float AP_ShoesAgtech::_compute_visin_target(float r) {
   uint32_t now = AP_HAL::millis();
   r = constrain_float(r, 0.01f, 1.0f);
 
-  float speed_ms = _get_spray_speed();
+  float speed_ms = _get_dosing_ref_speed();
   float dist = _get_mission_dist();
 
   if (dist <= 1.0f) {
@@ -1072,18 +1119,6 @@ float AP_ShoesAgtech::_compute_visin_target(float r) {
     }
     return 0.0f;
   }
-  if (q1 > 2.0f) {
-    _pid_integral = 0.0f;
-    _pid_output_lpf = 0.0f;
-    if (now - _tank_warn_ms >= 5000U) {
-      _tank_warn_ms = now;
-      gcs().send_text(
-          MAV_SEVERITY_WARNING,
-          "SA FM1: q1=%.2fL/min > 2.0 - lengthen mission or reduce speed",
-          (double)q1);
-    }
-    return 0.0f;
-  }
 
   return constrain_float(q1, 0.0f, 200.0f);
 }
@@ -1104,7 +1139,7 @@ void AP_ShoesAgtech::_print_fm1_arm_status(float r) {
 
   float vi_per_run = _tank_vol.get() * r;
 
-  float speed = _get_spray_speed();
+  float speed = _get_dosing_ref_speed();
   if (speed <= 0.1f) {
     gcs().send_text(MAV_SEVERITY_INFO,
                     "SA FM1 READY: r=%.2f miss=%.0fm bio/run=%.1fL | "
@@ -1121,14 +1156,6 @@ void AP_ShoesAgtech::_print_fm1_arm_status(float r) {
                     "SA FM1: q1=%.2fL/min < 0.3 @%.1fm/s dist=%.0fm - shorten "
                     "mission (dmax=%.0fm)",
                     (double)q1, (double)speed, (double)dist, (double)dist_max);
-    return;
-  }
-  if (q1 > 2.0f) {
-    float dist_min = _tank_vol.get() * r * speed * 60.0f / 2.0f;
-    gcs().send_text(MAV_SEVERITY_WARNING,
-                    "SA FM1: q1=%.2fL/min > 2.0 @%.1fm/s dist=%.0fm - lengthen "
-                    "mission (dmin=%.0fm)",
-                    (double)q1, (double)speed, (double)dist, (double)dist_min);
     return;
   }
 
@@ -2011,7 +2038,23 @@ void AP_ShoesAgtech::_update_dosing_motor(void) {
       float mission_dist = _get_mission_dist();
       float speed_ms = _get_spray_speed(); // đồng bộ nguồn tốc độ với Module 1
                                             // (SIM > SA_FLOW_VEL > AHRS)
-      if (mission_dist > 1.0f && speed_ms >= 0.05f) {
+      // Chỉ bắt đầu rải khi xe đã đạt ĐỦ tốc độ — không phải cứ nhích bánh
+      // là rải. Ngưỡng = SA_DOS_SPD_PCT % tốc độ ĐẶT cho mission
+      // (_target_speed = WP_SPEED, do Rover.cpp bơm vào — xem
+      // set_target_speed()), tránh rải ngay lúc xe còn đang tăng tốc từ
+      // lúc dừng/qua khúc cua (rải dồn vào đoạn xe đi chậm). Vẫn giữ sàn
+      // tuyệt đối 0.05 m/s cho trường hợp chưa có _target_speed (vd chưa
+      // từng vào Auto). SA_DOS_SPD_PCT=0 tắt hẳn kiểm tra %, quay về hành
+      // vi cũ (chỉ cần vượt sàn 0.05 m/s là rải).
+      int8_t spd_pct_raw = _dos_spd_pct.get();
+      float speed_min_start;
+      if (spd_pct_raw <= 0) {
+        speed_min_start = 0.05f;
+      } else {
+        float spd_pct = constrain_float((float)spd_pct_raw, 1.0f, 100.0f);
+        speed_min_start = MAX(0.05f, (spd_pct * 0.01f) * _target_speed);
+      }
+      if (mission_dist > 1.0f && speed_ms >= speed_min_start) {
         dos_rate_gpm = (dos_sp_active * speed_ms * 60.0f) / mission_dist;
         float offset = dos_rate_gpm * 50.0f / effective;
         pwm_f = (float)_offset_to_dos_pwm(offset);
@@ -2026,9 +2069,10 @@ void AP_ShoesAgtech::_update_dosing_motor(void) {
                 "SA DOS1: no mission (dist=%.1fm) - motor stopped",
                 (double)mission_dist);
           } else {
-            gcs().send_text(MAV_SEVERITY_WARNING,
-                            "SA DOS1: speed too low (%.2fm/s) - motor stopped",
-                            (double)speed_ms);
+            gcs().send_text(
+                MAV_SEVERITY_WARNING,
+                "SA DOS1: speed too low (%.2fm/s < %.2fm/s min) - motor stopped",
+                (double)speed_ms, (double)speed_min_start);
           }
         }
       }
