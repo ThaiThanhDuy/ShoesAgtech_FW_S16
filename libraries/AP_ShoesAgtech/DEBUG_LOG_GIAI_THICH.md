@@ -15,7 +15,7 @@
 | `ShoesAgtech: ...` | Khởi tạo                    | Log lúc `init()`, trước khi có tiền tố `SA:`                    |
 | `SA: ...`          | Chung / Module 1 / Module 3 | Cảnh báo, trạng thái chung                                      |
 | `SA FM1: ...`      | Module 1 (Flow Mode 1)      | Cảnh báo riêng cho `SA_FLOW_MODE=1` (công thức tank+mission)    |
-| `SA DOS1: ...`     | Module 3 (Dosing Mode 1)    | Cảnh báo riêng cho `SA_DOS_MODE=1`                              |
+| `SA DOS2: ...`     | Module 3 (Dosing Mode 2)    | Cảnh báo riêng cho `SA_DOS_MODE=2` (đổi tên từ "SA DOS1" 2026-08-20, khớp số mode mới — xem mục 7) |
 | `[FLOW] ...`       | Module 1                    | Log định kỳ lưu lượng (bật bằng `SA_FLOW_LOG`)                  |
 | `[DOS] ...`        | Module 3                    | Log định kỳ motor cho ăn (bật bằng `SA_DOS_LOG`)                |
 | `[WM] ...`         | Module 2                    | Log pH / độ kiềm (bật bằng `SA_PH_LOG`)                         |
@@ -79,10 +79,11 @@
 | `SA: SERVO<m> TRIM=<x>, must set =1500`                                   | WARNING | Sai `SERVOx_TRIM`.                                                                                             |
 | `SA: SERVO<m> MAX=<x>, must set =2200`                                    | WARNING | Sai `SERVOx_MAX`.                                                                                              |
 | `SA: Dosing motor ON` / `OFF`                                             | INFO    | RC bật/tắt motor cho ăn thủ công.                                                                              |
-| `SA DOS1: no mission (dist=<x>m) - motor stopped`                         | WARNING | **`SA_DOS_MODE=1`**: chưa upload mission (tương tự lỗi FM1 ở Module 1) — motor dừng (PWM=1500). Lặp mỗi 5s.    |
-| `SA DOS1: speed too low (<x>m/s < <y>m/s min) - motor stopped`            | WARNING | **`SA_DOS_MODE=1`**: tốc độ chưa đạt `<y>` = max(0.05 m/s, `SA_DOS_SPD_PCT`% tốc độ ĐẶT cho mission, mặc định 50%) — motor chưa rải (tránh dồn liều lúc xe mới tăng tốc/qua cua). Đặt `SA_DOS_SPD_PCT=0` để tắt kiểm tra này, về hành vi cũ (chỉ cần vượt 0.05 m/s). Cập nhật 2026-08-19, trước đây ngưỡng cố định 0.05 m/s. Lặp mỗi 5s. |
-| `[DOS] M0 F<n> SERVO<c> <ON/OFF> Rate:<x>g/min D:<y>g/mL PWM:<w>`         | INFO    | Log định kỳ `SA_DOS_MODE=0`: F=loại thức ăn active, Rate=tốc độ cấp cố định (g/phút), D=tỷ trọng, PWM=xung ra. |
-| `[DOS] M1 F<n> SERVO<c> <ON/OFF> SP:<x>g Rate:<y>g/min D:<z>g/mL PWM:<w>` | INFO    | Log định kỳ `SA_DOS_MODE=1`: SP=tổng gam cho cả mission, Rate=tốc độ tức thời suy ra từ speed/mission_dist.    |
+| `SA DOS2: no mission (dist=<x>m) - motor stopped`                         | WARNING | **`SA_DOS_MODE=2`**: chưa upload mission (tương tự lỗi FM1 ở Module 1) — motor dừng (PWM=1500). Lặp mỗi 5s.    |
+| `SA DOS2: speed too low (<x>m/s < <y>m/s min) - motor stopped`            | WARNING | **`SA_DOS_MODE=2`**: tốc độ chưa đạt `<y>` = max(0.05 m/s, `SA_DOS_SPD_PCT`% tốc độ ĐẶT cho mission, mặc định 50%) — motor chưa rải (tránh dồn liều lúc xe mới tăng tốc/qua cua). Đặt `SA_DOS_SPD_PCT=0` để tắt kiểm tra này, về hành vi cũ (chỉ cần vượt 0.05 m/s). Cập nhật 2026-08-19, trước đây ngưỡng cố định 0.05 m/s. Lặp mỗi 5s. |
+| `[DOS] M0 SERVO<c> <ON/OFF> PWM:<w>`                                      | INFO    | Log định kỳ `SA_DOS_MODE=0` (PWM trực tiếp, mới 2026-08-20): không có thức ăn/tốc độ, chỉ in PWM đang xuất — dùng khi hiệu chuẩn tại bàn. |
+| `[DOS] M1 F<n> SERVO<c> <ON/OFF> Rate:<x>g/min D:<y>g/mL PWM:<w>`         | INFO    | Log định kỳ `SA_DOS_MODE=1` (đổi số từ 0 cũ, 2026-08-20): F=loại thức ăn active, Rate=tốc độ cấp cố định (g/phút), D=tỷ trọng, PWM=xung ra. |
+| `[DOS] M2 F<n> SERVO<c> <ON/OFF> SP:<x>g Rate:<y>g/min D:<z>g/mL PWM:<w>` | INFO    | Log định kỳ `SA_DOS_MODE=2` (đổi số từ 1 cũ, 2026-08-20): SP=tổng gam cho cả mission, Rate=tốc độ tức thời suy ra từ speed/mission_dist.    |
 | `SA: SA_DOS_F<n>=<x> looks uncalibrated for new V x fill-factor formula (expected ~0.05-2.0)` | WARNING | **Chỉ xuất hiện sau khi đổi công thức hiệu chuẩn (xem mục 6)**: `SA_DOS_Fx` đang lớn hơn 5.0 — nghi vẫn còn giá trị cũ (thang mL/50us, thường ~100) từ trước khi tách `SA_DOS_V x SA_DOS_Fx`, chưa được đo/hiệu chuẩn lại theo công thức mới. Nếu không sửa, lượng thức ăn cấp ra sẽ sai (thường là quá ít). Lặp mỗi 5s. |
 
 ---
@@ -168,6 +169,15 @@ này với độ dài mission hiện tại để biết cần kéo dài thêm ba
   thuật viên chủ động đổi tốc độ. `SA_SIM`/`SA_FLOW_VEL` vẫn ưu tiên như cũ
   để hiệu chỉnh/test khi xe đứng yên. Xem `MODULE1_FLOW_DETAIL_DESIGN.md`
   mục 1.2 (`_get_dosing_ref_speed()`) để biết chi tiết.
+- **⚠️ Bug đã gặp và sửa (2026-08-20) — FLOW_MODE=1 không bao giờ chạy dù
+  ARM/gạt nấc đúng:** tốc độ ĐẶT (`_target_speed`) ở trên chỉ có giá trị
+  thật SAU KHI đã vào chế độ AUTO ít nhất 1 lần kể từ lúc mở nguồn — nếu
+  chỉ ARM ở Manual để test tay/gạt nấc mà chưa từng chạy AUTO phiên đó,
+  `_target_speed` sẽ luôn = 0, khiến hệ thống tưởng xe đứng yên mãi mãi dù
+  xe đang chạy thật (rơi đúng vào case "speed<0.1 im lặng, không cảnh
+  báo" ở trên — rất khó nhận ra). Đã thêm tầng dự phòng: nếu `_target_speed`
+  vẫn = 0, quay lại dùng AHRS groundspeed như trước đây, để hệ thống vẫn
+  hoạt động được khi test ngoài AUTO.
 
 ---
 
@@ -207,7 +217,34 @@ trước khi dùng, không chỉ dựa vào cảnh báo tự động này.
 
 ---
 
-## 7. Lưu ý về tài liệu liên quan
+## 7. Thêm mode PWM trực tiếp + đổi số 2 mode cũ ở Module 3 (2026-08-20)
+
+**Thêm mới:** `SA_DOS_MODE=0` — mode PWM trực tiếp. `SA_DOS_SP` ở mode này
+được hiểu là **xung PWM tuyệt đối (µs)**, ghi thẳng ra servo sau khi
+constrain về đúng dải `SERVOx_MIN..MAX` — hoàn toàn không qua công thức
+`SA_DOS_V`/`SA_DOS_Fx`/`SA_DOS_Dx` và không qua `SA_DOS_REV`. Mục đích:
+hiệu chuẩn tại bàn (đo RPM/sản lượng ở 1 mức PWM biết trước — xem mục 6 và
+`MODULE3_DOS_DETAIL_DESIGN.md` mục 3.6) mà không cần công cụ test servo
+riêng của GCS. An toàn: `SA_DOS_SP ≤ 0` (giá trị mặc định, chưa từng chỉnh)
+→ xuất PWM=1500 (dừng), KHÔNG kẹp về PWM tối thiểu (có thể là tốc độ tối
+đa) — tránh trường hợp bật RC dosing mà quên set `SA_DOS_SP` khiến motor
+chạy full tốc ngoài ý muốn.
+
+**⚠️ Đổi số 2 mode cũ:** tốc độ cố định (cũ = `SA_DOS_MODE=0`) → **1**; tỉ
+lệ theo mission (cũ = `SA_DOS_MODE=1`) → **2**. Các câu lệnh cảnh báo
+`"SA DOS1: ..."` đổi tên thành `"SA DOS2: ..."` cho khớp số mode mới (xem
+mục 4). **Máy đã cấu hình sẵn `SA_DOS_MODE=1` (nghĩa cũ = tỉ lệ mission) sẽ
+tự động đổi ý nghĩa thành "tốc độ cố định" (nghĩa mới của số 1) sau khi cập
+nhật firmware — bắt buộc kiểm tra/chỉnh lại giá trị tham số này trên mọi
+máy đã triển khai trước khi dùng.**
+
+**Tham số tái sử dụng, không thêm mới:** vì bảng tham số `AP_ShoesAgtech`
+đã hết chỗ trống (64/64 slot), mode PWM trực tiếp tái sử dụng `SA_DOS_SP`
+(đã sẵn có, chỉ đổi ý nghĩa theo mode) thay vì tạo tham số riêng.
+
+---
+
+## 8. Lưu ý về tài liệu liên quan
 
 File [AP_SHOESAGTECH_REFERENCE.md](AP_SHOESAGTECH_REFERENCE.md) (mục 6 —
 "Chuẩn đoán & cảnh báo console") có bảng log tương tự nhưng được viết từ

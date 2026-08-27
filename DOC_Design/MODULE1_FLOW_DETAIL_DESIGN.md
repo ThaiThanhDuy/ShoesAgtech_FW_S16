@@ -59,6 +59,9 @@ update() [10 Hz — ArduPilot scheduler]
     │         false→false, true→true: không làm gì
     │         true→false (DISARM): reset _arm_dist_warned, _mission_ncmds,
     │                               _mission_dist_m, _tank_empty_detected, _tank_empty_ms
+    │                               + TOÀN BỘ trạng thái đọc lưu lượng (2026-08-20):
+    │                               _last_pulse_snapshot, _flow_rate_filtered,
+    │                               _flow_rate_avg, buffer trung bình trượt
     │
     ├──► [Tank-empty detection — inline trong update(), sau switch]
     │         Điều kiện: spray_mode 1 hoặc 2 + đang ARM + !_tank_empty_detected
@@ -221,16 +224,18 @@ update() [10 Hz — ArduPilot scheduler]
 
 ---
 
-**`_get_dosing_ref_speed() → float`** — mới, 2026-08-19
+**`_get_dosing_ref_speed() → float`** — mới, 2026-08-19; thêm tầng dự phòng AHRS 2026-08-20
 - **File:** `AP_ShoesAgtech.cpp : 1027`
 - **Được gọi bởi:** `_compute_visin_target()`, `_print_fm1_arm_status()`, log định kỳ `[FLOW] FM1 ...`
 - **Đầu vào:** không có
 - **Xử lý (ưu tiên):**
   1. `SA_SIM=1` → return `_sim_speed`
   2. `SA_FLOW_VEL > 0` → return SA_FLOW_VEL (override, dùng khi calib đứng yên)
-  3. Ngược lại → return `_target_speed` (tốc độ **ĐẶT** cho mission — WP_SPEED đã cập nhật qua DO_CHANGE_SPEED/GCS SET_SPEED, do `Rover::update_custom_flow()` bơm vào qua `set_target_speed()` mỗi chu kỳ, TRƯỚC khi gọi `update()`, từ `g2.wp_nav.get_speed_max()`)
+  3. `_target_speed > 0` → return `_target_speed` (tốc độ **ĐẶT** cho mission — WP_SPEED đã cập nhật qua DO_CHANGE_SPEED/GCS SET_SPEED, do `Rover::update_custom_flow()` bơm vào qua `set_target_speed()` mỗi chu kỳ, TRƯỚC khi gọi `update()`, từ `g2.wp_nav.get_speed_max()`)
+  4. Ngược lại (`_target_speed` vẫn = 0) → return `AP::ahrs().groundspeed()` (dự phòng)
 - **Đầu ra / Return:** `float` m/s
 - **Lý do tách riêng khỏi `_get_spray_speed()`:** công thức `q1 = TANK_VOL × r × speed × 60 / mission_dist` trước đây dùng tốc độ GPS tức thời — mỗi lần xe tăng/giảm tốc hoặc vào cua, `q1` (và setpoint bơm) đổi theo ngay, gây phun không đều dọc tuyến dù `TANK_VOL`/`mission_dist` không đổi. Dùng tốc độ **ĐẶT** (ổn định suốt 1 đoạn mission, chỉ đổi khi kỹ thuật viên chủ động đổi `WP_SPEED`/`DO_CHANGE_SPEED`) giúp setpoint bơm ổn định hơn nhiều, đánh đổi lấy sai số nhỏ nếu tốc độ thực tế lệch nhiều so với tốc độ đặt (dốc, cản gió...).
+- **⚠️ Bug đã sửa (2026-08-20):** `_target_speed` (từ `g2.wp_nav.get_speed_max()`) CHỈ có giá trị thật sau khi đã vào AUTO ít nhất 1 lần kể từ lúc mở nguồn (`AR_WPNav::init()` chỉ chạy trong `ModeAuto::_enter()`) — trước đó `_base_speed_max` = 0 do zero-init tĩnh, không có giá trị mặc định nào khác. Nếu ARM/gạt nấc để test mà CHƯA từng chạy AUTO phiên đó, tầng 3 luôn trả 0 → FLOW_MODE=1 tưởng xe đứng yên mãi mãi dù xe đang chạy thật (không có cảnh báo, vì đây đúng là case "speed<0.1 im lặng" — xem mục 5). Thêm tầng 4 (AHRS groundspeed) để vẫn hoạt động được khi test ngoài AUTO.
 - **Không đổi:** 2 tầng ưu tiên đầu (SIM, SA_FLOW_VEL) — vẫn dùng để hiệu chỉnh/test khi xe đứng yên, giống hệt `_get_spray_speed()`.
 
 ---

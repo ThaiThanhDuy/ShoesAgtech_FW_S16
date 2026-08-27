@@ -352,11 +352,13 @@ const AP_Param::GroupInfo AP_ShoesAgtech::var_info[] = {
     // food type) instead of a single global rate. Do not reuse this index.
 
     // @Param: DOS_SP
-    // @DisplayName: Dosing setpoint (grams per run)
-    // @Description: Target food weight per run for the active pond (POND_IDX).
-    //   Each pond keeps its own value: switching ponds loads that pond's
-    //   stored setpoint here; editing this saves back to the active pond.
-    // @Units: g
+    // @DisplayName: Dosing setpoint (meaning depends on SA_DOS_MODE)
+    // @Description: Meaning changes with SA_DOS_MODE: MODE=0 -> raw PWM
+    //   (us) written directly to the servo, no rate/formula involved.
+    //   MODE=1 -> continuous feed rate (g/min). MODE=2 -> total grams for
+    //   the whole mission route. Value is per active pond (POND_IDX): each
+    //   pond keeps its own value, switching ponds loads that pond's stored
+    //   setpoint here; editing this saves back to the active pond.
     // @User: Standard
     AP_GROUPINFO("DOS_SP", 28, AP_ShoesAgtech, _dos_sp, 0.0f),
 
@@ -405,10 +407,15 @@ const AP_Param::GroupInfo AP_ShoesAgtech::var_info[] = {
 
     // @Param: DOS_MODE
     // @DisplayName: Dosing motor speed mode
-    // @Description: 0=fixed speed from DOS_SP/DOS_Fx/DOS_Dx. 1=spreads DOS_SP
-    //   evenly over the mission route by ground speed. Stops if no mission
-    //   or speed<0.05m/s.
-    // @Values: 0:Fixed,1:MissionProportional
+    // @Description: 0=direct PWM: SA_DOS_SP (us) written straight to the
+    //   servo, bypassing SA_DOS_V/Fx/Dx and SA_DOS_REV entirely -- for
+    //   bench calibration (measuring RPM/output at a known PWM) without
+    //   needing a separate servo-output test tool. 1=fixed speed from
+    //   DOS_SP/DOS_Fx/DOS_Dx (renumbered from the old MODE=0, 2026-08-20 --
+    //   check this value on units configured before this update). 2=spreads
+    //   DOS_SP evenly over the mission route by ground speed (renumbered
+    //   from the old MODE=1). Stops if no mission or speed too low.
+    // @Values: 0:DirectPWM,1:Fixed,2:MissionProportional
     // @User: Standard
     AP_GROUPINFO("DOS_MODE", 36, AP_ShoesAgtech, _dos_mode, 0),
 
@@ -755,13 +762,28 @@ void AP_ShoesAgtech::update(void) {
     }
   }
 
-  // Khi disarm: reset cảnh báo + cache mission + bộ phát hiện hết thùng
+  // Khi disarm: reset cảnh báo + cache mission + bộ phát hiện hết thùng +
+  // toàn bộ trạng thái đọc lưu lượng (tránh "treo" giá trị cũ từ phiên
+  // trước sang phiên chạy mới — vd dòng chảy dư do trọng lực trong lúc
+  // disarm vẫn có thể tạo xung, nếu không reset _last_pulse_snapshot thì
+  // lần arm kế tiếp sẽ cộng dồn hết số xung tích luỹ trong lúc disarm
+  // thành 1 cú lưu lượng ảo tăng vọt ở chu kỳ đầu tiên).
   if (!now_armed) {
     _arm_dist_warned = false;
     _mission_ncmds = 0;
     _mission_dist_m = 0.0f;
     _tank_empty_detected = false;
     _tank_empty_ms = 0;
+
+    _last_pulse_snapshot = _pulse_count;
+    _flow_rate_filtered = 0.0f;
+    _flow_rate_avg = 0.0f;
+    _buffer_sum = 0.0f;
+    _buffer_index = 0;
+    _samples_count = 0;
+    for (uint8_t i = 0; i < WINDOW_SIZE; i++) {
+      _sample_buffer[i] = 0.0f;
+    }
   }
   _was_armed = now_armed;
 
@@ -1047,15 +1069,24 @@ float AP_ShoesAgtech::_get_spray_speed(void) {
 // TỐC ĐỘ THAM CHIẾU CHO CÔNG THỨC FLOW_MODE=1 — ưu tiên: SA_SIM >
 // SA_FLOW_VEL > tốc độ ĐẶT cho mission (_target_speed, = WP_SPEED đã cập
 // nhật qua DO_CHANGE_SPEED/GCS SET_SPEED, do Rover.cpp bơm vào qua
-// set_target_speed() mỗi chu kỳ).
+// set_target_speed() mỗi chu kỳ) > AHRS groundspeed (dự phòng).
 //
-// KHÁC với _get_spray_speed(): tầng cuối dùng tốc độ ĐẶT thay vì tốc độ
-// GPS TỨC THỜI — để q1 (và do đó setpoint bơm) không bị dao động theo
-// từng cú tăng/giảm tốc, vào cua của xe (gây phun không đều dọc tuyến),
-// chỉ đổi khi tốc độ ĐẶT cho mission thực sự đổi. Chỉ dùng cho
+// KHÁC với _get_spray_speed(): ưu tiên tốc độ ĐẶT thay vì tốc độ GPS TỨC
+// THỜI — để q1 (và do đó setpoint bơm) không bị dao động theo từng cú
+// tăng/giảm tốc, vào cua của xe (gây phun không đều dọc tuyến), chỉ đổi
+// khi tốc độ ĐẶT cho mission thực sự đổi. Chỉ dùng cho
 // _compute_visin_target()/_print_fm1_arm_status()/log FM1 định kỳ — CÁC
 // nơi khác (ước tính "Tank lasts" ở mode 2, DOS_MODE=1 Module 3) vẫn dùng
 // _get_spray_speed() (tốc độ thực) như cũ, không đổi.
+//
+// TẦNG DỰ PHÒNG AHRS (2026-08-20): _target_speed CHỈ được gán giá trị
+// thật khi đã vào chế độ AUTO ít nhất 1 lần kể từ lúc mở nguồn
+// (AR_WPNav::init() chỉ chạy trong ModeAuto::_enter()) — nếu vehicle chưa
+// từng vào AUTO (vd chỉ ARM ở Manual để test bằng tay/gạt nấc),
+// _target_speed sẽ luôn = 0, khiến FLOW_MODE=1 tưởng xe đứng yên mãi mãi
+// dù xe đang chạy thật. Do đó nếu _target_speed vẫn đang = 0 (chưa từng
+// được thiết lập), quay lại dùng AHRS groundspeed như cũ để hệ thống vẫn
+// hoạt động được ngoài AUTO.
 // =============================================================
 float AP_ShoesAgtech::_get_dosing_ref_speed(void) {
   if (_simulation.get() > 0) {
@@ -1065,7 +1096,10 @@ float AP_ShoesAgtech::_get_dosing_ref_speed(void) {
   if (vel > 0.0f) {
     return vel;
   }
-  return _target_speed;
+  if (_target_speed > 0.0f) {
+    return _target_speed;
+  }
+  return AP::ahrs().groundspeed();
 }
 
 // =============================================================
@@ -1992,87 +2026,112 @@ void AP_ShoesAgtech::_update_dosing_motor(void) {
   if (motor_on) {
     float pwm_f = 1500.0f;
 
-    // Lưu lượng thể tích hiệu dụng của vít tải = SA_DOS_V (hằng số hình
-    // học, DÙNG CHUNG mọi loại thức ăn — chỉ đổi khi thay trục vít khác)
-    // x SA_DOS_Fx (hệ số điền đầy hạt, RIÊNG theo loại thức ăn đang
-    // active — bù cho khoảng trống không khí giữa các hạt trong vít).
-    // Mật độ SA_DOS_Dx cũng lấy theo loại thức ăn đang active, dùng
-    // chung cho cả 2 mode.
-    uint8_t food_idx = (uint8_t)_clamp_food(dos_food_active) - 1;
-    float fill_k = _dos_fr[food_idx].get();
-    if (fill_k < 0.01f) {
-      fill_k = 0.01f;
-    }
-    // SA_DOS_Fx trước đây (trước khi tách ra SA_DOS_V x SA_DOS_Fx) là một
-    // số ở thang mL/50us, thường cỡ ~100 — nếu máy đã hiệu chuẩn từ trước
-    // và chưa đo lại theo công thức mới, SA_DOS_Fx sẽ vẫn còn giá trị lớn
-    // kiểu này, bị hiểu nhầm thành hệ số điền đầy => cho ăn sai (thường là
-    // quá ít). Cảnh báo rate-limit 5s để kỹ thuật viên biết cần hiệu
-    // chuẩn lại SA_DOS_Fx sau khi cập nhật firmware.
-    if (fill_k > 5.0f && now - _dos_warn_ms >= 5000U) {
-      _dos_warn_ms = now;
-      gcs().send_text(MAV_SEVERITY_WARNING,
-                      "SA: SA_DOS_F%d=%.1f looks uncalibrated for new V x "
-                      "fill-factor formula (expected ~0.05-2.0)",
-                      (int)(food_idx + 1), (double)fill_k);
-    }
-    float v_const = _dos_v.get();
-    if (v_const < 0.1f) {
-      v_const = 0.1f;
-    }
-    float vol_rate = v_const * fill_k;
-    float density = _dos_dr[food_idx].get();
-    if (density < 0.01f) {
-      density = 0.01f;
-    }
-    float effective = vol_rate * density;
-
     if (_dos_mode.get() == 0) {
-      // ---- DOS_MODE 0: tốc độ cố định — SA_DOS_SP CHÍNH LÀ tốc độ (g/phút) ----
-      dos_rate_gpm = dos_sp_active;
-      float offset = dos_rate_gpm * 50.0f / effective;
-      pwm_f = (float)_offset_to_dos_pwm(offset);
-    } else {
-      // ---- DOS_MODE 1: phân bố đều theo mission — SA_DOS_SP là TỔNG gam,
-      // dos_rate_gpm là tốc độ tức thời suy ra từ speed/mission_dist ----
-      float mission_dist = _get_mission_dist();
-      float speed_ms = _get_spray_speed(); // đồng bộ nguồn tốc độ với Module 1
-                                            // (SIM > SA_FLOW_VEL > AHRS)
-      // Chỉ bắt đầu rải khi xe đã đạt ĐỦ tốc độ — không phải cứ nhích bánh
-      // là rải. Ngưỡng = SA_DOS_SPD_PCT % tốc độ ĐẶT cho mission
-      // (_target_speed = WP_SPEED, do Rover.cpp bơm vào — xem
-      // set_target_speed()), tránh rải ngay lúc xe còn đang tăng tốc từ
-      // lúc dừng/qua khúc cua (rải dồn vào đoạn xe đi chậm). Vẫn giữ sàn
-      // tuyệt đối 0.05 m/s cho trường hợp chưa có _target_speed (vd chưa
-      // từng vào Auto). SA_DOS_SPD_PCT=0 tắt hẳn kiểm tra %, quay về hành
-      // vi cũ (chỉ cần vượt sàn 0.05 m/s là rải).
-      int8_t spd_pct_raw = _dos_spd_pct.get();
-      float speed_min_start;
-      if (spd_pct_raw <= 0) {
-        speed_min_start = 0.05f;
+      // ---- DOS_MODE 0: PWM trực tiếp — SA_DOS_SP LÀ xung PWM (µs), xuất
+      // thẳng ra servo. Bỏ qua hoàn toàn công thức SA_DOS_V/Fx/Dx và
+      // SA_DOS_REV (không phải offset, là giá trị tuyệt đối) — dùng để
+      // hiệu chuẩn tại bàn (đo RPM/sản lượng ở 1 mức PWM biết trước) mà
+      // không cần công cụ test servo riêng của GCS.
+      // An toàn: SA_DOS_SP=0 (giá trị mặc định, chưa từng chỉnh) -> dừng
+      // (1500), KHÔNG kẹp về pwm_min (có thể là tốc độ tối đa) — tránh
+      // trường hợp mới bật RC dosing mà quên set SA_DOS_SP thì motor chạy
+      // full tốc ngoài ý muốn.
+      if (dos_sp_active <= 0.0f) {
+        pwm_f = 1500.0f;
       } else {
-        float spd_pct = constrain_float((float)spd_pct_raw, 1.0f, 100.0f);
-        speed_min_start = MAX(0.05f, (spd_pct * 0.01f) * _target_speed);
+        SRV_Channel *ch_dos =
+            SRV_Channels::srv_channel((uint8_t)(_dos_chan.get() - 1));
+        uint16_t pwm_min = (ch_dos != nullptr) ? ch_dos->get_output_min() : 800;
+        uint16_t pwm_max = (ch_dos != nullptr) ? ch_dos->get_output_max() : 2200;
+        pwm_f = constrain_float(dos_sp_active, (float)pwm_min, (float)pwm_max);
       }
-      if (mission_dist > 1.0f && speed_ms >= speed_min_start) {
-        dos_rate_gpm = (dos_sp_active * speed_ms * 60.0f) / mission_dist;
+      dos_rate_gpm = 0.0f; // không có khái niệm tốc độ g/phút ở mode này
+    } else {
+      // Lưu lượng thể tích hiệu dụng của vít tải = SA_DOS_V (hằng số hình
+      // học, DÙNG CHUNG mọi loại thức ăn — chỉ đổi khi thay trục vít khác)
+      // x SA_DOS_Fx (hệ số điền đầy hạt, RIÊNG theo loại thức ăn đang
+      // active — bù cho khoảng trống không khí giữa các hạt trong vít).
+      // Mật độ SA_DOS_Dx cũng lấy theo loại thức ăn đang active, dùng
+      // chung cho cả mode 1 và 2.
+      uint8_t food_idx = (uint8_t)_clamp_food(dos_food_active) - 1;
+      float fill_k = _dos_fr[food_idx].get();
+      if (fill_k < 0.01f) {
+        fill_k = 0.01f;
+      }
+      // SA_DOS_Fx trước đây (trước khi tách ra SA_DOS_V x SA_DOS_Fx) là một
+      // số ở thang mL/50us, thường cỡ ~100 — nếu máy đã hiệu chuẩn từ trước
+      // và chưa đo lại theo công thức mới, SA_DOS_Fx sẽ vẫn còn giá trị lớn
+      // kiểu này, bị hiểu nhầm thành hệ số điền đầy => cho ăn sai (thường là
+      // quá ít). Cảnh báo rate-limit 5s để kỹ thuật viên biết cần hiệu
+      // chuẩn lại SA_DOS_Fx sau khi cập nhật firmware.
+      if (fill_k > 5.0f && now - _dos_warn_ms >= 5000U) {
+        _dos_warn_ms = now;
+        gcs().send_text(MAV_SEVERITY_WARNING,
+                        "SA: SA_DOS_F%d=%.1f looks uncalibrated for new V x "
+                        "fill-factor formula (expected ~0.05-2.0)",
+                        (int)(food_idx + 1), (double)fill_k);
+      }
+      float v_const = _dos_v.get();
+      if (v_const < 0.1f) {
+        v_const = 0.1f;
+      }
+      float vol_rate = v_const * fill_k;
+      float density = _dos_dr[food_idx].get();
+      if (density < 0.01f) {
+        density = 0.01f;
+      }
+      float effective = vol_rate * density;
+
+      if (_dos_mode.get() == 1) {
+        // ---- DOS_MODE 1 (đổi số từ mode 0 cũ, 2026-08-20): tốc độ cố
+        // định — SA_DOS_SP CHÍNH LÀ tốc độ (g/phút) ----
+        dos_rate_gpm = dos_sp_active;
         float offset = dos_rate_gpm * 50.0f / effective;
         pwm_f = (float)_offset_to_dos_pwm(offset);
       } else {
-        pwm_f = 1500.0f;
-        dos_rate_gpm = 0.0f;
-        if (now - _dos_warn_ms >= 5000U) {
-          _dos_warn_ms = now;
-          if (mission_dist <= 1.0f) {
-            gcs().send_text(
-                MAV_SEVERITY_WARNING,
-                "SA DOS1: no mission (dist=%.1fm) - motor stopped",
-                (double)mission_dist);
-          } else {
-            gcs().send_text(
-                MAV_SEVERITY_WARNING,
-                "SA DOS1: speed too low (%.2fm/s < %.2fm/s min) - motor stopped",
-                (double)speed_ms, (double)speed_min_start);
+        // ---- DOS_MODE 2 (đổi số từ mode 1 cũ, 2026-08-20): phân bố đều
+        // theo mission — SA_DOS_SP là TỔNG gam, dos_rate_gpm là tốc độ
+        // tức thời suy ra từ speed/mission_dist ----
+        float mission_dist = _get_mission_dist();
+        float speed_ms = _get_spray_speed(); // đồng bộ nguồn tốc độ với
+                                              // Module 1 (SIM > SA_FLOW_VEL
+                                              // > AHRS)
+        // Chỉ bắt đầu rải khi xe đã đạt ĐỦ tốc độ — không phải cứ nhích
+        // bánh là rải. Ngưỡng = SA_DOS_SPD_PCT % tốc độ ĐẶT cho mission
+        // (_target_speed = WP_SPEED, do Rover.cpp bơm vào — xem
+        // set_target_speed()), tránh rải ngay lúc xe còn đang tăng tốc từ
+        // lúc dừng/qua khúc cua (rải dồn vào đoạn xe đi chậm). Vẫn giữ
+        // sàn tuyệt đối 0.05 m/s cho trường hợp chưa có _target_speed (vd
+        // chưa từng vào Auto). SA_DOS_SPD_PCT=0 tắt hẳn kiểm tra %, quay
+        // về hành vi cũ (chỉ cần vượt sàn 0.05 m/s là rải).
+        int8_t spd_pct_raw = _dos_spd_pct.get();
+        float speed_min_start;
+        if (spd_pct_raw <= 0) {
+          speed_min_start = 0.05f;
+        } else {
+          float spd_pct = constrain_float((float)spd_pct_raw, 1.0f, 100.0f);
+          speed_min_start = MAX(0.05f, (spd_pct * 0.01f) * _target_speed);
+        }
+        if (mission_dist > 1.0f && speed_ms >= speed_min_start) {
+          dos_rate_gpm = (dos_sp_active * speed_ms * 60.0f) / mission_dist;
+          float offset = dos_rate_gpm * 50.0f / effective;
+          pwm_f = (float)_offset_to_dos_pwm(offset);
+        } else {
+          pwm_f = 1500.0f;
+          dos_rate_gpm = 0.0f;
+          if (now - _dos_warn_ms >= 5000U) {
+            _dos_warn_ms = now;
+            if (mission_dist <= 1.0f) {
+              gcs().send_text(
+                  MAV_SEVERITY_WARNING,
+                  "SA DOS2: no mission (dist=%.1fm) - motor stopped",
+                  (double)mission_dist);
+            } else {
+              gcs().send_text(
+                  MAV_SEVERITY_WARNING,
+                  "SA DOS2: speed too low (%.2fm/s < %.2fm/s min) - motor stopped",
+                  (double)speed_ms, (double)speed_min_start);
+            }
           }
         }
       }
@@ -2086,23 +2145,28 @@ void AP_ShoesAgtech::_update_dosing_motor(void) {
   SRV_Channels::set_output_pwm_chan(chan_idx, _dos_pwm);
 
   // ---- IN LOG MOTOR CHO ĂN RA CONSOLE (SA_DOS_LOG) ----
-  // Format khác nhau theo mode: mode 0 thì SA_DOS_SP CHÍNH LÀ tốc độ (g/ph)
-  // nên chỉ in 1 field "Rate"; mode 1 thì SA_DOS_SP là tổng gam cho cả
+  // Format khác nhau theo mode: mode 0 (PWM trực tiếp) không có khái niệm
+  // tốc độ/mật độ, chỉ in PWM; mode 1 thì SA_DOS_SP CHÍNH LÀ tốc độ (g/ph)
+  // nên chỉ in 1 field "Rate"; mode 2 thì SA_DOS_SP là tổng gam cho cả
   // mission, nên in thêm "Rate" (tốc độ tức thời suy ra) bên cạnh "SP" (tổng).
   if (_dos_log_enable.get() > 0) {
     if (now - _dos_last_log_ms >= (uint32_t)_dos_log_ms.get()) {
       _dos_last_log_ms = now;
       uint8_t food_log = (uint8_t)_clamp_food(dos_food_active) - 1;
       if (_dos_mode.get() == 0) {
+        gcs().send_text(MAV_SEVERITY_INFO, "[DOS] M0 SERVO%d %s PWM:%u",
+                        (int)_dos_chan.get(), motor_on ? "ON" : "OFF",
+                        (unsigned)_dos_pwm);
+      } else if (_dos_mode.get() == 1) {
         gcs().send_text(
             MAV_SEVERITY_INFO,
-            "[DOS] M0 F%d SERVO%d %s Rate:%.0fg/min D:%.2fg/mL PWM:%u",
+            "[DOS] M1 F%d SERVO%d %s Rate:%.0fg/min D:%.2fg/mL PWM:%u",
             (int)dos_food_active, (int)_dos_chan.get(),
             motor_on ? "ON" : "OFF", (double)dos_rate_gpm,
             (double)_dos_dr[food_log].get(), (unsigned)_dos_pwm);
       } else {
         gcs().send_text(MAV_SEVERITY_INFO,
-                        "[DOS] M1 F%d SERVO%d %s SP:%.0fg Rate:%.2fg/min "
+                        "[DOS] M2 F%d SERVO%d %s SP:%.0fg Rate:%.2fg/min "
                         "D:%.2fg/mL PWM:%u",
                         (int)dos_food_active, (int)_dos_chan.get(),
                         motor_on ? "ON" : "OFF", (double)dos_sp_active,

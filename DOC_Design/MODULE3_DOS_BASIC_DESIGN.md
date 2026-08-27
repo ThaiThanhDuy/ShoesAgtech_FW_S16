@@ -34,7 +34,7 @@ Người vận hành chỉ cần:
 
 Hỗ trợ 2 chế độ:
 - **Tốc độ cố định (DOS_MODE=0)**: Quay đều với tốc độ đặt sẵn, không phụ thuộc tốc độ xe hay tuyến đường
-- **Tỉ lệ theo tuyến đường (DOS_MODE=1)**: Tự điều chỉnh tốc độ theo tốc độ xe để phân bổ đều toàn tuyến
+- **Tỉ lệ theo tuyến đường (DOS_MODE=2)**: Tự điều chỉnh tốc độ theo tốc độ xe để phân bổ đều toàn tuyến
 
 **Tính năng khối lượng riêng:** Hệ thống phân tách thông số cơ học vít tải (thể tích tống ra) với đặc tính hạt thức ăn (khối lượng riêng g/mL). Mỗi loại thức ăn có thể cài riêng, không cần calibrate lại vít tải khi đổi loại hạt. Cả 2 chế độ tốc độ (cố định lẫn theo tuyến đường) đều dùng chung bộ thông số theo loại thức ăn này.
 
@@ -118,13 +118,13 @@ Trạng thái motor gửi lên GCS
 
 ### Case 4: Nút RC bật — Chế độ 1 (phân bổ theo tuyến đường) — đủ điều kiện
 
-- **Điều kiện:** DOS_MODE=1 + đã upload tuyến đường + xe đã đạt ≥`SA_DOS_SPD_PCT`% tốc độ ĐẶT cho mission (mặc định 50%, xem Case 5)
+- **Điều kiện:** DOS_MODE=2 + đã upload tuyến đường + xe đã đạt ≥`SA_DOS_SPD_PCT`% tốc độ ĐẶT cho mission (mặc định 50%, xem Case 5)
 - **Hành vi hệ thống:** Motor thay đổi tốc độ theo tốc độ xe để phân bổ đều `SA_DOS_SP` gam trên toàn tuyến đường. Xe nhanh → quay nhanh hơn, xe chậm → quay chậm hơn
 - **Output người dùng thấy:** Motor quay nhanh/chậm theo xe; GCS hiển thị PWM thay đổi
 
 ### Case 5: Nút RC bật — Chế độ 1 — Chưa có tuyến đường hoặc xe chưa đủ tốc độ
 
-- **Điều kiện:** DOS_MODE=1 nhưng chưa upload tuyến đường lên FC, hoặc xe đứng yên/mới tăng tốc chưa đạt **`SA_DOS_SPD_PCT`% tốc độ ĐẶT cho mission** (mặc định 50%, `SA_DOS_SPD_PCT=0` tắt kiểm tra này; ngưỡng tối thiểu tuyệt đối 0.05 m/s luôn áp dụng — cập nhật 2026-08-19, trước đây chỉ cần xe nhích bánh là đủ)
+- **Điều kiện:** DOS_MODE=2 nhưng chưa upload tuyến đường lên FC, hoặc xe đứng yên/mới tăng tốc chưa đạt **`SA_DOS_SPD_PCT`% tốc độ ĐẶT cho mission** (mặc định 50%, `SA_DOS_SPD_PCT=0` tắt kiểm tra này; ngưỡng tối thiểu tuyệt đối 0.05 m/s luôn áp dụng — cập nhật 2026-08-19, trước đây chỉ cần xe nhích bánh là đủ)
 - **Hành vi hệ thống:** Motor DỪNG — không fallback sang tốc độ cố định; phát cảnh báo. Mục đích: tránh rải dồn thức ăn vào đoạn xe còn đang tăng tốc lúc bắt đầu chạy hoặc vừa qua khúc cua
 - **Output người dùng thấy:** Motor dừng; cảnh báo "no mission" hoặc "speed too low"
 

@@ -123,7 +123,7 @@ Cho ăn sai lượng (quá nhiều/quá ít) ảnh hưởng trực tiếp đến
 
 **Quan sát:** Nhìn động cơ và đọc dòng chữ xuất hiện trên màn hình điều khiển.
 
-**Kết quả ĐẠT:** Động cơ đứng yên (không cấp thức ăn), màn hình hiện rõ dòng cảnh báo dạng **"SA DOS1: no mission (dist=...m) - motor stopped"** trong vòng vài giây — người vận hành biết ngay lý do, không phải đoán mò.
+**Kết quả ĐẠT:** Động cơ đứng yên (không cấp thức ăn), màn hình hiện rõ dòng cảnh báo dạng **"SA DOS2: no mission (dist=...m) - motor stopped"** trong vòng vài giây — người vận hành biết ngay lý do, không phải đoán mò.
 
 **Kết quả KHÔNG ĐẠT:** Động cơ đứng yên nhưng không có cảnh báo nào (không rõ lý do), hoặc động cơ vẫn chạy dù chưa có mission.
 
@@ -137,7 +137,7 @@ Cho ăn sai lượng (quá nhiều/quá ít) ảnh hưởng trực tiếp đến
 
 **Quan sát:** Theo dõi động cơ và màn hình điều khiển.
 
-**Kết quả ĐẠT:** Động cơ dừng cấp thức ăn, màn hình hiện cảnh báo dạng **"SA DOS1: speed too low (...m/s) - motor stopped"** — không cấp thức ăn dồn vào một chỗ khi xe không di chuyển.
+**Kết quả ĐẠT:** Động cơ dừng cấp thức ăn, màn hình hiện cảnh báo dạng **"SA DOS2: speed too low (...m/s) - motor stopped"** — không cấp thức ăn dồn vào một chỗ khi xe không di chuyển.
 
 **Kết quả KHÔNG ĐẠT:** Động cơ vẫn cấp thức ăn dù xe gần như đứng yên (dồn thức ăn vào một điểm), hoặc dừng cấp nhưng không có cảnh báo giải thích lý do.
 
