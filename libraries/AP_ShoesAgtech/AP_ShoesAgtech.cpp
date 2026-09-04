@@ -833,8 +833,11 @@ void AP_ShoesAgtech::update(void) {
       }
       // Bơm chỉ thực sự chạy sau khi mission đã bắt đầu tới WP1 (không
       // bật ngay lúc vừa ARM khi xe còn ở HOME) - _flow_target vẫn hiện
-      // đầy đủ trong log như bình thường.
-      if (!_mission_started_wp1()) {
+      // đầy đủ trong log như bình thường. Bỏ qua gate này khi SA_FLOW_VEL
+      // > 0 (đang chủ động dùng để hiệu chỉnh đứng yên, không cần AUTO/
+      // mission thật đang chạy) - giống cách SA_FLOW_VEL đã ưu tiên hơn
+      // tốc độ thật trong _get_dosing_ref_speed().
+      if (_flow_vel.get() <= 0.0f && !_mission_started_wp1()) {
         _flow_ramp_val = 0.0f;
         _pid_integral = 0.0f;
         _pid_output_lpf = 0.0f;
@@ -884,8 +887,9 @@ void AP_ShoesAgtech::update(void) {
         }
         break;
       }
-      // Giống nấc 2: chỉ bật bơm thật sau khi mission đã bắt đầu tới WP1.
-      if (!_mission_started_wp1()) {
+      // Giống nấc 2: chỉ bật bơm thật sau khi mission đã bắt đầu tới WP1,
+      // trừ khi SA_FLOW_VEL > 0 (đang chủ động hiệu chỉnh đứng yên).
+      if (_flow_vel.get() <= 0.0f && !_mission_started_wp1()) {
         _flow_ramp_val = 0.0f;
         _pid_integral = 0.0f;
         _pid_output_lpf = 0.0f;

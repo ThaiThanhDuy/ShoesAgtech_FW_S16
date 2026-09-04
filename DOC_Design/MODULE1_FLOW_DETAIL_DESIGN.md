@@ -44,8 +44,9 @@ update() [10 Hz — ArduPilot scheduler]
     │                         ├──► _get_dosing_ref_speed() [tốc độ ĐẶT WP_SPEED,
     │                         │      KHÔNG phải GPS tức thời — xem 1.2/3.5]
     │                         ├──► kiểm tra mission / speed / q1 trong dải 0.9-1.2 (dải lưu lượng THẬT bơm đạt được, xem 3.5)
-    │                         └──► _mission_started_wp1() [mới, 2026-09-04] — false thì
+    │                         └──► (SA_FLOW_VEL≤0) _mission_started_wp1() [mới, 2026-09-04] — false thì
     │                                bơm về MIN, ramp_val=0, flow_target vẫn hiện log bình thường
+    │                                (SA_FLOW_VEL>0) bỏ qua gate — bơm chạy thật ngay để hiệu chỉnh
     │                     ramp_val = min(ramp_val + 0.3×dt, flow_target)   [ramp 0.3 L/min/s]
     │                     _run_flow_pid(ramp_val, dt)
     │                     └──► return pwm  ──► _write_pump_pwm(pwm)
@@ -54,7 +55,7 @@ update() [10 Hz — ArduPilot scheduler]
     │                         ├──► _get_mission_dist()
     │                         ├──► _get_dosing_ref_speed() [tốc độ ĐẶT WP_SPEED]
     │                         ├──► kiểm tra mission / speed / q1 trong dải 0.9-1.2 (dải lưu lượng THẬT bơm đạt được, xem 3.5)
-    │                         └──► _mission_started_wp1() — giống mode 1
+    │                         └──► (SA_FLOW_VEL≤0) _mission_started_wp1() — giống mode 1
     │                     ramp_val = min(ramp_val + 0.3×dt, flow_target)
     │                     _run_flow_pid(ramp_val, dt)
     │                     └──► return pwm  ──► _write_pump_pwm(pwm)
@@ -256,10 +257,11 @@ update() [10 Hz — ArduPilot scheduler]
 
 **`_mission_started_wp1() → bool`** — mới, 2026-09-04
 - **File:** `AP_ShoesAgtech.cpp : ~1184`
-- **Được gọi bởi:** `update()` case 1/case 2 (nấc 2/3, chỉ khi `SA_FLOW_MODE=1`)
+- **Được gọi bởi:** `update()` case 1/case 2 (nấc 2/3, chỉ khi `SA_FLOW_MODE=1`), điều kiện thực tế tại call site là `SA_FLOW_VEL.get() <= 0 && !_mission_started_wp1()` (xem ghi chú bypass bên dưới)
 - **Xử lý:** `true` nếu có mission, `mission->state() == MISSION_RUNNING`, và `mission->get_current_nav_index() >= 1` (đã bỏ qua HOME ở index 0, đang thực sự navigate tới WP1 trở đi)
 - **Đầu ra / Return:** `bool`
 - **Lý do:** Trước đây bơm bật ngay khi vừa ARM (nếu nấc 2/3 + mission hợp lệ), kể cả khi xe còn đứng ở HOME chưa bắt đầu chạy — vì `_get_dosing_ref_speed()` ưu tiên tốc độ **ĐẶT** (`_target_speed`/WP_SPEED) thay vì tốc độ thực, nên `speed_ms` có thể >0 dù xe chưa nhúc nhích. Dùng hàm này để chỉ thực sự ghi PWM ra bơm sau khi mission đã chạy tới WP1 — `_flow_target` vẫn tính và hiện trong log bình thường bất kể kết quả hàm này.
+- **⚠️ Bypass khi hiệu chỉnh (2026-09-04):** `mission->state()` chỉ RUNNING khi đang ở mode AUTO — nếu ARM ở mode khác (Manual/Hold) để hiệu chỉnh bằng `SA_FLOW_VEL` lúc xe đứng yên, hàm này luôn `false`. Do đó call site bỏ qua hẳn kết quả hàm này khi `SA_FLOW_VEL > 0`, để bơm vẫn chạy thật phục vụ hiệu chỉnh mà không cần vào AUTO.
 
 ---
 
@@ -449,10 +451,24 @@ _mission_started_wp1():
 Lý do cần hàm này: command index 0 của mission luôn là HOME (xem
 `_get_mission_dist()` — bug đã sửa cùng ngày), nên `get_current_nav_index()`
 trả về 0 nghĩa là xe **chưa thực sự bắt đầu chạy tới WP1** (mới vừa ARM,
-còn ở HOME, hoặc mission chưa RUNNING). Ở FLOW_MODE=1 (nấc 2/3), nếu điều
-kiện này chưa đúng: bơm bị ép về PWM MIN (tắt hẳn), PI reset — **nhưng
-`_flow_target` vẫn được tính và hiện đầy đủ trong log như bình thường**
-(không ẩn đi), chỉ có việc ghi PWM ra bơm thật là bị gate lại.
+còn ở HOME, hoặc mission chưa RUNNING). `mission->state()` chỉ chuyển
+sang `MISSION_RUNNING` khi vào mode AUTO (`mission.start_or_resume()` chỉ
+được gọi trong `ModeAuto::update()`, xem `mode_auto.cpp:80`) — ARM ở mode
+khác (Manual/Hold...) thì mission KHÔNG RUNNING dù đã upload mission.
+
+Ở FLOW_MODE=1 (nấc 2/3), nếu điều kiện này chưa đúng: bơm bị ép về PWM
+MIN (tắt hẳn), PI reset — **nhưng `_flow_target` vẫn được tính và hiện
+đầy đủ trong log như bình thường** (không ẩn đi), chỉ có việc ghi PWM ra
+bơm thật là bị gate lại.
+
+**Bỏ qua gate khi đang hiệu chỉnh — `SA_FLOW_VEL > 0` (mới, 2026-09-04):**
+Điều kiện thực tế ở case 1/2 là `SA_FLOW_VEL.get() <= 0 && !_mission_started_wp1()`
+— nghĩa là khi `SA_FLOW_VEL > 0` (kỹ thuật viên đang chủ động đặt tốc độ
+giả để hiệu chỉnh công thức lúc xe đứng yên/không chạy AUTO), gate WP1 bị
+bỏ qua hoàn toàn, bơm chạy thật ngay khi q1 hợp lệ — giống cách
+`SA_FLOW_VEL` đã ưu tiên hơn tốc độ thật trong `_get_dosing_ref_speed()`.
+Khi `SA_FLOW_VEL=0` (vận hành thực tế bình thường), gate WP1 hoạt động
+đầy đủ như mô tả ở trên.
 
 **Ramp lên setpoint từ từ khi bắt đầu bơm (mới, 2026-09-04):**
 ```
