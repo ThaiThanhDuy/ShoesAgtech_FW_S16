@@ -7,7 +7,7 @@
 **File nguồn:** `libraries/AP_ShoesAgtech/AP_ShoesAgtech.cpp/.h`
 **Loại:** `[x] Module mới   [ ] Bổ sung hệ thống   [ ] Sửa lỗi / thay đổi hành vi`
 **Tần suất update:** 10 Hz (`update()` gọi từ ArduPilot scheduler)
-**Ngày hoàn thành:** 2026-05-15 | **Cập nhật lần cuối:** 2026-08-19
+**Ngày hoàn thành:** 2026-05-15 | **Cập nhật lần cuối:** 2026-08-20 (rút gọn log console)
 
 ---
 
@@ -22,7 +22,7 @@ irq_handler() [ISR — mỗi RISING edge trên GPIO SA_FLOW_PIN]
 update() [10 Hz — ArduPilot scheduler]
     │
     ├──► _check_pump_config()
-    │         └──► return void  (warn/ok mỗi 5s nếu config sai)
+    │         └──► return void  (cập nhật _pump_config_ok — KHÔNG còn in log, 2026-08-20)
     │
     ├──► (SA_SIM=1) _run_simulation()    [cũng cập nhật data cho Module 2 & 3]
     │    (SA_SIM=0) _ph_update()         [Module 2 — xem MODULE2_PH_DETAIL_DESIGN]
@@ -37,35 +37,41 @@ update() [10 Hz — ArduPilot scheduler]
     │         └──► cập nhật _spray_mode (0/1/2)
     │
     ├──► switch(_spray_mode)
-    │         mode 0 ──► _write_pump_pwm(RC_passthrough)
-    │         mode 1 ──► [FLOW_MODE=0] flow_target = SA_FLOW_SP
-    │         (nấc giữa)  [FLOW_MODE=1] _compute_visin_target(SA_MIX_STD)
+    │         mode 0 ──► _write_pump_pwm(RC_passthrough), ramp_val=0 (reset để nấc sau ramp lại từ đầu)
+    │         mode 1 ──► [FLOW_MODE=0] flow_target = SA_FLOW_SP, ramp_val = min(ramp_val+0.3×dt, flow_target)
+    │         (nấc giữa)  [FLOW_MODE=1] flow_target = _compute_visin_target(SA_MIX_STD)
     │                         ├──► _get_mission_dist()
     │                         ├──► _get_dosing_ref_speed() [tốc độ ĐẶT WP_SPEED,
     │                         │      KHÔNG phải GPS tức thời — xem 1.2/3.5]
-    │                         └──► kiểm tra mission / speed / q1 ≥ 0.3 (không còn trần trên)
-    │                     _run_flow_pid(flow_target, dt)
+    │                         ├──► kiểm tra mission / speed / q1 trong dải 0.9-1.2 (dải lưu lượng THẬT bơm đạt được, xem 3.5)
+    │                         └──► _mission_started_wp1() [mới, 2026-09-04] — false thì
+    │                                bơm về MIN, ramp_val=0, flow_target vẫn hiện log bình thường
+    │                     ramp_val = min(ramp_val + 0.3×dt, flow_target)   [ramp 0.3 L/min/s]
+    │                     _run_flow_pid(ramp_val, dt)
     │                     └──► return pwm  ──► _write_pump_pwm(pwm)
-    │         mode 2 ──► [FLOW_MODE=0] flow_target = SA_FLOW_SP × (MIX_CNT/MIX_STD)
-    │         (nấc cao)  [FLOW_MODE=1] _compute_visin_target(SA_MIX_CNT)
+    │         mode 2 ──► [FLOW_MODE=0] flow_target = SA_FLOW_SP × (MIX_CNT/MIX_STD), ramp_val = min(ramp_val+0.3×dt, flow_target)
+    │         (nấc cao)  [FLOW_MODE=1] flow_target = _compute_visin_target(SA_MIX_CNT)
     │                         ├──► _get_mission_dist()
     │                         ├──► _get_dosing_ref_speed() [tốc độ ĐẶT WP_SPEED]
-    │                         └──► kiểm tra mission / speed / q1 ≥ 0.3 (không còn trần trên)
-    │                     _run_flow_pid(flow_target, dt)
+    │                         ├──► kiểm tra mission / speed / q1 trong dải 0.9-1.2 (dải lưu lượng THẬT bơm đạt được, xem 3.5)
+    │                         └──► _mission_started_wp1() — giống mode 1
+    │                     ramp_val = min(ramp_val + 0.3×dt, flow_target)
+    │                     _run_flow_pid(ramp_val, dt)
     │                     └──► return pwm  ──► _write_pump_pwm(pwm)
     │
-    ├──► [ARM edge detection — inline trong update()]
-    │         _was_armed: false→true (1 lần/ARM) → _print_fm1_arm_status(r)
-    │         false→false, true→true: không làm gì
-    │         true→false (DISARM): reset _arm_dist_warned, _mission_ncmds,
-    │                               _mission_dist_m, _tank_empty_detected, _tank_empty_ms
-    │                               + TOÀN BỘ trạng thái đọc lưu lượng (2026-08-20):
-    │                               _last_pulse_snapshot, _flow_rate_filtered,
-    │                               _flow_rate_avg, buffer trung bình trượt
+    ├──► [DISARM detection — inline trong update()]
+    │         now_armed=false: reset _mission_ncmds, _mission_dist_m,
+    │                          _tank_empty_detected, _tank_empty_ms, _q1_range_warned,
+    │                          _flow_ramp_val (2026-09-04)
+    │                          + TOÀN BỘ trạng thái đọc lưu lượng (2026-08-20):
+    │                          _last_pulse_snapshot, _flow_rate_filtered,
+    │                          _flow_rate_avg, buffer trung bình trượt
+    │         (2026-08-20: bỏ hẳn _print_fm1_arm_status() + biến _was_armed/
+    │          _arm_dist_warned — không còn in gì lúc vừa ARM, xem mục 7)
     │
     ├──► [Tank-empty detection — inline trong update(), sau switch]
     │         Điều kiện: spray_mode 1 hoặc 2 + đang ARM + !_tank_empty_detected
-    │         _flow_rate_filtered > 1.7 L/min liên tục ≥ 5s → CRITICAL + set flag
+    │         _flow_rate_filtered > 1.7 L/min liên tục ≥ 5s → INFO + set flag
     │         Nếu flow ≤ 1.7: reset _tank_empty_ms về 0
     │
     └──► [Console log — SA_FLOW_LOG=1]
@@ -131,10 +137,9 @@ update() [10 Hz — ArduPilot scheduler]
 - **Xử lý:**
   1. Đọc `SERVOx_FUNCTION` của kênh SA_PUMP_CHAN
   2. So sánh với lần trước; nếu không thay đổi và đã OK → return sớm
-  3. Nếu function ≠ 0 → STATUSTEXT WARNING mỗi 5s; `_pump_config_ok = false`
-  4. Nếu function = 0 → in MIN/TRIM/MAX một lần; `_pump_config_ok = true`
+  3. `_pump_config_ok = (function == 0)`
 - **Đầu ra / Return:** `void` — cập nhật `_pump_config_ok`
-- **Ghi chú:** Không block motor; chỉ cảnh báo. Pump vẫn xuất PWM ngay cả khi config sai.
+- **Ghi chú:** Không block motor; hàm chỉ cập nhật cờ, không gây tác dụng phụ khác. **Đã bỏ 2 dòng STATUSTEXT (2026-08-20)** — trước đây in cảnh báo `SERVOx_FUNCTION=<x> must be 0` mỗi 5s khi sai, và `SERVOx OK Min/Trim/Max` khi đúng; cùng lúc bỏ luôn `_last_warn_ms` (không còn dùng). Vẫn kiểm tra cấu hình bình thường, chỉ không in log nữa — xem mục 7.
 
 ---
 
@@ -158,27 +163,19 @@ update() [10 Hz — ArduPilot scheduler]
   2. `speed_ms = _get_dosing_ref_speed()` (tốc độ ĐẶT cho mission, KHÔNG phải GPS tức thời — xem 1.2/3.5) — nếu < 0.1 m/s → reset PI, return 0 (không cảnh báo)
   3. `q1 = TANK_VOL × r × speed_ms × 60 / dist` (L/min)
      - Ý nghĩa: để phân phối đúng `TANK_VOL × r` lít đều trên `dist` mét, cần lưu lượng này
-  4. `q1 < 0.3` → reset PI, warning "rut ngan mission hoac tang speed" + return 0
-  5. `return constrain(q1, 0, 200)` — **KHÔNG còn giới hạn trên q1 > 2.0** (đã gỡ bỏ theo yêu cầu 2026-08-19; chấp nhận phun đậm đặc trên mission ngắn thay vì chặn bơm). Cận trên 200 chỉ còn là chặn an toàn tuyệt đối (giá trị vô lý), không phải ngưỡng nghiệp vụ.
+  4. `q1 < 0.9` → reset PI, warning 1 lần/ARM "shorten mission or increase speed" + return 0
+  5. `q1 > 1.2` → reset PI, warning 1 lần/ARM "lengthen mission or reduce speed" + return 0
+  6. `return constrain(q1, 0, 200)` — dải `[0.9, 1.2]` là dải lưu lượng **THẬT** bơm hiện tại đạt được (hardcode theo phần cứng, đo thực tế 2026-08-20 — KHÔNG phải ngưỡng nghiệp vụ như 0.3/2.0 cũ trước đó). Cận trên `constrain` (200) chỉ còn là chặn an toàn tuyệt đối, không liên quan.
 - **Đầu ra / Return:** `float` — lưu lượng vi sinh target (L/min); 0 nếu bất kỳ điều kiện nào không đạt
-- **Ghi chú:** Warnings dùng chung timer `_tank_warn_ms`, throttle 5s giữa các lần in. `vi_per_run = TANK_VOL × r` là hằng số mỗi lần chạy mission, không phụ thuộc speed hay dist.
+- **Ghi chú:** Warning "no mission" (dist≤1m) vẫn dùng timer `_tank_warn_ms` (lặp mỗi 5s). Warning dải q1 [0.9,1.2] dùng cờ `_q1_range_warned` riêng — chỉ in **1 LẦN mỗi phiên ARM** (khác các cảnh báo khác), reset khi disarm. `vi_per_run = TANK_VOL × r` là hằng số mỗi lần chạy mission, không phụ thuộc speed hay dist.
 
 ---
 
-**`_print_fm1_arm_status(float r)`**
-- **Được gọi bởi:** `update()` — 1 lần duy nhất khi phát hiện cạnh disarm→arm, spray_mode 1 hoặc 2, FLOW_MODE=1
-- **Đầu vào:** `r` — tỉ lệ vi sinh (MIX_STD hoặc MIX_CNT sau clamp)
-- **Xử lý:**
-  1. `dist = _get_mission_dist()` — nếu ≤ 1m → WARNING "chua co mission - bom se dung", return
-  2. `vi_per_run = TANK_VOL × r`
-  3. `speed = _get_dosing_ref_speed()` (tốc độ ĐẶT cho mission) — nếu ≤ 0.1 m/s → INFO "van toc=0 bom cho xe chay", return
-  4. `q1 = TANK_VOL × r × speed × 60 / dist`
-  5. `dist_max = TANK_VOL × r × speed × 60 / 0.3` (khoảng cách tối đa trước khi q1 < 0.3)
-  6. Nếu `q1 < 0.3` → WARNING "rut ngan mission (dmax=Xm)", return
-  7. Tính `eta_s = dist / speed`, `eta_min`, `eta_sec` (KHÔNG còn bước kiểm tra `q1 > 2.0`/`dmin` — đã gỡ bỏ)
-  8. INFO "FM1 OK: r q1 miss dmax ~XmXXs vi/run:XL"
-- **Đầu ra / Return:** `void` — side effect: 1 STATUSTEXT
-- **Ghi chú:** Chỉ in 1 lần/ARM nhờ `_was_armed` edge detection. Bị gọi lại nếu disarm rồi arm lại.
+> **⚠️ Hàm đã gỡ bỏ (2026-08-20):** `_print_fm1_arm_status(float r)` — trước
+> đây in 1 lần STATUSTEXT chi tiết mỗi khi vừa ARM (mission/tốc độ/q1 dự
+> báo/ETA), bất kể `SA_FLOW_LOG`. Đã xóa toàn bộ hàm này + lời gọi + biến
+> `_was_armed`/`_arm_dist_warned` (không còn nơi nào đọc) theo yêu cầu rút
+> gọn log — Module 1 không còn in gì đặc biệt lúc vừa ARM nữa. Xem mục 7.
 
 ---
 
@@ -226,7 +223,7 @@ update() [10 Hz — ArduPilot scheduler]
 
 **`_get_dosing_ref_speed() → float`** — mới, 2026-08-19; thêm tầng dự phòng AHRS 2026-08-20
 - **File:** `AP_ShoesAgtech.cpp : 1027`
-- **Được gọi bởi:** `_compute_visin_target()`, `_print_fm1_arm_status()`, log định kỳ `[FLOW] FM1 ...`
+- **Được gọi bởi:** `_compute_visin_target()`
 - **Đầu vào:** không có
 - **Xử lý (ưu tiên):**
   1. `SA_SIM=1` → return `_sim_speed`
@@ -242,17 +239,27 @@ update() [10 Hz — ArduPilot scheduler]
 
 **`_get_mission_dist() → float`**
 - **File:** `AP_ShoesAgtech.cpp : 1073`
-- **Được gọi bởi:** `_compute_visin_target()`, `_print_fm1_arm_status()`, `_update_dosing_motor()`
+- **Được gọi bởi:** `_compute_visin_target()`, `_update_dosing_motor()`
 - **Đầu vào:** không có
 - **Xử lý:**
   1. Lấy `n = AP::mission()->num_commands()`
   2. Nếu n < 2 → return 0
   3. Nếu n == `_mission_ncmds` và cache > 0 → return cache (tránh lặp mỗi 10 Hz)
-  4. Duyệt tất cả command, chỉ tính các lệnh NAV (WAYPOINT, LOITER, SPLINE); bỏ qua lat/lng = 0
+  4. Duyệt command **từ index 1** (bỏ qua index 0), chỉ tính các lệnh NAV (WAYPOINT, LOITER, SPLINE); bỏ qua lat/lng = 0
   5. Cộng dồn `prev_loc.get_distance(loc)` cho từng đoạn
   6. Lưu vào `_mission_dist_m` + `_mission_ncmds`
-- **Đầu ra / Return:** `float` — tổng khoảng cách mission (m); 0 nếu không có mission
+- **Đầu ra / Return:** `float` — tổng khoảng cách mission (m), tính từ WP1 trở đi; 0 nếu không có mission
+- **⚠️ Bug đã sửa (2026-09-04):** Trước đây duyệt từ index 0, nhưng `AP_Mission::read_cmd_from_storage(0, cmd)` **luôn luôn** trả về vị trí HOME (`AP::ahrs().get_home()`), không phải WP1 thật (xem `AP_Mission.cpp:825-829`) — do đó quãng đường bị cộng dư thêm cả chặng "home (điểm arm/xuất phát) → WP1", làm `mission_dist` bị tính lớn hơn thực tế (kéo `q1` thấp hơn thực tế). Sửa bằng cách bắt đầu vòng lặp từ index 1, chỉ tính đúng quãng đường giữa các waypoint đã upload (WP1→WP2→...→WPn).
 - **Ghi chú:** Cache vô hiệu khi `num_commands()` thay đổi. `_mission_ncmds` reset về 0 khi disarm → đảm bảo tính lại nếu upload mission mới khi disarm.
+
+---
+
+**`_mission_started_wp1() → bool`** — mới, 2026-09-04
+- **File:** `AP_ShoesAgtech.cpp : ~1184`
+- **Được gọi bởi:** `update()` case 1/case 2 (nấc 2/3, chỉ khi `SA_FLOW_MODE=1`)
+- **Xử lý:** `true` nếu có mission, `mission->state() == MISSION_RUNNING`, và `mission->get_current_nav_index() >= 1` (đã bỏ qua HOME ở index 0, đang thực sự navigate tới WP1 trở đi)
+- **Đầu ra / Return:** `bool`
+- **Lý do:** Trước đây bơm bật ngay khi vừa ARM (nếu nấc 2/3 + mission hợp lệ), kể cả khi xe còn đứng ở HOME chưa bắt đầu chạy — vì `_get_dosing_ref_speed()` ưu tiên tốc độ **ĐẶT** (`_target_speed`/WP_SPEED) thay vì tốc độ thực, nên `speed_ms` có thể >0 dù xe chưa nhúc nhích. Dùng hàm này để chỉ thực sự ghi PWM ra bơm sau khi mission đã chạy tới WP1 — `_flow_target` vẫn tính và hiện trong log bình thường bất kể kết quả hàm này.
 
 ---
 
@@ -377,8 +384,13 @@ SA_FLOW_MODE=1 và SA_TANK_VOL>0:
 3. q1 = TANK_VOL × r × speed × 60 / dist   (L/min)
    — phân phối đều TANK_VOL×r lít trên mission_dist mét —
 
-4. q1 < 0.3 → reset PI, cảnh báo "rut ngan mission hoac tang speed", return 0
-   (KHÔNG còn kiểm tra q1 > 2.0 — đã gỡ bỏ giới hạn trên theo yêu cầu 2026-08-19)
+4. q1 < 0.9 → reset PI, cảnh báo (1 lần/ARM, cờ _q1_range_warned) "shorten
+   mission or increase speed (pump range)", return 0
+   q1 > 1.2 → reset PI, cảnh báo (1 lần/ARM, cùng cờ) "lengthen mission or
+   reduce speed (pump range)", return 0
+   (0.9-1.2 = dải lưu lượng THẬT bơm hiện tại đạt được, hardcode theo phần
+   cứng — đo thực tế 2026-08-20, thay cho ngưỡng nghiệp vụ 0.3/2.0 cũ đã
+   gỡ bỏ trước đó)
 
 5. return constrain(q1, 0.0, 200.0)
    → đây là setpoint cho _run_flow_pid() (cận 200 chỉ là chặn an toàn tuyệt
@@ -386,7 +398,8 @@ SA_FLOW_MODE=1 và SA_TANK_VOL>0:
 
 Tính sẵn cho thông tin (không dùng trong PID):
    vi_per_run = TANK_VOL × r   (lít mỗi lần chạy mission — luôn cố định)
-   dist_max = TANK_VOL × r × speed × 60 / 0.3   (m — khoảng tối đa trước khi q1 < 0.3)
+   dist_max = TANK_VOL × r × speed × 60 / 0.9   (m — khoảng tối đa trước khi q1 < 0.9)
+   dist_min = TANK_VOL × r × speed × 60 / 1.2   (m — khoảng tối thiểu trước khi q1 > 1.2)
 ```
 
 > **Nguồn tốc độ (từ 2026-08-19):** `speed` ở bước 2 lấy từ
@@ -400,24 +413,65 @@ Tính sẵn cho thông tin (không dùng trong PID):
 > viên chủ động đổi tốc độ mission. `SA_SIM`/`SA_FLOW_VEL` vẫn ưu tiên như
 > cũ (không đổi) để hiệu chỉnh/test khi xe đứng yên.
 
-**ARM edge detection (inline trong update()):**
-```
-now_armed = hal.util->get_soft_armed()
+> **Dải q1 [0.9, 1.2] — dải lưu lượng THẬT bơm đạt được (từ 2026-08-20):**
+> trước đây ngưỡng sàn/trần là `0.3`/`2.0` (ngưỡng nghiệp vụ, sau đó bỏ hẳn
+> trần). Đo thực tế trên bơm hiện tại cho thấy **toàn bộ dải PWM MIN→MAX
+> chỉ tạo ra được lưu lượng thật từ 0.9 đến 1.2 L/min** — ngoài dải này PID
+> chỉ kẹt ở PWM MIN/MAX, cho ra đúng 0.9 hoặc 1.2 thật chứ không đạt được
+> con số `q1` yêu cầu. Vì vậy đổi hẳn ngưỡng sàn/trần thành `0.9`/`1.2`,
+> hardcode thẳng trong code (không phải tham số — đặc tính riêng của bơm
+> đang lắp, đổi bơm khác thì sửa lại 2 số này trong `_compute_visin_target()`
+> và `_print_fm1_arm_status()`). Cảnh báo dải này dùng cờ `_q1_range_warned`
+> riêng — chỉ in **1 lần mỗi phiên ARM**, KHÔNG lặp lại mỗi 5s như cảnh báo
+> "no mission" (vẫn dùng `_tank_warn_ms` như cũ).
 
-if (_was_armed && !now_armed) {      // DISARM
-    _arm_dist_warned     = false
-    _mission_ncmds       = 0         // reset cache → tính lại khi arm lại
+**Reset khi DISARM (inline trong update(), đầu vòng lặp):**
+```
+if (!hal.util->get_soft_armed()) {
+    _mission_ncmds       = 0      // reset cache → tính lại khi arm lại
     _mission_dist_m      = 0.0
     _tank_empty_detected = false
     _tank_empty_ms       = 0
+    _q1_range_warned     = false
+    _flow_ramp_val       = 0.0    // reset ramp — lần ARM sau lại bắt đầu từ 0
+    // + reset toàn bộ trạng thái đọc cảm biến lưu lượng (xem mục 8)
 }
-if (!_was_armed && now_armed) {      // ARM (cạnh lên)
-    if (spray_mode 1 hoặc 2 && FLOW_MODE=1)
-        r = (spray_mode==2) ? MIX_CNT : MIX_STD
-        _print_fm1_arm_status(r)     // in 1 lần duy nhất
-}
-_was_armed = now_armed
 ```
+
+**Bật bơm thật chỉ sau khi mission đã tới WP1 — `_mission_started_wp1()` (mới, 2026-09-04):**
+```
+_mission_started_wp1():
+    mission = AP::mission()
+    return mission != null
+        && mission->state() == MISSION_RUNNING
+        && mission->get_current_nav_index() >= 1
+```
+Lý do cần hàm này: command index 0 của mission luôn là HOME (xem
+`_get_mission_dist()` — bug đã sửa cùng ngày), nên `get_current_nav_index()`
+trả về 0 nghĩa là xe **chưa thực sự bắt đầu chạy tới WP1** (mới vừa ARM,
+còn ở HOME, hoặc mission chưa RUNNING). Ở FLOW_MODE=1 (nấc 2/3), nếu điều
+kiện này chưa đúng: bơm bị ép về PWM MIN (tắt hẳn), PI reset — **nhưng
+`_flow_target` vẫn được tính và hiện đầy đủ trong log như bình thường**
+(không ẩn đi), chỉ có việc ghi PWM ra bơm thật là bị gate lại.
+
+**Ramp lên setpoint từ từ khi bắt đầu bơm (mới, 2026-09-04):**
+```
+_flow_ramp_val = min(_flow_ramp_val + 0.3 × dt_pid, _flow_target)   (L/min, +0.3 L/min mỗi giây)
+_run_flow_pid(_flow_ramp_val, dt_pid)     // PID bám theo giá trị ramp, KHÔNG phải _flow_target thẳng
+```
+Áp dụng cho **cả FLOW_MODE=0 và FLOW_MODE=1** (nấc 2/3), dùng chung một
+biến `_flow_ramp_val` và một hằng số ramp — không tách riêng theo mode vì
+nguyên nhân vật lý (bồn cao hơn bơm, không van một chiều) gây tràn/giật
+lúc mới mồi xảy ra bất kể setpoint đến từ đâu (cố định `SA_FLOW_SP` hay
+tính theo mission). `_flow_ramp_val` được reset về 0 ở 3 chỗ để lần bật
+bơm kế tiếp luôn ramp lại từ đầu: disarm, mode 0 (passthrough — mỗi lần
+gạt về nấc 1), và (chỉ FLOW_MODE=1) khi `_mission_started_wp1()` còn
+false hoặc `_flow_target < 0.01`. Khi `_mission_started_wp1()` chuyển từ
+false→true (hoặc ngay khi vào FLOW_MODE=0), `_flow_ramp_val` bắt đầu từ 0
+và tăng dần 0.3 L/min mỗi giây cho tới khi bằng `_flow_target`, thay vì
+PID nhận error đầy đủ ngay lập tức. Hằng số 0.3 L/min/s hardcode trực tiếp
+trong code (không phải tham số — không còn slot AP_Param trống, xem mục
+2), chọn sao cho đạt đủ 1.0 L/min trong ~3-4 giây.
 
 **Tank-empty detection (inline trong update(), sau switch):**
 ```
@@ -428,7 +482,7 @@ if _flow_rate_filtered > 1.7 L/min:
         _tank_empty_ms = now           // bắt đầu đếm 5s
     else if now - _tank_empty_ms >= 5000ms:
         _tank_empty_detected = true
-        gcs().send_text(CRITICAL, "SA: TANK EMPTY - flow X.XL/min > 1.7 for 5s")
+        gcs().send_text(INFO, "SA: TANK EMPTY - flow X.XL/min > 1.7 for 5s")
         — bơm KHÔNG dừng —
 else:
     _tank_empty_ms = 0                 // reset nếu flow về dưới 1.7
@@ -486,51 +540,64 @@ Format string: "Qff"
 
 ### 4.3 Console Log
 
+> **Rút gọn toàn diện (2026-08-20):** log định kỳ giờ chỉ còn ĐÚNG 1 dòng,
+> không còn dòng phụ "FM1 r:... q1:... miss:..." như trước. Cập nhật cùng
+> ngày: tách `FM<x>` (SA_FLOW_MODE) và `N<nấc>` (vị trí gạt RC) thành 2
+> trường riêng — trước đó "FM<n>" gộp chung nấc vào ký hiệu FM gây nhầm với
+> ý nghĩa gốc "FM1" (FLOW_MODE=1) đã dùng ở các log khác (mục 3.5, 4.4).
+
 ```
-Trigger: mỗi SA_LOG_FL_MS ms khi SA_FLOW_LOG=1
+Trigger: mỗi SA_FLOW_LOG_MS ms khi SA_FLOW_LOG=1
 
-Dòng chính (luôn in khi SA_FLOW_LOG=1):
-    [FLOW] M<n> Tgt:<target> Act:<flow_rate> Avg:<flow_avg> PWM:<pump_pwm>
+    [FLOW] FM<x> N<nấc> Q: <target>
 
-Khi mode 1 hoặc mode 2 + FLOW_MODE=1 + TANK_VOL>0 (cùng chu kỳ):
-    [FLOW] FM1 r:<ratio> q1:<q1>L/ph miss:<dist>m dmax:<dist_max>m spd:<speed>m/s vi/run:<vi_per_run>L
+FM<x>    = SA_FLOW_MODE hiện tại (0 hoặc 1) — cách tính setpoint đang dùng
+N<nấc>   = _spray_mode + 1 (1/2/3 — khớp đúng vị trí gạt nấc RC vật lý)
+<target> = _flow_target:
+             nấc 1 (manual/passthrough)      → luôn 0.00
+             nấc 2/3 + SA_FLOW_MODE=0 (FM0)  → số CỐ ĐỊNH (SA_FLOW_SP hoặc SA_FLOW_SP×ratio)
+             nấc 2/3 + SA_FLOW_MODE=1 (FM1)  → số DAO ĐỘNG (q1 tính theo tank+mission+speed)
 
 SA_SIM=1: tiền tố [SIM][FLOW] thay vì [FLOW]
 ```
 
-Ví dụ FLOW_MODE=1, r=0.35, TANK_VOL=16L, mission=301m, speed=0.3 m/s:
+Ví dụ:
 ```
-[FLOW] FM1 r:0.35 q1:1.01L/ph miss:301m dmax:1008m spd:0.30m/s vi/run:5.6L
+[FLOW] FM0 N1 Q: 0.00      (nấc 1 manual — FM hiện đúng giá trị tham số dù nấc 1 không dùng đến)
+[FLOW] FM0 N2 Q: 1.50      (nấc 2, FLOW_MODE=0, setpoint cố định 1.5 L/min)
+[FLOW] FM1 N3 Q: 1.08      (nấc 3, FLOW_MODE=1, q1 tính động — số này đổi theo tốc độ/mission)
 ```
 
 ### 4.4 STATUSTEXT — Toàn bộ thông báo
+
+> **Rút gọn toàn diện (2026-08-20):** bỏ hẳn log cấu hình servo (`_check_pump_config()`
+> không còn in gì) và bỏ hẳn toàn bộ thông báo lúc vừa ARM (`_print_fm1_arm_status()`
+> đã xóa). Bảng dưới đây là DANH SÁCH ĐẦY ĐỦ (và duy nhất) các STATUSTEXT Module 1
+> còn lại sau rút gọn.
 
 | Nội dung thông báo | Mức | Điều kiện | Tần suất |
 |---|---|---|---|
 | `ShoesAgtech: IRQ attach failed` | CRITICAL | GPIO attach thất bại | 1 lần init |
 | `ShoesAgtech: Flow sensor ready` | INFO | GPIO attach thành công | 1 lần init |
-| `SA: SERVO<n>_FUNCTION=<x> must be 0(None)!` | WARNING | Sai FUNCTION | Mỗi 5s |
-| `SA: SERVO<n> OK Min:<x> Trim:<y> Max:<z>` | INFO | Config đúng | 1 lần (khi vừa đúng) |
-| `SA FM1: chua co mission - bom se dung` | WARNING | FLOW_MODE=1, dist ≤ 1m, khi ARM | 1 lần/ARM |
-| `SA FM1: van toc=0 bom cho xe chay` | INFO | FLOW_MODE=1, speed ≤ 0.1, khi ARM | 1 lần/ARM |
-| `SA FM1: q1=X.XXL/ph < 0.3 @Xm/s dist=XXXm - rut ngan mission (dmax=XXXm)` | WARNING | FLOW_MODE=1, q1 < 0.3, khi ARM | 1 lần/ARM |
-| `SA FM1 OK: r=X.XX q1=X.XXL/ph miss=XXXm dmax=XXXm ~XmXXs vi/run=X.XL` | INFO | FLOW_MODE=1, q1 ≥ 0.3, khi ARM | 1 lần/ARM |
-| `SA FM1: chua co mission - bom dung` | WARNING | FLOW_MODE=1, dist ≤ 1m, đang chạy | Mỗi 5s |
-| `SA FM1: q1=X.XXL/ph < 0.3 - rut ngan mission hoac tang speed` | WARNING | FLOW_MODE=1, q1 < 0.3, đang chạy | Mỗi 5s |
-| `SA: TANK EMPTY - flow X.XL/min > 1.7 for 5s` | CRITICAL | flow > 1.7 liên tục 5s, spray_mode 1/2, đang ARM | 1 lần/ARM |
+| `SA FM1: no mission - pump stopped` | WARNING | FLOW_MODE=1, dist ≤ 1m, đang chạy | Mỗi 5s |
+| `SA FM1: q1=X.XXL/min < 0.9 (pump range) - shorten mission or increase speed` | WARNING | FLOW_MODE=1, q1 < 0.9 (ngoài dải lưu lượng thật bơm đạt được) | **1 lần/phiên ARM** (cờ `_q1_range_warned`) |
+| `SA FM1: q1=X.XXL/min > 1.2 (pump range) - lengthen mission or reduce speed` | WARNING | FLOW_MODE=1, q1 > 1.2 | **1 lần/phiên ARM** (cờ `_q1_range_warned`, dùng chung với dòng trên) |
+| `SA: TANK EMPTY - flow X.XL/min > 1.7 for 5s` | INFO | flow > 1.7 liên tục 5s, spray_mode 1/2, đang ARM | 1 lần/phiên ARM |
 
-> **Đã gỡ bỏ (2026-08-19):** 2 cảnh báo `q1 > 2.0` (khi ARM và khi đang chạy)
-> — không còn giới hạn trên cho q1, xem mục 5 và 3.5.
+**Đã gỡ bỏ hoàn toàn (2026-08-20) — không còn in nữa:**
+- `SA: SERVO<n>_FUNCTION=<x> must be 0(None)!` / `SA: SERVO<n> OK Min/Trim/Max` (config servo)
+- `SA FM1: no mission - pump will stay stopped` / `SA FM1 READY: ...` / `SA FM1: q1=... @...dist=...(dmax/dmin)` / `SA FM1 OK: ...` (toàn bộ 4 thông báo lúc vừa ARM)
+- `SA: Tank lasts ~...` (ước tính quãng đường còn lại ở mode 2)
 
 ---
 
 ## 5. Yêu cầu / Ràng buộc [ALL]
 
 ```
-SERVOx_FUNCTION = 0     (x = SA_PUMP_CHAN)  → sai: cảnh báo mỗi 5s (không block)
+SERVOx_FUNCTION = 0     (x = SA_PUMP_CHAN)  → sai: KHÔNG block, KHÔNG còn cảnh báo (bỏ log 2026-08-20, tự kiểm tra cấu hình servo qua Mission Planner)
 SA_FLOW_PIN: chỉ áp dụng khi boot          → đổi giá trị cần reboot
-SA_FLOW_MODE=1 yêu cầu: SA_TANK_VOL > 0 + mission đã upload + speed ≥ 0.1 m/s + q1 ≥ 0.3
-                         (KHÔNG còn trần trên cho q1 — đã gỡ bỏ 2026-08-19)
+SA_FLOW_MODE=1 yêu cầu: SA_TANK_VOL > 0 + mission đã upload + speed ≥ 0.1 m/s + q1 trong [0.9, 1.2]
+                         (0.9/1.2 = dải lưu lượng THẬT bơm đạt được, hardcode theo phần cứng, 2026-08-20)
                          thiếu 1 trong các điều kiện trên → flow_target = 0 (bơm dừng)
 Tank-empty: chỉ cảnh báo, bơm vẫn tiếp tục — người lái tự quyết định
 ```
@@ -573,10 +640,12 @@ FC config:
 | Điều kiện van (Chống nghẹt / Mặc định) | Basic Design Case 9–10, param SA_SPRAY_MODE | **Tích hợp vào nấc RC**: nấc giữa = MIX_STD, nấc cao = MIX_CNT. SA_SPRAY_MODE và SA_SP_PCT được thay thế | Loại bỏ param riêng; người dùng chọn trực tiếp bằng tay RC |
 | FLOW_MODE=1 công thức | `q1 = r × APP_RATE × speed × BOOM_W × 0.006` + `dist_max = TANK_VOL × 10000 / (r × APP_RATE × BOOM_W)` | `q1 = TANK_VOL × r × speed × 60 / mission_dist` | SA_APP_RATE và SA_BOOM_W loại khỏi công thức; vi_per_run = TANK_VOL×r hằng số; dist_max theo tốc độ thực tế |
 | FLOW_MODE=1 dải q1 | q1 > 6.0 → dừng (giới hạn cảm biến YF-S402B) | q1 chỉ còn sàn dưới 0.3 (không còn trần trên) | Ban đầu áp trần 2.0 (YF-S402B chạy ổn nhất 0.3–2.0 L/min); từ 2026-08-19 bỏ hẳn trần trên theo yêu cầu — chấp nhận phun đậm đặc trên mission ngắn thay vì chặn bơm |
+| Dải q1, ngưỡng + tần suất cảnh báo (2026-08-20) | Không có (thừa kế ngưỡng 2026-08-19 ở trên) | Đổi hẳn sàn/trần thành `0.9`/`1.2` — **dải lưu lượng THẬT bơm hiện tại đạt được**, hardcode trong code (không phải tham số); cảnh báo runtime đổi từ lặp mỗi 5s sang **1 lần/phiên ARM** (cờ `_q1_range_warned`) | Đo thực tế phát hiện bơm chỉ đạt 0.9-1.2 L/min trên toàn dải PWM MIN→MAX — ngưỡng nghiệp vụ 0.3/2.0 cũ không còn phản ánh đúng khả năng phần cứng; cảnh báo lặp mỗi 5s không cần thiết vì nguyên nhân (giới hạn phần cứng) không tự hết theo thời gian |
 | Hết thùng vi sinh | Không có | Tank-empty detection: flow > 1.7 L/min liên tục 5s (tăng từ 3s ban đầu, 2026-08-19) → CRITICAL, bơm không dừng | Bơm hút không khí → bánh xe quay nhanh bất thường → cảnh báo người lái; tăng thời gian xác nhận để giảm báo động giả do dao động lưu lượng tức thời |
-| ARM status | Không có | `_print_fm1_arm_status()` in 1 lần/ARM với q1 dự báo, thời gian, vi/run | Giúp người lái xác nhận hệ thống đúng trước khi chạy |
+| ARM status (2026-05→08-19) | Không có | `_print_fm1_arm_status()` in 1 lần/ARM với q1 dự báo, thời gian, vi/run | Giúp người lái xác nhận hệ thống đúng trước khi chạy |
 | Nguồn tốc độ cho công thức FLOW_MODE=1 (2026-08-19) | Không có | Tách hàm riêng `_get_dosing_ref_speed()`: dùng tốc độ **ĐẶT** (`WP_SPEED`/`g2.wp_nav.get_speed_max()`) thay vì tốc độ GPS tức thời (`_get_spray_speed()`) | Tốc độ tức thời dao động theo cua/tăng giảm tốc khiến q1 (setpoint bơm) đổi liên tục → phun không đều dọc tuyến; tốc độ ĐẶT ổn định suốt đoạn mission, giống cách AUTO_SPD đã dùng |
 | Mission cache reset | Không đề cập | Reset `_mission_ncmds=0` khi disarm | Đảm bảo tính lại nếu thay đổi mission khi đất |
+| Rút gọn log console (2026-08-20) | Không có | **Xóa hẳn:** `_print_fm1_arm_status()` (toàn bộ 4 STATUSTEXT lúc ARM) + `_was_armed`/`_arm_dist_warned` (không còn dùng); 2 STATUSTEXT config servo trong `_check_pump_config()` (+ `_last_warn_ms` không còn dùng); message "SA: Tank lasts" ở mode 2. **Đơn giản hoá:** log định kỳ từ 2 dòng chi tiết (`M<n> Tgt/Act/Avg/PWM` + `FM1 r/q1/miss/dmax/spd/vi_run`) còn ĐÚNG 1 dòng `FM<x> N<nấc> Q:<target>` (`FM`=SA_FLOW_MODE, `N`=nấc gạt — tách 2 trường sau khi gộp chung gây nhầm lẫn) | Theo yêu cầu người dùng — chỉ cần biết setpoint đang là gì theo nấc/mode, không cần chi tiết kỹ thuật; giữ lại đúng 3 cảnh báo thật sự cần hành động (no mission, q1 ngoài dải bơm, tank empty) |
 
 ---
 

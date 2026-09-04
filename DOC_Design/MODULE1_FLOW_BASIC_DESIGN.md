@@ -137,7 +137,7 @@ Dữ liệu lưu lượng + trạng thái bơm gửi lên GCS liên tục
 ### Case 8 — Phát hiện hết thùng vi sinh (cả 2 FLOW_MODE)
 
 - **Điều kiện:** Spray_mode 1 hoặc 2 + đang ARM + lưu lượng đột ngột > 1.7 L/min liên tục 5 giây
-- **Hành vi:** Bơm hút không khí khi thùng cạn → bánh xe cảm biến quay nhanh bất thường → lưu lượng đọc tăng vọt. Sau 5s liên tục → in cảnh báo CRITICAL 1 lần duy nhất. **Bơm KHÔNG dừng** (người lái tự quyết định)
+- **Hành vi:** Bơm hút không khí khi thùng cạn → bánh xe cảm biến quay nhanh bất thường → lưu lượng đọc tăng vọt. Sau 5s liên tục → in thông báo INFO 1 lần duy nhất. **Bơm KHÔNG dừng** (người lái tự quyết định)
 - **Output GCS:** `SA: TANK EMPTY - flow X.XL/min > 1.7 for 5s`
 - **Reset:** Disarm → ARM lại → detector hoạt động bình thường trở lại
 

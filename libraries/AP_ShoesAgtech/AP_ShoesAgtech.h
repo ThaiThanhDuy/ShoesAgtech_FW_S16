@@ -183,6 +183,10 @@ private:
   uint8_t  _spray_mode;         // 0=PASSTHROUGH 1=FLOW_PID 2=AUTO_RATE
   uint16_t _pump_pwm;
   float    _flow_target;
+  // Setpoint thực tế đưa vào PID ở FLOW_MODE=1 — tăng dần từ 0 lên
+  // _flow_target (ramp) sau khi mission đã bắt đầu tới WP1, để tránh bơm
+  // giật/tràn lúc mới mồi. _flow_target vẫn hiện đầy đủ trong log như cũ.
+  float    _flow_ramp_val;
   float    _pid_integral;
   float    _pid_output_lpf;
   uint32_t _pid_last_ms;
@@ -191,16 +195,17 @@ private:
   int8_t   _last_pump_chan;
   int32_t  _last_pump_func_val;
   bool     _pump_config_ok;
-  uint32_t _last_warn_ms;
 
   // ---- MODULE 1: mission distance cache + tank monitor state ----
   float    _mission_dist_m;
   uint16_t _mission_ncmds;
   uint32_t _tank_warn_ms;
-  bool     _arm_dist_warned;
-  bool     _was_armed;
   bool     _tank_empty_detected;
   uint32_t _tank_empty_ms;
+  // q1 (FLOW_MODE=1) ra ngoài dải lưu lượng THẬT bơm đạt được (0.9-1.2
+  // L/min, hardcode theo phần cứng bơm hiện tại) — chỉ cảnh báo 1 LẦN mỗi
+  // phiên ARM (không lặp lại mỗi 5s như các cảnh báo khác), reset khi disarm.
+  bool     _q1_range_warned;
   // Tốc độ ĐẶT cho mission (WP_SPEED), do Rover.cpp bơm vào qua
   // set_target_speed() mỗi chu kỳ trước update(). 0 nếu chưa từng được set
   // (vd chưa vào Auto lần nào) — dùng cho công thức FLOW_MODE=1.
@@ -307,8 +312,8 @@ private:
   float    _get_spray_speed(void);
   float    _get_dosing_ref_speed(void);
   float    _compute_visin_target(float r);
-  void     _print_fm1_arm_status(float r);
   float    _get_mission_dist(void);
+  bool     _mission_started_wp1(void);
 
   // ---- MODULE 2: pH sensor + alkalinity + pond persistence ----
   void     _ph_init(void);

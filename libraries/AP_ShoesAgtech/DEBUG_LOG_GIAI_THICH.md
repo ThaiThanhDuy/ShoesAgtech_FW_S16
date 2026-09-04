@@ -26,20 +26,21 @@
 
 ## 2. Module 1 — Điều khiển bơm vi sinh (Flow)
 
-| Log tiếng Anh (mới)                                                         | Mức                                       | Giải thích                                                                                                                                                                              |
-| --------------------------------------------------------------------------- | ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| `ShoesAgtech: IRQ attach failed`                                            | CRITICAL                                  | Không gắn được ngắt (interrupt) cho chân `SA_FLOW_PIN` — cảm biến flow sẽ không đếm xung được.                                                                                          |
-| `ShoesAgtech: Flow sensor ready`                                            | INFO                                      | Khởi tạo cảm biến flow (YF-S402B) thành công.                                                                                                                                           |
-| `SA: SERVO<n>_FUNCTION=<x> must be 0(None)!`                                | WARNING                                   | Kênh servo bơm chưa đặt `SERVOx_FUNCTION=0`, PWM ghi trực tiếp sẽ bị hệ thống servo ghi đè. Lặp mỗi 5s.                                                                                 |
-| `SA: SERVO<n> OK Min:<x> Trim:<y> Max:<z>`                                  | INFO                                      | Cấu hình servo bơm hợp lệ.                                                                                                                                                              |
-| `SA: TANK EMPTY - flow %.1fL/min > 1.7 for 5s`                              | CRITICAL                                  | Phát hiện hết vi sinh trong thùng: lưu lượng thực tế đo được > 1.7 L/ph liên tục 5 giây (tăng từ 3s, 2026-08-19) dù đang bơm — dấu hiệu bơm chạy không tải (thùng cạn).                 |
-| `SA: Tank lasts ~<x>m (<y>L @<z>L/min)`                                     | INFO                                      | (Chỉ Mode 2, khi `SA_TANK_VOL>0`) Ước tính còn bơm được bao nhiêu mét với tốc độ/lưu lượng hiện tại. Lặp mỗi 30s.                                                                       |
-| `SA FM1: no mission - pump stopped`                                         | WARNING                                   | **Mode 1 + `SA_FLOW_MODE=1`**: `mission_dist ≤ 1m` — chưa upload mission lên FC, hoặc mission không có ≥2 waypoint NAV hợp lệ (tọa độ khác 0,0). `flow_target=0`, bơm dừng. Lặp mỗi 5s. |
-| `SA FM1: q1=<x>L/min < 0.3 - shorten mission or increase speed`             | WARNING                                   | q1 tính ra quá thấp (dưới ngưỡng an toàn 0.3 L/ph) — mission quá dài so với `SA_TANK_VOL × SA_MIX_STD × tốc độ`. Bơm dừng để tránh phun quá loãng.                                      |
-| `SA FM1 READY: r=<x> miss=<y>m bio/run=<z>L                                 | speed=0 pump waiting for vehicle to move` | INFO                                                                                                                                                                                    | In một lần khi ARM: mission hợp lệ nhưng xe đang đứng yên, bơm chờ xe di chuyển. |
-| `SA FM1 OK: r=<x> q1=<y>L/min miss=<z>m dmax=<w>m ~<mm>m<ss>s bio/run=<v>L` | INFO                                      | In một lần khi ARM: mọi điều kiện hợp lệ, kèm ETA hoàn thành mission.                                                                                                                   |
-| `%s M<n> Tgt:<x> Act:<y> Avg:<z> PWM:<w>`                                   | INFO                                      | Log định kỳ (`SA_FLOW_LOG`): `%s`=`[FLOW]`/`[SIM][FLOW]`, `n`=spray_mode, Tgt=setpoint, Act=lưu lượng thực đo (đã lọc), Avg=trung bình trượt, PWM=xung ra bơm.                          |
-| `%s FM1 r:<x> q1:<y>L/min miss:<z>m dmax:<w>m spd:<v>m/s bio/run:<u>L`      | INFO                                      | Log định kỳ bổ sung khi Mode 1/2 + `SA_FLOW_MODE=1`: chi tiết công thức q1 hiện tại.                                                                                                    |
+> **⚠️ Rút gọn toàn diện (2026-08-20):** đã xóa log cấu hình servo, toàn bộ
+> thông báo lúc vừa ARM, và "SA: Tank lasts"; log định kỳ rút từ 2 dòng chi
+> tiết còn đúng 1 dòng `FM<x> N<nấc> Q:<target>` (`FM`=SA_FLOW_MODE, `N`=nấc gạt — tách 2 trường 2026-09-04 để tránh nhầm lẫn). Bảng dưới đây là danh sách ĐẦY
+> ĐỦ VÀ DUY NHẤT các log Module 1 còn lại — xem mục 8 để biết chi tiết
+> những gì đã bỏ.
+
+| Log tiếng Anh (mới)                                                          | Mức       | Giải thích                                                                                                                                                                              |
+| ----------------------------------------------------------------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ShoesAgtech: IRQ attach failed`                                             | CRITICAL  | Không gắn được ngắt (interrupt) cho chân `SA_FLOW_PIN` — cảm biến flow sẽ không đếm xung được.                                                                                          |
+| `ShoesAgtech: Flow sensor ready`                                             | INFO      | Khởi tạo cảm biến flow (YF-S402B) thành công.                                                                                                                                           |
+| `SA: TANK EMPTY - flow %.1fL/min > 1.7 for 5s`                               | INFO      | Phát hiện hết vi sinh trong thùng: lưu lượng thực tế đo được > 1.7 L/ph liên tục 5 giây dù đang bơm — dấu hiệu bơm chạy không tải (thùng cạn). 1 lần/phiên ARM.                          |
+| `SA FM1: no mission - pump stopped`                                          | WARNING   | **`SA_FLOW_MODE=1`**: `mission_dist ≤ 1m` — chưa upload mission lên FC, hoặc mission không có ≥2 waypoint NAV hợp lệ (tọa độ khác 0,0). `flow_target=0`, bơm dừng. Lặp mỗi 5s.          |
+| `SA FM1: q1=<x>L/min < 0.9 (pump range) - shorten mission or increase speed` | WARNING   | q1 tính ra thấp hơn 0.9 L/ph — **dải lưu lượng THẬT bơm hiện tại đạt được** (đo thực tế, không phải ngưỡng nghiệp vụ), mission quá dài so với `SA_TANK_VOL × SA_MIX_STD × tốc độ`. Bơm dừng. **Chỉ in 1 lần/phiên ARM**, không lặp mỗi 5s. |
+| `SA FM1: q1=<x>L/min > 1.2 (pump range) - lengthen mission or reduce speed`  | WARNING   | q1 tính ra cao hơn 1.2 L/ph — vượt dải lưu lượng THẬT bơm đạt được, mission quá ngắn so với tank/tốc độ. Bơm dừng. **Chỉ in 1 lần/phiên ARM**, không lặp mỗi 5s.                          |
+| `%s FM<m> N<n> Q: <x>`                                                       | INFO      | Log định kỳ duy nhất (`SA_FLOW_LOG`): `%s`=`[FLOW]`/`[SIM][FLOW]`, `m`=`SA_FLOW_MODE` hiện tại (0/1), `n`=nấc gạt (spray_mode+1, 1/2/3), `<x>`=`_flow_target` — 0 ở nấc 1 (manual), số cố định ở `SA_FLOW_MODE=0`, số dao động ở `SA_FLOW_MODE=1`. |
 
 ---
 
@@ -154,13 +155,14 @@ này với độ dài mission hiện tại để biết cần kéo dài thêm ba
 - Nếu `SA_TANK_VOL = 0` (giá trị mặc định), code **không** vào công thức
   trên — setpoint sẽ fallback về `SA_FLOW_SP` (mặc định 5.0 L/ph), không
   bao giờ về 0 trong trường hợp đó.
-- **Hành vi hiện tại (từ 2026-08-19):** cảnh báo `q1 > 2.0` và việc khóa bơm
-  khi mission quá ngắn **không còn tồn tại**. `q1` chỉ còn bị chặn ở sàn dưới
-  `0.3 L/phút` (mission quá dài/xe quá chậm); không còn trần trên — bơm sẽ
-  chạy dù `q1` tính ra rất cao (phun đậm đặc trên mission ngắn), không tự
-  dừng và không cảnh báo cho trường hợp này nữa. Nếu cần giới hạn liều lượng
-  tối đa, phải tự theo dõi thủ công (log `[FLOW]`/`[SIM][FLOW]` định kỳ vẫn
-  in `q1` thực tế, xem mục 2).
+- **Hành vi hiện tại (từ 2026-08-20, thay cho mô tả 2026-08-19 ở trên):**
+  sau khi đo thực tế phát hiện bơm chỉ đạt lưu lượng thật 0.9–1.2 L/phút
+  trên toàn dải PWM MIN→MAX, đã **thêm lại** cả sàn và trần cho `q1`,
+  nhưng đổi số thành đúng dải phần cứng thật: `q1 < 0.9` hoặc `q1 > 1.2`
+  đều khiến bơm dừng (không phải ngưỡng nghiệp vụ 0.3/2.0 cũ). Khác biệt
+  quan trọng: cảnh báo này **chỉ in 1 lần mỗi phiên ARM** (cờ
+  `_q1_range_warned`), KHÔNG lặp lại mỗi 5s như cảnh báo "no mission". Xem
+  mục 2 và `MODULE1_FLOW_DETAIL_DESIGN.md` mục 3.5.
 - **Nguồn `speed` trong công thức đổi từ 2026-08-19:** trước đây `speed` là
   tốc độ GPS TỨC THỜI (`AP::ahrs().groundspeed()`), khiến `q1`/setpoint bơm
   dao động theo từng cú tăng/giảm tốc, vào cua — gây phun không đều dọc
@@ -244,7 +246,40 @@ máy đã triển khai trước khi dùng.**
 
 ---
 
-## 8. Lưu ý về tài liệu liên quan
+## 8. Rút gọn toàn diện log Module 1 (2026-08-20)
+
+Theo yêu cầu: log Module 1 (bơm vi sinh) được rút gọn tối đa, chỉ giữ lại
+những gì thật sự cần hành động. Bảng đầy đủ hiện tại xem mục 2.
+
+**Đã xóa hoàn toàn (không còn in nữa):**
+- `SA: SERVO<n>_FUNCTION=<x> must be 0(None)!` / `SA: SERVO<n> OK Min/Trim/Max`
+  — log cấu hình servo trong `_check_pump_config()`. Hàm vẫn kiểm tra bình
+  thường (`_pump_config_ok`), chỉ không in log — muốn kiểm tra cấu hình
+  servo thì xem trực tiếp trên Mission Planner (Servo Output).
+- Toàn bộ 4 STATUSTEXT lúc vừa ARM (`SA FM1: no mission - pump will stay
+  stopped`, `SA FM1 READY: ...`, 2 cảnh báo `q1=... @...dist=...(dmax/dmin)`,
+  `SA FM1 OK: ...`) — hàm `_print_fm1_arm_status()` đã bị xóa hoàn toàn
+  khỏi code (không phải tắt, mà xóa hẳn function + lời gọi + biến
+  `_was_armed`/`_arm_dist_warned` không còn dùng).
+- `SA: Tank lasts ~<x>m (<y>L @<z>L/min)` — ước tính quãng đường còn lại ở
+  mode 2, cùng với nhánh code tính toán nó (không còn tác dụng gì khác).
+
+**Đơn giản hoá log định kỳ (`SA_FLOW_LOG`):** từ 2 dòng
+(`M<n> Tgt/Act/Avg/PWM` + `FM1 r/q1/miss/dmax/spd/vi_run`) rút còn **đúng 1
+dòng**: `FM<m> N<n> Q: <target>` — `<m>` = `SA_FLOW_MODE` hiện tại (0/1,
+tách riêng 2026-09-04 vì ban đầu gộp chung với nấc gây nhầm lẫn), `<n>` =
+nấc gạt (spray_mode+1, hiển thị đúng 1/2/3 khớp vị trí gạt vật lý thay vì
+spray_mode nội bộ 0/1/2), `<target>` = `_flow_target` (0 ở manual, cố định
+ở FLOW_MODE=0, dao động ở FLOW_MODE=1).
+
+**Vẫn giữ nguyên 3 cảnh báo có hành động cần làm:** `SA: TANK EMPTY`,
+`SA FM1: no mission`, `SA FM1: q1=... (pump range)` (2 chiều) — đây là các
+trường hợp người vận hành cần biết để xử lý, khác với các log đã xóa vốn
+chỉ mang tính thông tin/xác nhận.
+
+---
+
+## 9. Lưu ý về tài liệu liên quan
 
 File [AP_SHOESAGTECH_REFERENCE.md](AP_SHOESAGTECH_REFERENCE.md) (mục 6 —
 "Chuẩn đoán & cảnh báo console") có bảng log tương tự nhưng được viết từ

@@ -3,7 +3,7 @@
 **Dùng cho:** Người đánh giá vận hành / QA hiện trường (không cần biết kỹ thuật)
 **Mục đích module:** Tự động phun vi sinh xử lý nước ao, có 3 chế độ: điều khiển tay, tự động theo mức cố định, tự động theo mức cao (chống nghẹt).
 **Ngày viết:** 2026-08-10
-**Cập nhật:** 2026-08-15 — bổ sung chi tiết Đạt/Không đạt cho từng mục, thêm các tình huống thực tế khi dùng chế độ tự động theo công thức mission. | 2026-08-19 — gỡ bỏ giới hạn trần q1 (2.0 L/phút), cập nhật tình huống 6.
+**Cập nhật:** 2026-08-15 — bổ sung chi tiết Đạt/Không đạt cho từng mục, thêm các tình huống thực tế khi dùng chế độ tự động theo công thức mission. | 2026-08-19 — gỡ bỏ giới hạn trần q1 (2.0 L/phút). | 2026-08-20 — thêm lại dải q1 [0.9, 1.2] theo đúng khả năng thật của bơm (đo thực tế), cảnh báo chỉ 1 lần/ARM; cập nhật lại tình huống 6.
 
 > Trước khi đánh giá, đề nghị kỹ thuật viên cài đặt/hiệu chuẩn xong hệ thống theo đúng ao/mission dự kiến chạy, và **cho biết rõ đang dùng mức setpoint nào**:
 > - **Cố định** (kỹ thuật viên đặt sẵn 1 con số lưu lượng) — dùng cho tình huống 3, 4.
@@ -95,22 +95,22 @@ Module này điều khiển trực tiếp một cơ cấu vật lý (bơm/van vi
 
 ---
 
-### 6. Tự động theo công thức mission — mission ngắn so với thùng/tốc độ (bơm vẫn chạy, phun đậm đặc hơn) ⚠️ (cập nhật 2026-08-19)
+### 6. Tự động theo công thức mission — mission quá ngắn/quá dài so với khả năng bơm thật ⚠️ (cập nhật 2026-08-20)
 
-> Từ 2026-08-19, hệ thống **không còn tự khóa bơm** khi mission ngắn — chủ động
-> bỏ giới hạn trần lưu lượng (trước đây là 2.0 L/phút) theo yêu cầu. Tình
-> huống này đổi từ "kiểm tra bơm có khóa đúng không" sang "kiểm tra bơm vẫn
-> chạy bình thường, không bị khóa nhầm".
+> Đo thực tế cho thấy bơm hiện tại chỉ đạt lưu lượng thật **0.9–1.2 L/phút**
+> trên toàn dải PWM MIN→MAX — ngoài dải này bơm vật lý không thể đạt được
+> con số tính toán, nên hệ thống chủ động dừng bơm thay vì chạy sai. Cảnh
+> báo chỉ hiện **1 lần mỗi phiên ARM** (không lặp lại liên tục).
 
-**Tình huống:** Dùng setpoint tự động theo công thức mission, upload một **mission rất ngắn** (vài chục mét) trong khi thùng vi sinh và tốc độ xe đang cài đặt cho tuyến dài hơn nhiều. Cho xe chạy AUTO theo mission ngắn này.
+**Tình huống:** Dùng setpoint tự động theo công thức mission, upload một **mission rất ngắn** (vài chục mét) trong khi thùng vi sinh và tốc độ xe đang cài đặt cho tuyến dài hơn nhiều (khiến lưu lượng tính ra vượt quá 1.2 L/phút). Cho xe chạy AUTO theo mission ngắn này.
 
 **Quan sát:** Nhìn bơm và đọc dòng chữ xuất hiện trên màn hình điều khiển khi xe bắt đầu di chuyển.
 
-**Kết quả ĐẠT:** Bơm vẫn phun bình thường (lưu lượng tính ra có thể cao hơn hẳn mission dài — đây là điều bình thường, không phải lỗi), không bị dừng/khóa vì lý do "mission ngắn".
+**Kết quả ĐẠT:** Bơm đứng yên (không phun), màn hình hiện **đúng 1 lần** dòng cảnh báo dạng **"SA FM1: q1=...L/min > 1.2 (pump range) - lengthen mission or reduce speed"** — người vận hành biết ngay lý do và cách xử lý (kéo dài mission hoặc giảm tốc độ), không phải đoán mò.
 
-**Kết quả KHÔNG ĐẠT:** Bơm đứng yên/dừng phun mà màn hình hiện cảnh báo liên quan đến mission ngắn hoặc lưu lượng vượt ngưỡng — nếu thấy trường hợp này, báo ngay cho kỹ thuật vì giới hạn cũ có thể chưa được gỡ hết.
+**Kết quả KHÔNG ĐẠT:** Bơm vẫn phun vi sinh bất chấp mission quá ngắn (nguy cơ phun quá liều, vượt khả năng thật của bơm), HOẶC bơm đứng yên nhưng không có cảnh báo nào, HOẶC cảnh báo lặp lại liên tục thay vì chỉ 1 lần/phiên ARM.
 
-**Lưu ý cho người đánh giá:** Vì không còn trần lưu lượng, kỹ thuật viên cần tự theo dõi thực tế lượng vi sinh tiêu thụ (không có cảnh báo tự động nào nhắc "phun quá đậm đặc" nữa).
+**Lưu ý cho người đánh giá:** Đây là giới hạn PHẦN CỨNG thật (bơm không thể vượt quá 1.2 L/phút dù PID cố gắng thế nào), không phải lỗi hệ thống — mục đích test là xác nhận cảnh báo xuất hiện đúng và chỉ đúng 1 lần, giúp kỹ thuật viên biết cần chỉnh lại mission/tốc độ thay vì để bơm chạy sai liều lượng trong im lặng.
 
 ☐ Đạt ☐ Không đạt
 
@@ -122,7 +122,7 @@ Module này điều khiển trực tiếp một cơ cấu vật lý (bơm/van vi
 
 **Quan sát:** Theo dõi màn hình điều khiển sau khi thùng cạn khoảng 5-7 giây.
 
-**Kết quả ĐẠT:** Hệ thống phát hiện và hiện cảnh báo mức nghiêm trọng dạng **"SA: TANK EMPTY ..."** trong vòng ~5 giây sau khi thùng cạn (tăng từ 3s lên 5s theo yêu cầu 2026-08-19) — không để bơm chạy khan kéo dài mà không ai hay biết.
+**Kết quả ĐẠT:** Hệ thống phát hiện và hiện thông báo dạng **"SA: TANK EMPTY ..."** (mức INFO) trong vòng ~5 giây sau khi thùng cạn (tăng từ 3s lên 5s theo yêu cầu 2026-08-19) — không để bơm chạy khan kéo dài mà không ai hay biết.
 
 **Kết quả KHÔNG ĐẠT:** Bơm tiếp tục chạy khan nhiều phút mà không có cảnh báo nào, hoặc cảnh báo xuất hiện quá trễ (sau hơn 30 giây).
 
@@ -192,7 +192,7 @@ Module này điều khiển trực tiếp một cơ cấu vật lý (bơm/van vi
 | 3 | Tự động mức tiêu chuẩn (setpoint cố định) | ☐ | ☐ | | |
 | 4 | Tự động mức cao (setpoint cố định) | ☐ | ☐ | | |
 | 5 | Công thức mission — chưa có mission | ☐ | ☐ | | |
-| 6 | Công thức mission — mission ngắn (bơm vẫn chạy) | ☐ | ☐ | | |
+| 6 | Công thức mission — mission ngoài dải bơm (0.9-1.2), cảnh báo 1 lần | ☐ | ☐ | | |
 | 7 | Phát hiện hết vi sinh trong thùng | ☐ | ☐ | | |
 | 8 | Đầu phun bị bịt tạm | ☐ | ☐ | | |
 | 9 | Mất tín hiệu tay cầm | ☐ | ☐ | | |
