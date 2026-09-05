@@ -147,7 +147,7 @@ private:
   AP_Int8  _dos_rc;     // SA_DOS_RC     RC channel bat/tat motor (1-indexed)
   AP_Float _dos_sp;     // SA_DOS_SP     setpoint: luong thuc an muon cap, gam
   AP_Int8  _dos_rev;    // SA_DOS_REV    chieu quay: 0=thuan, 1=nguoc
-  AP_Int8  _dos_spd_pct; // SA_DOS_SPD_PCT  % toc do dat (WP_SPEED) toi thieu de bat dau rai (DOS_MODE=1), 1-100, default 50
+  AP_Int8  _spd_start_pct; // SA_SPD_START  % toc do dat (WP_SPEED) toi thieu de bat dau bom/rai, dung chung Module 1 (FLOW_MODE=1) va Module 3 (DOS_MODE=2), 1-100, default 80
   AP_Int8  _dos_log_enable; // SA_DOS_LOG     console log enable cho dosing motor
   AP_Int16 _dos_log_ms;     // SA_DOS_LOG_MS  khoang thoi gian giua hai lan in log (ms)
   AP_Int8  _dos_mode;       // SA_DOS_MODE    0=fixed PWM, 1=variable theo speed+mission
@@ -199,13 +199,17 @@ private:
   // ---- MODULE 1: mission distance cache + tank monitor state ----
   float    _mission_dist_m;
   uint16_t _mission_ncmds;
-  uint32_t _tank_warn_ms;
   bool     _tank_empty_detected;
   uint32_t _tank_empty_ms;
-  // q1 (FLOW_MODE=1) ra ngoài dải lưu lượng THẬT bơm đạt được (0.9-1.2
-  // L/min, hardcode theo phần cứng bơm hiện tại) — chỉ cảnh báo 1 LẦN mỗi
-  // phiên ARM (không lặp lại mỗi 5s như các cảnh báo khác), reset khi disarm.
-  bool     _q1_range_warned;
+  // "no mission" (dist<=1m, FLOW_MODE=1) — chỉ cảnh báo 1 LẦN mỗi phiên
+  // ARM (không lặp lại mỗi 5s như TANK EMPTY), reset khi disarm.
+  bool     _no_mission_warned;
+  // q1 (FLOW_MODE=1) đang ngoài dải lưu lượng THẬT bơm đạt được (0.8-1.3
+  // L/min, hardcode theo phần cứng bơm hiện tại) hay không — cờ theo TỪNG
+  // CHU KỲ (không phải one-shot), chỉ dùng để thêm " - out range" vào
+  // cuối log định kỳ; bơm vẫn tắt khi cờ này true nhưng _flow_target giữ
+  // nguyên giá trị q1 thật để hiện trong log (không ép về 0 nữa).
+  bool     _flow_out_of_range;
   // Tốc độ ĐẶT cho mission (WP_SPEED), do Rover.cpp bơm vào qua
   // set_target_speed() mỗi chu kỳ trước update(). 0 nếu chưa từng được set
   // (vd chưa vào Auto lần nào) — dùng cho công thức FLOW_MODE=1.
@@ -292,6 +296,12 @@ private:
   uint32_t _dos_warn_ms;
   bool     _dos_was_ok;
   bool     _dos_was_on;
+  // false từ lúc boot cho tới khi thấy SA_DOS_RC ở vị trí OFF ít nhất 1
+  // lần - chặn motor tự chạy lại nếu FC reboot (mất điện chập chờn) trong
+  // lúc switch vẫn đang ở vị trí ON từ trước; buộc phải gạt OFF rồi ON
+  // lại sau mỗi lần boot mới cho chạy. Không reset khi disarm (chỉ liên
+  // quan tới reboot thật, không phải chu kỳ arm/disarm bình thường).
+  bool     _dos_rc_seen_off;
   uint32_t _dos_last_log_ms;
 
   // Đồng bộ SA_DOS_SP + SA_DOS_FOOD với dos_sp/dos_food riêng của ao đang
@@ -313,7 +323,7 @@ private:
   float    _get_dosing_ref_speed(void);
   float    _compute_visin_target(float r);
   float    _get_mission_dist(void);
-  bool     _mission_started_wp1(void);
+  float    _speed_min_start(void);
 
   // ---- MODULE 2: pH sensor + alkalinity + pond persistence ----
   void     _ph_init(void);

@@ -372,22 +372,28 @@ const AP_Param::GroupInfo AP_ShoesAgtech::var_info[] = {
 
     // slot 19 — never previously allocated (Module 3's own numbered range
     // 25-54 is full; slot 27 is retired and must not be reused). Placed
-    // here, next to DOS_REV, since that's where it conceptually belongs.
-    // @Param: DOS_SPD_PCT
-    // @DisplayName: Minimum speed to start spreading in DOS_MODE=1 (% of target mission speed)
-    // @Description: DOS_MODE=1 (mission-proportional) only starts spreading
-    //   once ground speed reaches this percentage of the target/set mission
-    //   speed (WP_SPEED, updated by DO_CHANGE_SPEED/GCS SET_SPEED) — not
-    //   just any nonzero speed. Prevents dumping extra feed while the
+    // here, next to DOS_REV; named SPD_START (not DOS_-prefixed) because
+    // it's shared across modules, not Module-3-specific.
+    // @Param: SPD_START
+    // @DisplayName: Minimum speed to start spreading/pumping (% of target
+    // mission speed) - shared by Module 1 (FLOW_MODE=1) and Module 3
+    // (DOS_MODE=2)
+    // @Description: FLOW_MODE=1 (Module 1) and DOS_MODE=2 (Module 3,
+    //   mission-proportional) only start spreading/pumping once ground
+    //   speed reaches this percentage of the target/set mission speed
+    //   (WP_SPEED, updated by DO_CHANGE_SPEED/GCS SET_SPEED) — not just any
+    //   nonzero speed. Prevents dumping extra feed/biocide while the
     //   vehicle is still accelerating from a stop or coming out of a turn.
-    //   0 disables this check entirely (reverts to old behaviour: any speed
-    //   above the absolute 0.05 m/s floor starts spreading). The absolute
-    //   0.05 m/s floor always applies regardless of this setting (matters
-    //   when no target speed is available yet, e.g. before entering Auto).
+    //   Shared between both modules (no free AP_Param slot left for a
+    //   separate one) — changing this affects both. 0 disables this check
+    //   entirely (reverts to old behaviour: any speed above the absolute
+    //   0.05 m/s floor starts spreading/pumping). The absolute 0.05 m/s
+    //   floor always applies regardless of this setting (matters when no
+    //   target speed is available yet, e.g. before entering Auto).
     // @Range: 0 100
     // @Units: %
     // @User: Standard
-    AP_GROUPINFO("DOS_SPD_PCT", 19, AP_ShoesAgtech, _dos_spd_pct, 50),
+    AP_GROUPINFO("SPD_START", 19, AP_ShoesAgtech, _spd_start_pct, 80),
 
     // @Param: DOS_LOG
     // @DisplayName: Dosing motor console log enable
@@ -544,7 +550,8 @@ const AP_Param::GroupInfo AP_ShoesAgtech::var_info[] = {
     AP_GROUPINFO("DOS_F7", 47, AP_ShoesAgtech, _dos_fr[6], 1.0f),
 
     // Bulk density per food type (slots 48-54).
-    // offset(us) = SP(g) * 50 / (SA_DOS_V(mL/50us) x fill_factor(-) x density(g/mL)).
+    // offset(us) = SP(g) * 50 / (SA_DOS_V(mL/50us) x fill_factor(-) x
+    // density(g/mL)).
     // Default 1.0 g/mL is backward-compatible with the old g/50us formula.
 
     // @Param: DOS_D1
@@ -608,25 +615,25 @@ AP_ShoesAgtech::AP_ShoesAgtech()
       _flow_rate_filtered(0.0f), _flow_rate_avg(0.0f), _is_initialized(false),
       _buffer_index(0), _buffer_sum(0.0f), _samples_count(0), _spray_mode(0),
       _pump_pwm(0), _flow_target(0.0f), _flow_ramp_val(0.0f),
-      _pid_integral(0.0f),
-      _pid_output_lpf(0.0f), _pid_last_ms(0), _last_pump_chan(-1),
-      _last_pump_func_val(-1), _pump_config_ok(false),
-      _mission_dist_m(0.0f), _mission_ncmds(0), _tank_warn_ms(0),
-      _tank_empty_detected(false),
-      _tank_empty_ms(0), _q1_range_warned(false), _target_speed(0.0f),
-      _sim_speed(0.0f), _ph_uart(nullptr), _ph_update_ms(0),
-      _ph_req_sent_ms(0), _ph_req_pending(false), _ph_last_good_ms(0),
-      _ph_nodata_warn_ms(0), _ph_last_log_ms(0), _ph_value(0.0f),
-      _ph_value_ma(0.0f), _ph_mv(0), _ph_temp(25.0f), _ph_buf_idx(0),
-      _ph_buf_count(0), _ph_buf_sum(0.0f), _pond_count(0), _ph_morn_val(0.0f),
-      _ph_morn_lat(0), _ph_morn_lng(0), _ph_aft_val(0.0f), _delta_ph(0.0f),
-      _alk_dkh(0.0f), _alk_mgl(0.0f), _alk_slot_status(4), _alk_pond_idx(0),
-      _active_pond_idx(0), _slot_warn_ms(0), _ponds_save_ms(0),
-      _pond_save_fail_ms(0),
-      _pond_first_detect_done(false), _ponds_dirty(false), _ponds_loaded(false),
-      _dos_pwm(1500), _dos_config_ok(false), _dos_warn_ms(0),
-      _dos_was_ok(false), _dos_was_on(false), _dos_last_log_ms(0),
-      _dos_sync_pond(0xFF), _dos_sp_sync_val(0.0f), _dos_food_sync_val(0) {
+      _pid_integral(0.0f), _pid_output_lpf(0.0f), _pid_last_ms(0),
+      _last_pump_chan(-1), _last_pump_func_val(-1), _pump_config_ok(false),
+      _mission_dist_m(0.0f), _mission_ncmds(0),
+      _tank_empty_detected(false), _tank_empty_ms(0),
+      _no_mission_warned(false), _flow_out_of_range(false),
+      _target_speed(0.0f), _sim_speed(0.0f), _ph_uart(nullptr),
+      _ph_update_ms(0), _ph_req_sent_ms(0), _ph_req_pending(false),
+      _ph_last_good_ms(0), _ph_nodata_warn_ms(0), _ph_last_log_ms(0),
+      _ph_value(0.0f), _ph_value_ma(0.0f), _ph_mv(0), _ph_temp(25.0f),
+      _ph_buf_idx(0), _ph_buf_count(0), _ph_buf_sum(0.0f), _pond_count(0),
+      _ph_morn_val(0.0f), _ph_morn_lat(0), _ph_morn_lng(0), _ph_aft_val(0.0f),
+      _delta_ph(0.0f), _alk_dkh(0.0f), _alk_mgl(0.0f), _alk_slot_status(4),
+      _alk_pond_idx(0), _active_pond_idx(0), _slot_warn_ms(0),
+      _ponds_save_ms(0), _pond_save_fail_ms(0), _pond_first_detect_done(false),
+      _ponds_dirty(false), _ponds_loaded(false), _dos_pwm(1500),
+      _dos_config_ok(false), _dos_warn_ms(0), _dos_was_ok(false),
+      _dos_was_on(false), _dos_rc_seen_off(false), _dos_last_log_ms(0),
+      _dos_sync_pond(0xFF),
+      _dos_sp_sync_val(0.0f), _dos_food_sync_val(0) {
   memset(_sample_buffer, 0, sizeof(_sample_buffer));
   memset(_ph_buf, 0, sizeof(_ph_buf));
   memset(_ponds, 0, sizeof(_ponds));
@@ -765,7 +772,7 @@ void AP_ShoesAgtech::update(void) {
     _mission_dist_m = 0.0f;
     _tank_empty_detected = false;
     _tank_empty_ms = 0;
-    _q1_range_warned = false;
+    _no_mission_warned = false;
     _flow_ramp_val = 0.0f;
 
     _last_pulse_snapshot = _pulse_count;
@@ -787,6 +794,7 @@ void AP_ShoesAgtech::update(void) {
     uint16_t rc_pwm = RC_Channels::get_radio_in(rc_pump_idx);
     _flow_target = 0.0f;
     _flow_ramp_val = 0.0f;
+    _flow_out_of_range = false;
     _pid_integral = 0.0f;
     _pid_output_lpf = 0.0f;
     if (rc_pwm < 800 || rc_pwm > 2200) {
@@ -808,6 +816,7 @@ void AP_ShoesAgtech::update(void) {
 
   case 1: {
     // ---- MODE 1: FLOW PID (nấc giữa — MIX_STD / béc mặc định) ----
+    _flow_out_of_range = false;
     if (!hal.util->get_soft_armed()) {
       _flow_target = 0.0f;
       _flow_ramp_val = 0.0f;
@@ -831,13 +840,28 @@ void AP_ShoesAgtech::update(void) {
         }
         break;
       }
-      // Bơm chỉ thực sự chạy sau khi mission đã bắt đầu tới WP1 (không
-      // bật ngay lúc vừa ARM khi xe còn ở HOME) - _flow_target vẫn hiện
-      // đầy đủ trong log như bình thường. Bỏ qua gate này khi SA_FLOW_VEL
-      // > 0 (đang chủ động dùng để hiệu chỉnh đứng yên, không cần AUTO/
-      // mission thật đang chạy) - giống cách SA_FLOW_VEL đã ưu tiên hơn
-      // tốc độ thật trong _get_dosing_ref_speed().
-      if (_flow_vel.get() <= 0.0f && !_mission_started_wp1()) {
+      // q1 ngoài dải lưu lượng THẬT bơm đạt được (0.8-1.3) — KHÔNG ép
+      // _flow_target về 0 nữa (2026-09-04): log định kỳ vẫn hiện đúng q1
+      // thật + " - out range", chỉ có bơm là tắt (không chạy PID).
+      if (_flow_target < 0.8f || _flow_target > 1.3f) {
+        _flow_out_of_range = true;
+        _flow_ramp_val = 0.0f;
+        _pid_integral = 0.0f;
+        _pid_output_lpf = 0.0f;
+        SRV_Channel *ch1 =
+            SRV_Channels::srv_channel((uint8_t)(_pump_chan.get() - 1));
+        if (ch1 != nullptr) {
+          _write_pump_pwm(ch1->get_output_min());
+        }
+        break;
+      }
+      // Bơm chỉ thực sự chạy khi tốc độ đã đạt đủ % tốc độ ĐẶT cho mission
+      // (giống hệt cơ chế SA_SPD_START bên Module 3) - không bật ngay
+      // lúc xe còn đứng yên/mới nhích bánh. _flow_target vẫn hiện đầy đủ
+      // trong log như bình thường. SA_FLOW_VEL đã tự nằm trong
+      // _get_dosing_ref_speed() nên không cần bypass riêng - đặt SA_FLOW_VEL
+      // đủ lớn để hiệu chỉnh đứng yên là qua được ngưỡng này bình thường.
+      if (_get_dosing_ref_speed() < _speed_min_start()) {
         _flow_ramp_val = 0.0f;
         _pid_integral = 0.0f;
         _pid_output_lpf = 0.0f;
@@ -851,8 +875,7 @@ void AP_ShoesAgtech::update(void) {
       // Ramp từ từ lên _flow_target (0.3 L/min mỗi giây) thay vì nhảy
       // thẳng full setpoint ngay khi vừa vào WP1 - giảm bơm giật/tràn
       // lúc mới mồi (bồn đặt cao hơn bơm, không van một chiều).
-      _flow_ramp_val =
-          MIN(_flow_ramp_val + 0.3f * dt_pid, _flow_target);
+      _flow_ramp_val = MIN(_flow_ramp_val + 0.3f * dt_pid, _flow_target);
     } else {
       _flow_target = _flow_setpoint.get();
       _flow_ramp_val = MIN(_flow_ramp_val + 0.3f * dt_pid, _flow_target);
@@ -864,6 +887,7 @@ void AP_ShoesAgtech::update(void) {
 
   case 2: {
     // ---- MODE 2: FLOW PID (nấc cao — MIX_CNT / béc chống nghẹt) ----
+    _flow_out_of_range = false;
     if (!hal.util->get_soft_armed()) {
       _flow_target = 0.0f;
       _flow_ramp_val = 0.0f;
@@ -887,9 +911,9 @@ void AP_ShoesAgtech::update(void) {
         }
         break;
       }
-      // Giống nấc 2: chỉ bật bơm thật sau khi mission đã bắt đầu tới WP1,
-      // trừ khi SA_FLOW_VEL > 0 (đang chủ động hiệu chỉnh đứng yên).
-      if (_flow_vel.get() <= 0.0f && !_mission_started_wp1()) {
+      // Giống nấc 2: q1 ngoài dải 0.8-1.3 thì không ép _flow_target về 0.
+      if (_flow_target < 0.8f || _flow_target > 1.3f) {
+        _flow_out_of_range = true;
         _flow_ramp_val = 0.0f;
         _pid_integral = 0.0f;
         _pid_output_lpf = 0.0f;
@@ -900,8 +924,19 @@ void AP_ShoesAgtech::update(void) {
         }
         break;
       }
-      _flow_ramp_val =
-          MIN(_flow_ramp_val + 0.3f * dt_pid, _flow_target);
+      // Giống nấc 2: chỉ bật bơm thật khi tốc độ đã đạt đủ % tốc độ ĐẶT.
+      if (_get_dosing_ref_speed() < _speed_min_start()) {
+        _flow_ramp_val = 0.0f;
+        _pid_integral = 0.0f;
+        _pid_output_lpf = 0.0f;
+        SRV_Channel *ch2 =
+            SRV_Channels::srv_channel((uint8_t)(_pump_chan.get() - 1));
+        if (ch2 != nullptr) {
+          _write_pump_pwm(ch2->get_output_min());
+        }
+        break;
+      }
+      _flow_ramp_val = MIN(_flow_ramp_val + 0.3f * dt_pid, _flow_target);
     } else {
       float ratio =
           (_mix_std.get() > 0.01f) ? (_mix_cnt.get() / _mix_std.get()) : 1.0f;
@@ -924,12 +959,11 @@ void AP_ShoesAgtech::update(void) {
       if (_flow_rate_filtered > 1.7f) {
         if (_tank_empty_ms == 0) {
           _tank_empty_ms = now;
-        } else if (now - _tank_empty_ms >= 5000U) {
+        } else if (now - _tank_empty_ms >= 10000U) {
           _tank_empty_detected = true;
-          gcs().send_text(
-              MAV_SEVERITY_INFO,
-              "SA: TANK EMPTY - flow %.1fL/min > 1.7 for 5s",
-              (double)_flow_rate_filtered);
+          gcs().send_text(MAV_SEVERITY_INFO,
+                          "SA: TANK EMPTY - flow %.1fL/min > 1.7 for 5s",
+                          (double)_flow_rate_filtered);
         }
       } else {
         _tank_empty_ms = 0;
@@ -938,19 +972,25 @@ void AP_ShoesAgtech::update(void) {
   }
 
   // ---- 5. IN LOG LƯU LƯỢNG RA CONSOLE (SA_FLOW_LOG) ----
-  // Rút gọn: chỉ 1 dòng "FM<x> N<nấc> Q:<setpoint>".
+  // Rút gọn: chỉ 1 dòng "FM<x> N<nấc> Q:<setpoint>[ - out range]".
   //   FM<x>   = SA_FLOW_MODE (0 hoặc 1) — cách tính setpoint đang dùng.
   //   N<nấc>  = spray_mode+1 (1/2/3, khớp đúng vị trí gạt nấc RC vật lý).
   //   Q       = _flow_target: 0 ở nấc 1 (truyền thẳng tay), số cố định ở
-  //             FM0 (SA_FLOW_SP), số dao động ở FM1 (công thức thùng+mission,
-  //             chỉ có ý nghĩa khi đang ở nấc 2/3).
+  //             FM0 (SA_FLOW_SP), số q1 THẬT đã tính ở FM1 (công thức
+  //             thùng+mission, chỉ có ý nghĩa khi đang ở nấc 2/3) — LUÔN
+  //             hiện đúng số dù q1 ngoài dải bơm hay chưa đạt tốc độ %,
+  //             KHÔNG ép về 0 nữa (2026-09-04).
+  //   " - out range" = thêm vào cuối khi q1 (FM1) đang ngoài dải 0.8-1.3
+  //             (_flow_out_of_range) — bơm KHÔNG chạy trong trường hợp
+  //             này dù Q vẫn hiện số thật, thay cho cảnh báo riêng lúc ARM.
   if (_flow_log_enable.get() > 0 &&
       now - _last_log_ms >= (uint32_t)_flow_log_ms.get()) {
     _last_log_ms = now;
     const char *flow_pfx = (_simulation.get() > 0) ? "[SIM][FLOW]" : "[FLOW]";
-    gcs().send_text(MAV_SEVERITY_INFO, "%s FM%d N%u Q: %.2f", flow_pfx,
+    gcs().send_text(MAV_SEVERITY_INFO, "%s FM%d N%u Q: %.2f%s", flow_pfx,
                     (int)_flow_mode.get(), (unsigned)(_spray_mode + 1),
-                    (double)_flow_target);
+                    (double)_flow_target,
+                    _flow_out_of_range ? " - out range" : "");
   }
 }
 
@@ -1103,18 +1143,18 @@ float AP_ShoesAgtech::_get_dosing_ref_speed(void) {
 //   → vi sinh được phân phối đều trên toàn tuyến.
 //   → vi_per_run = TANK_VOL * r (hằng số, không đổi theo speed/dist)
 // Kiểm tra trước khi chạy PID:
-//   1. Mission: dist <= 1m → cảnh báo + dừng
-//   2. Speed:   < 0.1 m/s → reset PID, dừng
-//   3. Range:   q1 < 0.9 hoặc q1 > 1.2 → cảnh báo + dừng. Dải này KHÔNG
-//      phải ngưỡng nghiệp vụ (như 0.3/2.0 cũ) mà là DẢI LƯU LƯỢNG THẬT bơm
-//      hiện tại đạt được (đo thực tế 2026-08-20, hardcode theo đúng bơm
-//      này — đổi bơm khác thì sửa lại 2 số này). Ngoài dải này PID chỉ kẹt
-//      ở PWM MIN/MAX, cho ra đúng 0.9 hoặc 1.2 thật chứ không đạt được
-//      con số yêu cầu — nên dừng hẳn thay vì chạy sai. Cảnh báo CHỈ hiện
-//      1 LẦN mỗi phiên ARM (không lặp lại mỗi 5s như các cảnh báo khác).
+//   1. Mission: dist <= 1m → cảnh báo 1 lần/ARM, dừng, return 0 (không có
+//      q1 nào để hiện - mission chưa hợp lệ nên không tính được)
+//   2. Speed:   < 0.1 m/s → reset PID, dừng, return 0 (tương tự, xe coi
+//      như đứng yên, không có nghĩa để hiện 1 con số q1 nào)
+//   3. Range:   q1 < 0.8 hoặc q1 > 1.3 (DẢI LƯU LƯỢNG THẬT bơm hiện tại
+//      đạt được, đo thực tế 2026-08-20, chỉnh lại 2026-09-04 — KHÔNG phải
+//      ngưỡng nghiệp vụ) — KHÔNG ép về 0 nữa (2026-09-04): hàm này LUÔN
+//      trả về q1 thật đã tính (constrain 0-200) để log vẫn hiện đúng số,
+//      caller (case 1/2 trong update()) mới là nơi quyết định có chạy
+//      PID/ghi PWM ra bơm hay không dựa trên dải này (_flow_out_of_range).
 // =============================================================
 float AP_ShoesAgtech::_compute_visin_target(float r) {
-  uint32_t now = AP_HAL::millis();
   r = constrain_float(r, 0.01f, 1.0f);
 
   float speed_ms = _get_dosing_ref_speed();
@@ -1123,8 +1163,8 @@ float AP_ShoesAgtech::_compute_visin_target(float r) {
   if (dist <= 1.0f) {
     _pid_integral = 0.0f;
     _pid_output_lpf = 0.0f;
-    if (now - _tank_warn_ms >= 5000U) {
-      _tank_warn_ms = now;
+    if (!_no_mission_warned) {
+      _no_mission_warned = true;
       gcs().send_text(MAV_SEVERITY_WARNING,
                       "SA FM1: no mission - pump stopped");
     }
@@ -1138,33 +1178,6 @@ float AP_ShoesAgtech::_compute_visin_target(float r) {
   }
 
   float q1 = _tank_vol.get() * r * speed_ms * 60.0f / dist;
-
-  if (q1 < 0.9f) {
-    _pid_integral = 0.0f;
-    _pid_output_lpf = 0.0f;
-    if (!_q1_range_warned) {
-      _q1_range_warned = true;
-      gcs().send_text(
-          MAV_SEVERITY_WARNING,
-          "SA FM1: q1=%.2fL/min < 0.9 (pump range) - shorten mission or "
-          "increase speed",
-          (double)q1);
-    }
-    return 0.0f;
-  }
-  if (q1 > 1.2f) {
-    _pid_integral = 0.0f;
-    _pid_output_lpf = 0.0f;
-    if (!_q1_range_warned) {
-      _q1_range_warned = true;
-      gcs().send_text(
-          MAV_SEVERITY_WARNING,
-          "SA FM1: q1=%.2fL/min > 1.2 (pump range) - lengthen mission or "
-          "reduce speed",
-          (double)q1);
-    }
-    return 0.0f;
-  }
 
   return constrain_float(q1, 0.0f, 200.0f);
 }
@@ -1226,22 +1239,21 @@ float AP_ShoesAgtech::_get_mission_dist(void) {
 }
 
 // =============================================================
-// MISSION ĐÃ THỰC SỰ BẮT ĐẦU TỚI WP1 CHƯA? — FLOW_MODE=1
-// Dùng để CHỈ bật bơm thật (ghi PWM) sau khi xe bắt đầu chạy tới WP1,
-// không bật ngay lúc vừa ARM (khi xe còn ở HOME, trước khi vào chặng
-// đầu tiên của mission). _flow_target (hiện trong log) vẫn được tính
-// và hiện bình thường bất kể mission đã chạy tới WP1 hay chưa — hàm
-// này chỉ gate việc CHẠY PID/GHI PWM ra bơm.
-// index 0 của mission luôn là HOME (xem _get_mission_dist() ở trên),
-// nên get_current_nav_index() phải >= 1 mới coi là đã tới WP1.
+// NGƯỠNG TỐC ĐỘ TỐI THIỂU ĐỂ BẮT ĐẦU BƠM/RẢI — FLOW_MODE=1 (Module 1) và
+// DOS_MODE=2 (Module 3) DÙNG CHUNG tham số SA_SPD_START (không còn slot
+// AP_Param trống để thêm tham số riêng cho Module 1, xem mục param) —
+// đổi SA_SPD_START sẽ ảnh hưởng ngưỡng bắt đầu chạy của CẢ 2 module.
+// SA_SPD_START<=0: tắt hẳn kiểm tra %, chỉ còn sàn tuyệt đối 0.05 m/s.
+// SA_SPD_START>0: ngưỡng = %  × _target_speed (tốc độ ĐẶT cho mission),
+// tối thiểu vẫn là 0.05 m/s.
 // =============================================================
-bool AP_ShoesAgtech::_mission_started_wp1(void) {
-  AP_Mission *mission = AP::mission();
-  if (mission == nullptr) {
-    return false;
+float AP_ShoesAgtech::_speed_min_start(void) {
+  int8_t spd_pct_raw = _spd_start_pct.get();
+  if (spd_pct_raw <= 0) {
+    return 0.05f;
   }
-  return mission->state() == AP_Mission::MISSION_RUNNING &&
-         mission->get_current_nav_index() >= 1;
+  float spd_pct = constrain_float((float)spd_pct_raw, 1.0f, 100.0f);
+  return MAX(0.05f, (spd_pct * 0.01f) * _target_speed);
 }
 
 // =============================================================
@@ -1450,8 +1462,8 @@ void AP_ShoesAgtech::_ph_update(void) {
       int as_h = (int)as_, as_m = (int)((as_ - (int)as_) * 60.0f + 0.5f);
       int ae_h = (int)ae, ae_m = (int)((ae - (int)ae) * 60.0f + 0.5f);
       gcs().send_text(MAV_SEVERITY_INFO,
-                      "%s AM:%d:%02d-%d:%02d PM:%d:%02d-%d:%02d", ph_pfx,
-                      ms_h, ms_m, me_h, me_m, as_h, as_m, ae_h, ae_m);
+                      "%s AM:%d:%02d-%d:%02d PM:%d:%02d-%d:%02d", ph_pfx, ms_h,
+                      ms_m, me_h, me_m, as_h, as_m, ae_h, ae_m);
     }
   }
 }
@@ -1473,7 +1485,8 @@ void AP_ShoesAgtech::_ph_update_daily_slots(float ph_cal) {
   if (!AP::rtc().get_utc_usec(utc_usec)) {
     if (_ph_log_enable.get() > 0 && now - _slot_warn_ms >= 60000) {
       _slot_warn_ms = now;
-      gcs().send_text(MAV_SEVERITY_INFO, "[WM] No GPS - alkalinity waiting for GPS/time");
+      gcs().send_text(MAV_SEVERITY_INFO,
+                      "[WM] No GPS - alkalinity waiting for GPS/time");
     }
     return;
   }
@@ -1484,7 +1497,8 @@ void AP_ShoesAgtech::_ph_update_daily_slots(float ph_cal) {
   if (gps_inst.status(0) < AP_GPS::GPS_OK_FIX_3D) {
     if (_ph_log_enable.get() > 0 && now - _slot_warn_ms >= 60000) {
       _slot_warn_ms = now;
-      gcs().send_text(MAV_SEVERITY_INFO, "[WM] No GPS - alkalinity waiting for GPS/time");
+      gcs().send_text(MAV_SEVERITY_INFO,
+                      "[WM] No GPS - alkalinity waiting for GPS/time");
     }
     return;
   }
@@ -1601,8 +1615,9 @@ void AP_ShoesAgtech::_ph_update_daily_slots(float ph_cal) {
       _ponds_dirty = true;
       if (pond.morn_count == cap_min && !pond.morn_reported) {
         pond.morn_reported = true;
-        gcs().send_text(MAV_SEVERITY_INFO, "[SA] Pond#%u pH AM: %.2f (%u samples)",
-                        disp_idx, (double)pond.ph_morn, (unsigned)cap_min);
+        gcs().send_text(MAV_SEVERITY_INFO,
+                        "[SA] Pond#%u pH AM: %.2f (%u samples)", disp_idx,
+                        (double)pond.ph_morn, (unsigned)cap_min);
       }
     } else if (in_aft && now - pond.aft_last_ms >= cap_ms) {
       pond.ph_aft = ph_cal;
@@ -1612,8 +1627,9 @@ void AP_ShoesAgtech::_ph_update_daily_slots(float ph_cal) {
       _ponds_dirty = true;
       if (pond.aft_count == cap_min && !pond.aft_reported) {
         pond.aft_reported = true;
-        gcs().send_text(MAV_SEVERITY_INFO, "[SA] Pond#%u pH PM: %.2f (%u samples)",
-                        disp_idx, (double)pond.ph_aft, (unsigned)cap_min);
+        gcs().send_text(MAV_SEVERITY_INFO,
+                        "[SA] Pond#%u pH PM: %.2f (%u samples)", disp_idx,
+                        (double)pond.ph_aft, (unsigned)cap_min);
       }
     }
   }
@@ -1755,8 +1771,7 @@ void AP_ShoesAgtech::_io_update(void) {
     // liên tục chiếm semaphore filesystem dùng chung với AP_Logger mỗi 5s,
     // vốn có thể khiến AP_Logger không mở được file log (EBUSY) và làm
     // main loop bị treo (INTERNAL_ERROR main_loop_stuck) khi ghi SD chậm.
-    uint32_t min_interval =
-        (_pond_save_fail_ms != 0) ? 60000U : 5000U;
+    uint32_t min_interval = (_pond_save_fail_ms != 0) ? 60000U : 5000U;
     if (now_ms - _ponds_save_ms >= min_interval) {
       _ponds_save_ms = now_ms;
       if (_pond_save()) {
@@ -1803,7 +1818,8 @@ bool AP_ShoesAgtech::_pond_save(void) {
   // Ghi thiếu byte (vd ENOSPC — thẻ SD đầy) — không coi là đã lưu thành
   // công. Báo 1 lần mỗi 60s (dùng chung timer backoff của _io_update) để
   // người dùng biết dữ liệu ao KHÔNG được lưu, thay vì âm thầm mất dữ liệu.
-  if (hdr_written != (ssize_t)sizeof(hdr) || data_written != (ssize_t)data_len) {
+  if (hdr_written != (ssize_t)sizeof(hdr) ||
+      data_written != (ssize_t)data_len) {
     gcs().send_text(MAV_SEVERITY_WARNING,
                     "SA: could not save pond data to SD (card full/error?)");
     return false;
@@ -1889,8 +1905,7 @@ void AP_ShoesAgtech::_check_dosing_config(void) {
   if (_dos_config_ok) {
     if (!_dos_was_ok) {
       gcs().send_text(MAV_SEVERITY_INFO,
-                      "SA: SERVO%d setup OK - dosing motor ready",
-                      (int)chan);
+                      "SA: SERVO%d setup OK - dosing motor ready", (int)chan);
     }
     _dos_was_ok = true;
     return;
@@ -2003,6 +2018,18 @@ void AP_ShoesAgtech::_update_dosing_motor(void) {
   uint16_t rc_pwm = RC_Channels::get_radio_in(rc_idx);
   bool motor_on = (rc_pwm > 1500);
 
+  // Chặn motor tự chạy lại nếu FC vừa reboot (vd mất điện chập chờn) trong
+  // lúc switch SA_DOS_RC vẫn đang ở vị trí ON từ trước - _dos_rc_seen_off
+  // reset về false mỗi lần boot, chỉ thành true khi thấy switch thực sự
+  // ở OFF ít nhất 1 lần. Trước khi đó, ép motor_on=false dù rc_pwm>1500.
+  if (!_dos_rc_seen_off) {
+    if (rc_pwm > 0 && rc_pwm <= 1500) {
+      _dos_rc_seen_off = true;
+    } else {
+      motor_on = false;
+    }
+  }
+
   if (motor_on != _dos_was_on) {
     _dos_was_on = motor_on;
     gcs().send_text(MAV_SEVERITY_INFO, "SA: Dosing motor %s",
@@ -2030,7 +2057,8 @@ void AP_ShoesAgtech::_update_dosing_motor(void) {
         SRV_Channel *ch_dos =
             SRV_Channels::srv_channel((uint8_t)(_dos_chan.get() - 1));
         uint16_t pwm_min = (ch_dos != nullptr) ? ch_dos->get_output_min() : 800;
-        uint16_t pwm_max = (ch_dos != nullptr) ? ch_dos->get_output_max() : 2200;
+        uint16_t pwm_max =
+            (ch_dos != nullptr) ? ch_dos->get_output_max() : 2200;
         pwm_f = constrain_float(dos_sp_active, (float)pwm_min, (float)pwm_max);
       }
       dos_rate_gpm = 0.0f; // không có khái niệm tốc độ g/phút ở mode này
@@ -2082,24 +2110,19 @@ void AP_ShoesAgtech::_update_dosing_motor(void) {
         // tức thời suy ra từ speed/mission_dist ----
         float mission_dist = _get_mission_dist();
         float speed_ms = _get_spray_speed(); // đồng bộ nguồn tốc độ với
-                                              // Module 1 (SIM > SA_FLOW_VEL
-                                              // > AHRS)
+                                             // Module 1 (SIM > SA_FLOW_VEL
+                                             // > AHRS)
         // Chỉ bắt đầu rải khi xe đã đạt ĐỦ tốc độ — không phải cứ nhích
-        // bánh là rải. Ngưỡng = SA_DOS_SPD_PCT % tốc độ ĐẶT cho mission
+        // bánh là rải. Ngưỡng = SA_SPD_START % tốc độ ĐẶT cho mission
         // (_target_speed = WP_SPEED, do Rover.cpp bơm vào — xem
         // set_target_speed()), tránh rải ngay lúc xe còn đang tăng tốc từ
         // lúc dừng/qua khúc cua (rải dồn vào đoạn xe đi chậm). Vẫn giữ
         // sàn tuyệt đối 0.05 m/s cho trường hợp chưa có _target_speed (vd
-        // chưa từng vào Auto). SA_DOS_SPD_PCT=0 tắt hẳn kiểm tra %, quay
-        // về hành vi cũ (chỉ cần vượt sàn 0.05 m/s là rải).
-        int8_t spd_pct_raw = _dos_spd_pct.get();
-        float speed_min_start;
-        if (spd_pct_raw <= 0) {
-          speed_min_start = 0.05f;
-        } else {
-          float spd_pct = constrain_float((float)spd_pct_raw, 1.0f, 100.0f);
-          speed_min_start = MAX(0.05f, (spd_pct * 0.01f) * _target_speed);
-        }
+        // chưa từng vào Auto). SA_SPD_START=0 tắt hẳn kiểm tra %, quay
+        // về hành vi cũ (chỉ cần vượt sàn 0.05 m/s là rải). Từ 2026-09-04,
+        // `_speed_min_start()` DÙNG CHUNG với gate bật bơm FLOW_MODE=1 ở
+        // Module 1 — đổi SA_SPD_START ảnh hưởng cả 2 module.
+        float speed_min_start = _speed_min_start(); // dùng chung với Module 1
         if (mission_dist > 1.0f && speed_ms >= speed_min_start) {
           dos_rate_gpm = (dos_sp_active * speed_ms * 60.0f) / mission_dist;
           float offset = dos_rate_gpm * 50.0f / effective;
@@ -2115,10 +2138,10 @@ void AP_ShoesAgtech::_update_dosing_motor(void) {
                   "SA DOS2: no mission (dist=%.1fm) - motor stopped",
                   (double)mission_dist);
             } else {
-              gcs().send_text(
-                  MAV_SEVERITY_WARNING,
-                  "SA DOS2: speed too low (%.2fm/s < %.2fm/s min) - motor stopped",
-                  (double)speed_ms, (double)speed_min_start);
+              gcs().send_text(MAV_SEVERITY_WARNING,
+                              "SA DOS2: speed too low (%.2fm/s < %.2fm/s min) "
+                              "- motor stopped",
+                              (double)speed_ms, (double)speed_min_start);
             }
           }
         }
@@ -2133,34 +2156,16 @@ void AP_ShoesAgtech::_update_dosing_motor(void) {
   SRV_Channels::set_output_pwm_chan(chan_idx, _dos_pwm);
 
   // ---- IN LOG MOTOR CHO ĂN RA CONSOLE (SA_DOS_LOG) ----
-  // Format khác nhau theo mode: mode 0 (PWM trực tiếp) không có khái niệm
-  // tốc độ/mật độ, chỉ in PWM; mode 1 thì SA_DOS_SP CHÍNH LÀ tốc độ (g/ph)
-  // nên chỉ in 1 field "Rate"; mode 2 thì SA_DOS_SP là tổng gam cho cả
-  // mission, nên in thêm "Rate" (tốc độ tức thời suy ra) bên cạnh "SP" (tổng).
+  // Rút gọn (2026-09-04), giống hệt kiểu Module 1: đúng 1 dòng
+  // "[DOS] FM<x> Q:<y>" — FM<x> = SA_DOS_MODE (0/1/2), Q = dos_rate_gpm
+  // (lưu lượng g/phút; = 0 ở mode 0 vì không có khái niệm tốc độ, giống
+  // cách Q=0 ở nấc manual bên Module 1). Bỏ SERVO/ON-OFF/PWM/mật độ khỏi
+  // log định kỳ để đồng nhất với Module 1 — xem SA_DATA nếu cần chi tiết.
   if (_dos_log_enable.get() > 0) {
     if (now - _dos_last_log_ms >= (uint32_t)_dos_log_ms.get()) {
       _dos_last_log_ms = now;
-      uint8_t food_log = (uint8_t)_clamp_food(dos_food_active) - 1;
-      if (_dos_mode.get() == 0) {
-        gcs().send_text(MAV_SEVERITY_INFO, "[DOS] M0 SERVO%d %s PWM:%u",
-                        (int)_dos_chan.get(), motor_on ? "ON" : "OFF",
-                        (unsigned)_dos_pwm);
-      } else if (_dos_mode.get() == 1) {
-        gcs().send_text(
-            MAV_SEVERITY_INFO,
-            "[DOS] M1 F%d SERVO%d %s Rate:%.0fg/min D:%.2fg/mL PWM:%u",
-            (int)dos_food_active, (int)_dos_chan.get(),
-            motor_on ? "ON" : "OFF", (double)dos_rate_gpm,
-            (double)_dos_dr[food_log].get(), (unsigned)_dos_pwm);
-      } else {
-        gcs().send_text(MAV_SEVERITY_INFO,
-                        "[DOS] M2 F%d SERVO%d %s SP:%.0fg Rate:%.2fg/min "
-                        "D:%.2fg/mL PWM:%u",
-                        (int)dos_food_active, (int)_dos_chan.get(),
-                        motor_on ? "ON" : "OFF", (double)dos_sp_active,
-                        (double)dos_rate_gpm, (double)_dos_dr[food_log].get(),
-                        (unsigned)_dos_pwm);
-      }
+      gcs().send_text(MAV_SEVERITY_INFO, "[DOS] FM%d Q:%.2f",
+                      (int)_dos_mode.get(), (double)dos_rate_gpm);
     }
   }
 }

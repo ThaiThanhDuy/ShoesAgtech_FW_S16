@@ -43,10 +43,12 @@ update() [10 Hz — ArduPilot scheduler]
     │                         ├──► _get_mission_dist()
     │                         ├──► _get_dosing_ref_speed() [tốc độ ĐẶT WP_SPEED,
     │                         │      KHÔNG phải GPS tức thời — xem 1.2/3.5]
-    │                         ├──► kiểm tra mission / speed / q1 trong dải 0.9-1.2 (dải lưu lượng THẬT bơm đạt được, xem 3.5)
-    │                         └──► (SA_FLOW_VEL≤0) _mission_started_wp1() [mới, 2026-09-04] — false thì
-    │                                bơm về MIN, ramp_val=0, flow_target vẫn hiện log bình thường
-    │                                (SA_FLOW_VEL>0) bỏ qua gate — bơm chạy thật ngay để hiệu chỉnh
+    │                         ├──► kiểm tra mission/speed — không hợp lệ thì trả 0
+    │                         ├──► (2026-09-04) flow_target < 0.8 || > 1.3 → _flow_out_of_range=true,
+    │                         │      bơm về MIN, ramp_val=0 — flow_target GIỮ NGUYÊN số thật (không ép 0)
+    │                         └──► _get_dosing_ref_speed() < _speed_min_start() [dùng chung
+    │                                SA_SPD_START với Module 3] — đúng thì bơm về
+    │                                MIN, ramp_val=0, flow_target vẫn hiện log bình thường
     │                     ramp_val = min(ramp_val + 0.3×dt, flow_target)   [ramp 0.3 L/min/s]
     │                     _run_flow_pid(ramp_val, dt)
     │                     └──► return pwm  ──► _write_pump_pwm(pwm)
@@ -54,15 +56,16 @@ update() [10 Hz — ArduPilot scheduler]
     │         (nấc cao)  [FLOW_MODE=1] flow_target = _compute_visin_target(SA_MIX_CNT)
     │                         ├──► _get_mission_dist()
     │                         ├──► _get_dosing_ref_speed() [tốc độ ĐẶT WP_SPEED]
-    │                         ├──► kiểm tra mission / speed / q1 trong dải 0.9-1.2 (dải lưu lượng THẬT bơm đạt được, xem 3.5)
-    │                         └──► (SA_FLOW_VEL≤0) _mission_started_wp1() — giống mode 1
+    │                         ├──► kiểm tra mission/speed — không hợp lệ thì trả 0
+    │                         ├──► flow_target < 0.8 || > 1.3 → _flow_out_of_range=true — giống mode 1
+    │                         └──► _get_dosing_ref_speed() < _speed_min_start() — giống mode 1
     │                     ramp_val = min(ramp_val + 0.3×dt, flow_target)
     │                     _run_flow_pid(ramp_val, dt)
     │                     └──► return pwm  ──► _write_pump_pwm(pwm)
     │
     ├──► [DISARM detection — inline trong update()]
     │         now_armed=false: reset _mission_ncmds, _mission_dist_m,
-    │                          _tank_empty_detected, _tank_empty_ms, _q1_range_warned,
+    │                          _tank_empty_detected, _tank_empty_ms, _no_mission_warned,
     │                          _flow_ramp_val (2026-09-04)
     │                          + TOÀN BỘ trạng thái đọc lưu lượng (2026-08-20):
     │                          _last_pulse_snapshot, _flow_rate_filtered,
@@ -76,7 +79,8 @@ update() [10 Hz — ArduPilot scheduler]
     │         Nếu flow ≤ 1.7: reset _tank_empty_ms về 0
     │
     └──► [Console log — SA_FLOW_LOG=1]
-              in theo chu kỳ SA_LOG_FL_MS
+              in theo chu kỳ SA_LOG_FL_MS, thêm "- out range" cuối dòng
+              nếu _flow_out_of_range=true (2026-09-04)
 ```
 
 ### 1.2 Mô tả từng hàm
@@ -160,15 +164,13 @@ update() [10 Hz — ArduPilot scheduler]
 - **Được gọi bởi:** `update()` (mode 1 và mode 2 khi `FLOW_MODE=1 && TANK_VOL>0`)
 - **Đầu vào:** `r` — tỉ lệ vi sinh trong tổng lưu lượng (0.01–1.0, sau clamp)
 - **Xử lý (theo thứ tự ưu tiên):**
-  1. `dist = _get_mission_dist()` — nếu ≤ 1m → reset PI, warning + return 0
-  2. `speed_ms = _get_dosing_ref_speed()` (tốc độ ĐẶT cho mission, KHÔNG phải GPS tức thời — xem 1.2/3.5) — nếu < 0.1 m/s → reset PI, return 0 (không cảnh báo)
+  1. `dist = _get_mission_dist()` — nếu ≤ 1m → reset PI, warning 1 lần/ARM "no mission - pump stopped" + return 0 (không có q1 nào để hiện — mission chưa hợp lệ)
+  2. `speed_ms = _get_dosing_ref_speed()` (tốc độ ĐẶT cho mission, KHÔNG phải GPS tức thời — xem 1.2/3.5) — nếu < 0.1 m/s → reset PI, return 0 (không cảnh báo, tương tự không có q1 nào để hiện)
   3. `q1 = TANK_VOL × r × speed_ms × 60 / dist` (L/min)
      - Ý nghĩa: để phân phối đúng `TANK_VOL × r` lít đều trên `dist` mét, cần lưu lượng này
-  4. `q1 < 0.9` → reset PI, warning 1 lần/ARM "shorten mission or increase speed" + return 0
-  5. `q1 > 1.2` → reset PI, warning 1 lần/ARM "lengthen mission or reduce speed" + return 0
-  6. `return constrain(q1, 0, 200)` — dải `[0.9, 1.2]` là dải lưu lượng **THẬT** bơm hiện tại đạt được (hardcode theo phần cứng, đo thực tế 2026-08-20 — KHÔNG phải ngưỡng nghiệp vụ như 0.3/2.0 cũ trước đó). Cận trên `constrain` (200) chỉ còn là chặn an toàn tuyệt đối, không liên quan.
-- **Đầu ra / Return:** `float` — lưu lượng vi sinh target (L/min); 0 nếu bất kỳ điều kiện nào không đạt
-- **Ghi chú:** Warning "no mission" (dist≤1m) vẫn dùng timer `_tank_warn_ms` (lặp mỗi 5s). Warning dải q1 [0.9,1.2] dùng cờ `_q1_range_warned` riêng — chỉ in **1 LẦN mỗi phiên ARM** (khác các cảnh báo khác), reset khi disarm. `vi_per_run = TANK_VOL × r` là hằng số mỗi lần chạy mission, không phụ thuộc speed hay dist.
+  4. `return constrain(q1, 0, 200)` — **LUÔN trả về q1 thật đã tính** (2026-09-04), kể cả khi ngoài dải `[0.8, 1.3]` (dải lưu lượng THẬT bơm hiện tại đạt được, hardcode theo phần cứng, đo thực tế 2026-08-20, chỉnh lại 2026-09-04). Hàm này **không còn tự quyết định dừng bơm** khi ngoài dải nữa — việc đó chuyển sang caller. Cận trên `constrain` (200) chỉ còn là chặn an toàn tuyệt đối, không liên quan.
+- **Đầu ra / Return:** `float` — lưu lượng vi sinh q1 THẬT đã tính (L/min), kể cả khi ngoài dải bơm; 0 chỉ khi chưa có mission hoặc xe chưa đạt tốc độ tối thiểu 0.1 m/s
+- **Ghi chú:** Warning "no mission" (dist≤1m) dùng cờ `_no_mission_warned` — chỉ in **1 LẦN mỗi phiên ARM** (đổi từ lặp mỗi 5s, 2026-09-04), reset khi disarm. Việc kiểm tra dải `[0.8,1.3]` và quyết định tắt bơm/gắn `_flow_out_of_range` đã chuyển sang **caller** (case 1/2 trong `update()`, xem mục 3.2) — không còn cảnh báo WARNING riêng lúc ARM cho trường hợp này nữa, thay bằng hậu tố `" - out range"` trong log định kỳ (xem `SA_FLOW_LOG`). `vi_per_run = TANK_VOL × r` là hằng số mỗi lần chạy mission, không phụ thuộc speed hay dist.
 
 ---
 
@@ -255,13 +257,14 @@ update() [10 Hz — ArduPilot scheduler]
 
 ---
 
-**`_mission_started_wp1() → bool`** — mới, 2026-09-04
-- **File:** `AP_ShoesAgtech.cpp : ~1184`
-- **Được gọi bởi:** `update()` case 1/case 2 (nấc 2/3, chỉ khi `SA_FLOW_MODE=1`), điều kiện thực tế tại call site là `SA_FLOW_VEL.get() <= 0 && !_mission_started_wp1()` (xem ghi chú bypass bên dưới)
-- **Xử lý:** `true` nếu có mission, `mission->state() == MISSION_RUNNING`, và `mission->get_current_nav_index() >= 1` (đã bỏ qua HOME ở index 0, đang thực sự navigate tới WP1 trở đi)
-- **Đầu ra / Return:** `bool`
-- **Lý do:** Trước đây bơm bật ngay khi vừa ARM (nếu nấc 2/3 + mission hợp lệ), kể cả khi xe còn đứng ở HOME chưa bắt đầu chạy — vì `_get_dosing_ref_speed()` ưu tiên tốc độ **ĐẶT** (`_target_speed`/WP_SPEED) thay vì tốc độ thực, nên `speed_ms` có thể >0 dù xe chưa nhúc nhích. Dùng hàm này để chỉ thực sự ghi PWM ra bơm sau khi mission đã chạy tới WP1 — `_flow_target` vẫn tính và hiện trong log bình thường bất kể kết quả hàm này.
-- **⚠️ Bypass khi hiệu chỉnh (2026-09-04):** `mission->state()` chỉ RUNNING khi đang ở mode AUTO — nếu ARM ở mode khác (Manual/Hold) để hiệu chỉnh bằng `SA_FLOW_VEL` lúc xe đứng yên, hàm này luôn `false`. Do đó call site bỏ qua hẳn kết quả hàm này khi `SA_FLOW_VEL > 0`, để bơm vẫn chạy thật phục vụ hiệu chỉnh mà không cần vào AUTO.
+**`_speed_min_start() → float`** — mới, 2026-09-04 (thay thế `_mission_started_wp1()` cùng ngày)
+- **File:** `AP_ShoesAgtech.cpp : ~1235`
+- **Được gọi bởi:** `update()` case 1/case 2 (nấc 2/3, chỉ khi `SA_FLOW_MODE=1`) và `_update_dosing_motor()` (Module 3, `DOS_MODE=2`) — **DÙNG CHUNG cho cả 2 module**
+- **Xử lý:** `SA_SPD_START <= 0` → trả `0.05` (tắt hẳn kiểm tra %, chỉ còn sàn tuyệt đối); ngược lại → `max(0.05, (SA_SPD_START/100) × _target_speed)`
+- **Đầu ra / Return:** `float` — ngưỡng tốc độ tối thiểu (m/s)
+- **Cách dùng ở Module 1:** điều kiện tại case 1/2 là `_get_dosing_ref_speed() < _speed_min_start()` → bơm bị ép về PWM MIN, PI + ramp reset — `_flow_target` vẫn tính và hiện trong log bình thường bất kể gate này.
+- **Lý do đổi từ gate WP1 sang gate tốc độ %:** `_mission_started_wp1()` (bản cũ cùng ngày, đã gỡ bỏ) chỉ đúng khi xe đang chạy AUTO thật (`mission.start_or_resume()` chỉ gọi trong `ModeAuto::update()`), nên ARM ở mode khác (Manual/Hold) phải thêm hẳn 1 lớp bypass `SA_FLOW_VEL>0` riêng mới hiệu chỉnh được lúc đứng yên. Gate tốc độ % không cần bypass: `SA_FLOW_VEL` đã tự nằm trong `_get_dosing_ref_speed()` (ưu tiên cao nhất) nên đặt đủ lớn là tự qua ngưỡng — đồng thời hoạt động đúng ở MỌI mode lái, không riêng AUTO, và tái sử dụng đúng tham số `SA_SPD_START` đã có sẵn ở Module 3 (không tốn slot AP_Param mới).
+- **⚠️ Dùng chung tham số:** đổi `SA_SPD_START` ảnh hưởng ngưỡng bắt đầu chạy của CẢ bơm (Module 1) lẫn motor cho ăn DOS_MODE=2 (Module 3) cùng lúc.
 
 ---
 
@@ -303,6 +306,7 @@ update() [10 Hz — ArduPilot scheduler]
 | `SA_MIX_STD` | 37 | Float | 0.35 | 0.001 | 1.0 | Tỉ lệ vi sinh nấc giữa (Mặc định van). FLOW_MODE=1: `q1 = TANK_VOL × MIX_STD × speed × 60 / dist`. FLOW_MODE=0: setpoint = SA_FLOW_SP. |
 | `SA_MIX_CNT` | 38 | Float | 0.50 | 0.001 | 1.0 | Tỉ lệ vi sinh nấc cao (Chống nghẹt van). FLOW_MODE=1: `q1 = TANK_VOL × MIX_CNT × speed × 60 / dist`. FLOW_MODE=0: `flow_target = SA_FLOW_SP × (MIX_CNT/MIX_STD)`. |
 | `SA_FLOW_VEL` | 39 | Float | 0.0 | 0 | 20 | Override vận tốc cho FLOW_MODE=1. `=0`: dùng vận tốc thật từ AHRS. `>0`: dùng giá trị này (m/s) — dùng khi calib đứng yên. |
+| `SA_SPD_START` | 19 | Int8 | 80 | 0 | 100 | % tốc độ ĐẶT cho mission tối thiểu để bắt đầu bơm thật (FLOW_MODE=1, nấc 2/3) — xem `_speed_min_start()`. **Slot 19, khai báo trong Module 3, DÙNG CHUNG với `SA_DOS_MODE=2`** (đổi giá trị này ảnh hưởng cả 2 module). `=0` tắt kiểm tra %, chỉ còn sàn 0.05 m/s. Đổi tên từ `SA_DOS_SPD_PCT` 2026-09-04. |
 
 > **Param chỉ có hiệu lực sau reboot:** `SA_FLOW_PIN`
 >
@@ -377,7 +381,8 @@ SA_FLOW_MODE=1 và SA_TANK_VOL>0:
 Đầu vào: r = tỉ lệ vi sinh (MIX_STD hoặc MIX_CNT, clamp 0.01–1.0)
 
 1. dist = _get_mission_dist()
-   dist ≤ 1m → reset PI, cảnh báo "chua co mission - bom dung", return 0
+   dist ≤ 1m → reset PI, cảnh báo 1 lần/ARM (cờ _no_mission_warned)
+   "no mission - pump stopped", return 0
 
 2. speed = _get_dosing_ref_speed()   [tốc độ ĐẶT WP_SPEED, KHÔNG phải GPS
    tức thời — xem 1.2 và ghi chú "Nguồn tốc độ" bên dưới]
@@ -386,22 +391,24 @@ SA_FLOW_MODE=1 và SA_TANK_VOL>0:
 3. q1 = TANK_VOL × r × speed × 60 / dist   (L/min)
    — phân phối đều TANK_VOL×r lít trên mission_dist mét —
 
-4. q1 < 0.9 → reset PI, cảnh báo (1 lần/ARM, cờ _q1_range_warned) "shorten
-   mission or increase speed (pump range)", return 0
-   q1 > 1.2 → reset PI, cảnh báo (1 lần/ARM, cùng cờ) "lengthen mission or
-   reduce speed (pump range)", return 0
-   (0.9-1.2 = dải lưu lượng THẬT bơm hiện tại đạt được, hardcode theo phần
-   cứng — đo thực tế 2026-08-20, thay cho ngưỡng nghiệp vụ 0.3/2.0 cũ đã
-   gỡ bỏ trước đó)
+4. return constrain(q1, 0.0, 200.0)
+   → LUÔN trả về q1 thật, kể cả khi ngoài dải bơm 0.8-1.3 (2026-09-04,
+     xem ghi chú "Dải q1" bên dưới) — hàm này không còn tự ép về 0 hay
+     tự in cảnh báo cho trường hợp ngoài dải nữa. (cận 200 chỉ là chặn an
+     toàn tuyệt đối, không phải ngưỡng nghiệp vụ)
 
-5. return constrain(q1, 0.0, 200.0)
-   → đây là setpoint cho _run_flow_pid() (cận 200 chỉ là chặn an toàn tuyệt
-     đối, không phải ngưỡng nghiệp vụ)
+Kiểm tra dải bơm 0.8-1.3 CHUYỂN SANG caller (case 1/2 trong update(),
+xem mục 1.1/3.2 switch(_spray_mode)):
+   flow_target = _compute_visin_target(r)          // q1 thật, có thể ngoài dải
+   if flow_target < 0.8 || flow_target > 1.3:
+       _flow_out_of_range = true                    // chỉ để thêm hậu tố log
+       reset PID + ramp, ghi PWM = SERVO_MIN         // bơm KHÔNG chạy
+       flow_target GIỮ NGUYÊN (không ép về 0)        // log vẫn hiện đúng số
 
 Tính sẵn cho thông tin (không dùng trong PID):
    vi_per_run = TANK_VOL × r   (lít mỗi lần chạy mission — luôn cố định)
-   dist_max = TANK_VOL × r × speed × 60 / 0.9   (m — khoảng tối đa trước khi q1 < 0.9)
-   dist_min = TANK_VOL × r × speed × 60 / 1.2   (m — khoảng tối thiểu trước khi q1 > 1.2)
+   dist_max = TANK_VOL × r × speed × 60 / 0.8   (m — khoảng tối đa trước khi q1 < 0.8)
+   dist_min = TANK_VOL × r × speed × 60 / 1.3   (m — khoảng tối thiểu trước khi q1 > 1.3)
 ```
 
 > **Nguồn tốc độ (từ 2026-08-19):** `speed` ở bước 2 lấy từ
@@ -415,17 +422,25 @@ Tính sẵn cho thông tin (không dùng trong PID):
 > viên chủ động đổi tốc độ mission. `SA_SIM`/`SA_FLOW_VEL` vẫn ưu tiên như
 > cũ (không đổi) để hiệu chỉnh/test khi xe đứng yên.
 
-> **Dải q1 [0.9, 1.2] — dải lưu lượng THẬT bơm đạt được (từ 2026-08-20):**
-> trước đây ngưỡng sàn/trần là `0.3`/`2.0` (ngưỡng nghiệp vụ, sau đó bỏ hẳn
-> trần). Đo thực tế trên bơm hiện tại cho thấy **toàn bộ dải PWM MIN→MAX
-> chỉ tạo ra được lưu lượng thật từ 0.9 đến 1.2 L/min** — ngoài dải này PID
-> chỉ kẹt ở PWM MIN/MAX, cho ra đúng 0.9 hoặc 1.2 thật chứ không đạt được
-> con số `q1` yêu cầu. Vì vậy đổi hẳn ngưỡng sàn/trần thành `0.9`/`1.2`,
-> hardcode thẳng trong code (không phải tham số — đặc tính riêng của bơm
-> đang lắp, đổi bơm khác thì sửa lại 2 số này trong `_compute_visin_target()`
-> và `_print_fm1_arm_status()`). Cảnh báo dải này dùng cờ `_q1_range_warned`
-> riêng — chỉ in **1 lần mỗi phiên ARM**, KHÔNG lặp lại mỗi 5s như cảnh báo
-> "no mission" (vẫn dùng `_tank_warn_ms` như cũ).
+> **Dải q1 [0.8, 1.3] — dải lưu lượng THẬT bơm đạt được (từ 2026-08-20,
+> chỉnh lại 2026-09-04):** trước đây ngưỡng sàn/trần là `0.3`/`2.0` (ngưỡng
+> nghiệp vụ, sau đó bỏ hẳn trần), rồi `0.9`/`1.2` (đo thực tế lần đầu). Đo
+> lại/hiệu chỉnh thêm cho thấy dải thực tế rộng hơn một chút: **0.8 đến
+> 1.3 L/min** — ngoài dải này PID chỉ kẹt ở PWM MIN/MAX, cho ra đúng 0.8
+> hoặc 1.3 thật chứ không đạt được con số `q1` yêu cầu, nên bơm bị tắt
+> (`_flow_out_of_range=true`), hardcode thẳng trong code (không phải tham
+> số — đặc tính riêng của bơm đang lắp, đổi bơm khác thì sửa lại 2 số này
+> trong `_compute_visin_target()`).
+>
+> **⚠️ Đổi cách báo (2026-09-04):** trước đây dùng cờ `_q1_range_warned`,
+> in đúng 1 WARNING lúc ARM rồi im lặng, đồng thời ép `_flow_target` về 0
+> trong log định kỳ (không hiện được q1 thật). Giờ bỏ hẳn WARNING riêng và
+> việc ép về 0 — `_flow_target` LUÔN hiện q1 thật trong log định kỳ (xem
+> `SA_FLOW_LOG`), chỉ thêm hậu tố `" - out range"` vào cuối dòng khi
+> `_flow_out_of_range=true`. Cảnh báo "no mission" (dist≤1m) vẫn còn,
+> nhưng cũng đổi từ lặp mỗi 5s (`_tank_warn_ms`, đã bỏ) sang 1 lần/phiên
+> ARM (`_no_mission_warned`) — vì đây là 2 trường hợp khác nhau (chưa có
+> mission/tốc độ vs. có mission nhưng q1 tính ra ngoài dải bơm).
 
 **Reset khi DISARM (inline trong update(), đầu vòng lặp):**
 ```
@@ -434,43 +449,44 @@ if (!hal.util->get_soft_armed()) {
     _mission_dist_m      = 0.0
     _tank_empty_detected = false
     _tank_empty_ms       = 0
-    _q1_range_warned     = false
+    _no_mission_warned   = false
     _flow_ramp_val       = 0.0    // reset ramp — lần ARM sau lại bắt đầu từ 0
     // + reset toàn bộ trạng thái đọc cảm biến lưu lượng (xem mục 8)
 }
 ```
 
-**Bật bơm thật chỉ sau khi mission đã tới WP1 — `_mission_started_wp1()` (mới, 2026-09-04):**
+**Bật bơm thật chỉ sau khi đạt đủ % tốc độ ĐẶT — `_speed_min_start()`
+(2026-09-04, thay cho gate WP1 cũ cùng ngày):**
 ```
-_mission_started_wp1():
-    mission = AP::mission()
-    return mission != null
-        && mission->state() == MISSION_RUNNING
-        && mission->get_current_nav_index() >= 1
+_speed_min_start():
+    spd_pct_raw = SA_SPD_START
+    if spd_pct_raw <= 0: return 0.05             // tắt hẳn kiểm tra %
+    spd_pct = constrain(spd_pct_raw, 1, 100)
+    return max(0.05, (spd_pct/100) × _target_speed)
 ```
-Lý do cần hàm này: command index 0 của mission luôn là HOME (xem
-`_get_mission_dist()` — bug đã sửa cùng ngày), nên `get_current_nav_index()`
-trả về 0 nghĩa là xe **chưa thực sự bắt đầu chạy tới WP1** (mới vừa ARM,
-còn ở HOME, hoặc mission chưa RUNNING). `mission->state()` chỉ chuyển
-sang `MISSION_RUNNING` khi vào mode AUTO (`mission.start_or_resume()` chỉ
-được gọi trong `ModeAuto::update()`, xem `mode_auto.cpp:80`) — ARM ở mode
-khác (Manual/Hold...) thì mission KHÔNG RUNNING dù đã upload mission.
+Điều kiện tại case 1/2: `_get_dosing_ref_speed() < _speed_min_start()` →
+bơm bị ép về PWM MIN (tắt hẳn), PI + ramp reset — **nhưng `_flow_target`
+vẫn được tính và hiện đầy đủ trong log như bình thường** (không ẩn đi),
+chỉ có việc ghi PWM ra bơm thật là bị gate lại.
 
-Ở FLOW_MODE=1 (nấc 2/3), nếu điều kiện này chưa đúng: bơm bị ép về PWM
-MIN (tắt hẳn), PI reset — **nhưng `_flow_target` vẫn được tính và hiện
-đầy đủ trong log như bình thường** (không ẩn đi), chỉ có việc ghi PWM ra
-bơm thật là bị gate lại.
+**Dùng CHUNG tham số `SA_SPD_START` với Module 3** (không còn slot
+AP_Param trống để thêm tham số riêng cho Module 1 — xem mục 2): đổi
+`SA_SPD_START` sẽ ảnh hưởng ngưỡng bắt đầu chạy của **cả bơm (Module 1)
+lẫn motor cho ăn DOS_MODE=2 (Module 3)** cùng lúc. `_speed_min_start()`
+là hàm dùng chung, gọi từ cả 2 module.
 
-**Bỏ qua gate khi đang hiệu chỉnh — `SA_FLOW_VEL > 0` (mới, 2026-09-04):**
-Điều kiện thực tế ở case 1/2 là `SA_FLOW_VEL.get() <= 0 && !_mission_started_wp1()`
-— nghĩa là khi `SA_FLOW_VEL > 0` (kỹ thuật viên đang chủ động đặt tốc độ
-giả để hiệu chỉnh công thức lúc xe đứng yên/không chạy AUTO), gate WP1 bị
-bỏ qua hoàn toàn, bơm chạy thật ngay khi q1 hợp lệ — giống cách
-`SA_FLOW_VEL` đã ưu tiên hơn tốc độ thật trong `_get_dosing_ref_speed()`.
-Khi `SA_FLOW_VEL=0` (vận hành thực tế bình thường), gate WP1 hoạt động
-đầy đủ như mô tả ở trên.
+**Vì sao thay gate WP1 bằng gate tốc độ:** Gate cũ (`_mission_started_wp1()`,
+kiểm tra `mission->state()==MISSION_RUNNING && get_current_nav_index()>=1`)
+chỉ đúng khi xe đang chạy AUTO thật (`mission.start_or_resume()` chỉ được
+gọi trong `ModeAuto::update()`) — ARM ở mode khác (Manual/Hold) thì mission
+không RUNNING dù xe có thể đang di chuyển, khiến phải thêm hẳn 1 lớp bypass
+`SA_FLOW_VEL>0` riêng để vẫn hiệu chỉnh được lúc đứng yên ngoài AUTO. Gate
+tốc độ % đơn giản hơn: `SA_FLOW_VEL` đã tự nằm trong `_get_dosing_ref_speed()`
+(ưu tiên cao nhất), nên đặt `SA_FLOW_VEL` đủ lớn khi hiệu chỉnh là tự qua
+được ngưỡng, KHÔNG cần bypass riêng nữa — đồng thời áp dụng được cho mọi
+mode lái (không chỉ AUTO), giống hệt cách Module 3 đã dùng cho DOS_MODE=2.
 
-**Ramp lên setpoint từ từ khi bắt đầu bơm (mới, 2026-09-04):**
+**Ramp lên setpoint từ từ khi bắt đầu bơm (2026-09-04):**
 ```
 _flow_ramp_val = min(_flow_ramp_val + 0.3 × dt_pid, _flow_target)   (L/min, +0.3 L/min mỗi giây)
 _run_flow_pid(_flow_ramp_val, dt_pid)     // PID bám theo giá trị ramp, KHÔNG phải _flow_target thẳng
@@ -481,10 +497,10 @@ nguyên nhân vật lý (bồn cao hơn bơm, không van một chiều) gây tr�
 lúc mới mồi xảy ra bất kể setpoint đến từ đâu (cố định `SA_FLOW_SP` hay
 tính theo mission). `_flow_ramp_val` được reset về 0 ở 3 chỗ để lần bật
 bơm kế tiếp luôn ramp lại từ đầu: disarm, mode 0 (passthrough — mỗi lần
-gạt về nấc 1), và (chỉ FLOW_MODE=1) khi `_mission_started_wp1()` còn
-false hoặc `_flow_target < 0.01`. Khi `_mission_started_wp1()` chuyển từ
-false→true (hoặc ngay khi vào FLOW_MODE=0), `_flow_ramp_val` bắt đầu từ 0
-và tăng dần 0.3 L/min mỗi giây cho tới khi bằng `_flow_target`, thay vì
+gạt về nấc 1), và (chỉ FLOW_MODE=1) khi gate tốc độ ở trên chưa đạt hoặc
+`_flow_target < 0.01`. Khi gate tốc độ chuyển từ chưa đạt→đạt (hoặc ngay
+khi vào FLOW_MODE=0), `_flow_ramp_val` bắt đầu từ 0 và tăng dần 0.3 L/min
+mỗi giây cho tới khi bằng `_flow_target`, thay vì
 PID nhận error đầy đủ ngay lập tức. Hằng số 0.3 L/min/s hardcode trực tiếp
 trong code (không phải tham số — không còn slot AP_Param trống, xem mục
 2), chọn sao cho đạt đủ 1.0 L/min trong ~3-4 giây.
@@ -565,23 +581,28 @@ Format string: "Qff"
 ```
 Trigger: mỗi SA_FLOW_LOG_MS ms khi SA_FLOW_LOG=1
 
-    [FLOW] FM<x> N<nấc> Q: <target>
+    [FLOW] FM<x> N<nấc> Q: <target>[ - out range]
 
 FM<x>    = SA_FLOW_MODE hiện tại (0 hoặc 1) — cách tính setpoint đang dùng
 N<nấc>   = _spray_mode + 1 (1/2/3 — khớp đúng vị trí gạt nấc RC vật lý)
 <target> = _flow_target:
              nấc 1 (manual/passthrough)      → luôn 0.00
              nấc 2/3 + SA_FLOW_MODE=0 (FM0)  → số CỐ ĐỊNH (SA_FLOW_SP hoặc SA_FLOW_SP×ratio)
-             nấc 2/3 + SA_FLOW_MODE=1 (FM1)  → số DAO ĐỘNG (q1 tính theo tank+mission+speed)
+             nấc 2/3 + SA_FLOW_MODE=1 (FM1)  → q1 THẬT đã tính (tank+mission+speed) — LUÔN
+                                                hiện đúng số, kể cả khi ngoài dải bơm 0.8-1.3
+                                                hoặc chưa đạt SA_SPD_START (2026-09-04, không
+                                                còn ép về 0.00 như trước)
+" - out range" = thêm vào cuối khi _flow_out_of_range=true (q1 ngoài dải 0.8-1.3, FM1 only)
 
 SA_SIM=1: tiền tố [SIM][FLOW] thay vì [FLOW]
 ```
 
 Ví dụ:
 ```
-[FLOW] FM0 N1 Q: 0.00      (nấc 1 manual — FM hiện đúng giá trị tham số dù nấc 1 không dùng đến)
-[FLOW] FM0 N2 Q: 1.50      (nấc 2, FLOW_MODE=0, setpoint cố định 1.5 L/min)
-[FLOW] FM1 N3 Q: 1.08      (nấc 3, FLOW_MODE=1, q1 tính động — số này đổi theo tốc độ/mission)
+[FLOW] FM0 N1 Q: 0.00                 (nấc 1 manual — FM hiện đúng giá trị tham số dù nấc 1 không dùng đến)
+[FLOW] FM0 N2 Q: 1.50                 (nấc 2, FLOW_MODE=0, setpoint cố định 1.5 L/min)
+[FLOW] FM1 N3 Q: 1.08                 (nấc 3, FLOW_MODE=1, q1 tính động, trong dải — bơm chạy bình thường)
+[FLOW] FM1 N2 Q: 1.45 - out range     (nấc 2, FLOW_MODE=1, q1=1.45 > 1.3 — bơm TẮT, nhưng vẫn hiện đúng q1 thật)
 ```
 
 ### 4.4 STATUSTEXT — Toàn bộ thông báo
@@ -595,9 +616,9 @@ Ví dụ:
 |---|---|---|---|
 | `ShoesAgtech: IRQ attach failed` | CRITICAL | GPIO attach thất bại | 1 lần init |
 | `ShoesAgtech: Flow sensor ready` | INFO | GPIO attach thành công | 1 lần init |
-| `SA FM1: no mission - pump stopped` | WARNING | FLOW_MODE=1, dist ≤ 1m, đang chạy | Mỗi 5s |
-| `SA FM1: q1=X.XXL/min < 0.9 (pump range) - shorten mission or increase speed` | WARNING | FLOW_MODE=1, q1 < 0.9 (ngoài dải lưu lượng thật bơm đạt được) | **1 lần/phiên ARM** (cờ `_q1_range_warned`) |
-| `SA FM1: q1=X.XXL/min > 1.2 (pump range) - lengthen mission or reduce speed` | WARNING | FLOW_MODE=1, q1 > 1.2 | **1 lần/phiên ARM** (cờ `_q1_range_warned`, dùng chung với dòng trên) |
+| `SA FM1: no mission - pump stopped` | WARNING | FLOW_MODE=1, dist ≤ 1m, đang chạy | **1 lần/phiên ARM** (cờ `_no_mission_warned`, đổi từ mỗi 5s, 2026-09-04) |
+
+> **⚠️ 2 dòng WARNING đã gỡ bỏ (2026-09-04):** `SA FM1: q1=...L/min < 0.8 (pump range) - shorten mission or increase speed` và `... > 1.3 (pump range) - lengthen mission or reduce speed` — không còn in ra nữa. Thay vào đó, log định kỳ `[FLOW]` (mục 4.3) tự thêm hậu tố `" - out range"` vào cuối dòng khi q1 ngoài dải, đồng thời vẫn hiện đúng q1 thật thay vì `Q: 0.00` như trước.
 | `SA: TANK EMPTY - flow X.XL/min > 1.7 for 5s` | INFO | flow > 1.7 liên tục 5s, spray_mode 1/2, đang ARM | 1 lần/phiên ARM |
 
 **Đã gỡ bỏ hoàn toàn (2026-08-20) — không còn in nữa:**
@@ -612,8 +633,8 @@ Ví dụ:
 ```
 SERVOx_FUNCTION = 0     (x = SA_PUMP_CHAN)  → sai: KHÔNG block, KHÔNG còn cảnh báo (bỏ log 2026-08-20, tự kiểm tra cấu hình servo qua Mission Planner)
 SA_FLOW_PIN: chỉ áp dụng khi boot          → đổi giá trị cần reboot
-SA_FLOW_MODE=1 yêu cầu: SA_TANK_VOL > 0 + mission đã upload + speed ≥ 0.1 m/s + q1 trong [0.9, 1.2]
-                         (0.9/1.2 = dải lưu lượng THẬT bơm đạt được, hardcode theo phần cứng, 2026-08-20)
+SA_FLOW_MODE=1 yêu cầu: SA_TANK_VOL > 0 + mission đã upload + speed ≥ 0.1 m/s + q1 trong [0.8, 1.3]
+                         (0.8/1.3 = dải lưu lượng THẬT bơm đạt được, hardcode theo phần cứng, 2026-08-20, chỉnh lại 2026-09-04)
                          thiếu 1 trong các điều kiện trên → flow_target = 0 (bơm dừng)
 Tank-empty: chỉ cảnh báo, bơm vẫn tiếp tục — người lái tự quyết định
 ```
@@ -657,7 +678,12 @@ FC config:
 | FLOW_MODE=1 công thức | `q1 = r × APP_RATE × speed × BOOM_W × 0.006` + `dist_max = TANK_VOL × 10000 / (r × APP_RATE × BOOM_W)` | `q1 = TANK_VOL × r × speed × 60 / mission_dist` | SA_APP_RATE và SA_BOOM_W loại khỏi công thức; vi_per_run = TANK_VOL×r hằng số; dist_max theo tốc độ thực tế |
 | FLOW_MODE=1 dải q1 | q1 > 6.0 → dừng (giới hạn cảm biến YF-S402B) | q1 chỉ còn sàn dưới 0.3 (không còn trần trên) | Ban đầu áp trần 2.0 (YF-S402B chạy ổn nhất 0.3–2.0 L/min); từ 2026-08-19 bỏ hẳn trần trên theo yêu cầu — chấp nhận phun đậm đặc trên mission ngắn thay vì chặn bơm |
 | Dải q1, ngưỡng + tần suất cảnh báo (2026-08-20) | Không có (thừa kế ngưỡng 2026-08-19 ở trên) | Đổi hẳn sàn/trần thành `0.9`/`1.2` — **dải lưu lượng THẬT bơm hiện tại đạt được**, hardcode trong code (không phải tham số); cảnh báo runtime đổi từ lặp mỗi 5s sang **1 lần/phiên ARM** (cờ `_q1_range_warned`) | Đo thực tế phát hiện bơm chỉ đạt 0.9-1.2 L/min trên toàn dải PWM MIN→MAX — ngưỡng nghiệp vụ 0.3/2.0 cũ không còn phản ánh đúng khả năng phần cứng; cảnh báo lặp mỗi 5s không cần thiết vì nguyên nhân (giới hạn phần cứng) không tự hết theo thời gian |
-| Hết thùng vi sinh | Không có | Tank-empty detection: flow > 1.7 L/min liên tục 5s (tăng từ 3s ban đầu, 2026-08-19) → CRITICAL, bơm không dừng | Bơm hút không khí → bánh xe quay nhanh bất thường → cảnh báo người lái; tăng thời gian xác nhận để giảm báo động giả do dao động lưu lượng tức thời |
+| Dải q1 chỉnh lại (2026-09-04) | Không có (thừa kế `0.9`/`1.2` ở trên) | Đổi tiếp sàn/trần thành `0.8`/`1.3`, vẫn hardcode trong `_compute_visin_target()` | Đo/hiệu chỉnh thêm cho thấy dải lưu lượng thật rộng hơn ước tính ban đầu |
+| Gate bật bơm theo mission (WP1) + ramp khởi động (2026-09-04, sáng) | Không có | `_mission_started_wp1()`: chỉ ghi PWM ra bơm thật khi mission đã RUNNING và qua WP1 (bỏ qua HOME ở index 0); bơm bật thì ramp dần 0.3 L/min/s lên `_flow_target` thay vì nhảy thẳng. Bypass cả 2 khi `SA_FLOW_VEL>0` (đang hiệu chỉnh đứng yên) | Trước đây bơm chạy full ngay lúc ARM dù xe còn ở HOME (do tốc độ dùng là tốc độ ĐẶT, không phải tốc độ thật); PID nhận error đầy đủ ngay từ đầu dễ gây PWM nhảy vọt — kết hợp bồn cao hơn bơm/không van một chiều gây tràn lúc mới mồi |
+| Gate WP1 → gate tốc độ % (2026-09-04, cùng ngày thay lại) | Không có | Gỡ `_mission_started_wp1()`, thay bằng `_speed_min_start()`: bơm chạy khi `_get_dosing_ref_speed() >= _speed_min_start()`, dùng CHUNG tham số `SA_SPD_START` (đổi tên từ `SA_DOS_SPD_PCT`, mặc định 50→80) với `SA_DOS_MODE=2` bên Module 3. Bỏ hẳn lớp bypass `SA_FLOW_VEL>0` (không còn cần thiết) | Gate WP1 chỉ đúng khi xe đang chạy AUTO thật, ARM ở mode khác thì luôn `false` dù xe có thể đang di chuyển — phải vá thêm 1 lớp bypass riêng. Gate tốc độ % đơn giản hơn, đúng ở mọi mode lái, và tái sử dụng tham số có sẵn thay vì cần thêm/giữ slot riêng |
+| q1 ngoài dải bơm: không ép về 0 nữa (2026-09-04, cuối ngày) | Không có | `_compute_visin_target()` không còn tự return 0 + in WARNING khi q1 ngoài [0.8,1.3] — LUÔN trả q1 thật. Việc tắt bơm chuyển sang case 1/2 (`_flow_out_of_range`), log định kỳ vẫn hiện đúng q1 thật + thêm hậu tố `" - out range"`. Xóa hẳn 2 WARNING `q1=... (pump range) ...` và cờ `_q1_range_warned` | Trước đây log định kỳ hiện `Q: 0.00` khi ngoài dải, không phân biệt được với "chưa có mission"/"xe đứng yên" — kỹ thuật viên không thấy được q1 thật đã tính là bao nhiêu để biết cần chỉnh mission/tốc độ bao nhiêu cho vừa dải |
+| Bug quãng đường mission tính từ HOME (2026-09-04) | Không có | `_get_mission_dist()` duyệt từ index 1 thay vì index 0 | `AP_Mission::read_cmd_from_storage(0,...)` luôn trả về HOME, không phải WP1 — quãng đường bị cộng dư chặng "home→WP1" |
+| Hết thùng vi sinh | Không có | Tank-empty detection: flow > 1.7 L/min liên tục 5s (tăng từ 3s ban đầu, 2026-08-19) → INFO (hạ từ CRITICAL, 2026-09-04), bơm không dừng | Bơm hút không khí → bánh xe quay nhanh bất thường → thông báo cho người lái biết; hạ mức vì bơm vẫn tự chạy tiếp, không phải tình huống khẩn cấp cần can thiệp ngay; tăng thời gian xác nhận để giảm báo động giả do dao động lưu lượng tức thời |
 | ARM status (2026-05→08-19) | Không có | `_print_fm1_arm_status()` in 1 lần/ARM với q1 dự báo, thời gian, vi/run | Giúp người lái xác nhận hệ thống đúng trước khi chạy |
 | Nguồn tốc độ cho công thức FLOW_MODE=1 (2026-08-19) | Không có | Tách hàm riêng `_get_dosing_ref_speed()`: dùng tốc độ **ĐẶT** (`WP_SPEED`/`g2.wp_nav.get_speed_max()`) thay vì tốc độ GPS tức thời (`_get_spray_speed()`) | Tốc độ tức thời dao động theo cua/tăng giảm tốc khiến q1 (setpoint bơm) đổi liên tục → phun không đều dọc tuyến; tốc độ ĐẶT ổn định suốt đoạn mission, giống cách AUTO_SPD đã dùng |
 | Mission cache reset | Không đề cập | Reset `_mission_ncmds=0` khi disarm | Đảm bảo tính lại nếu thay đổi mission khi đất |

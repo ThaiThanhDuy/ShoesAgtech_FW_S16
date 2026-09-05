@@ -137,6 +137,7 @@ update() [Module 1, 10 Hz]
   3. Gọi `_check_dosing_config()` → nếu `!_dos_config_ok`: `_dos_pwm=1500`, return
   4. Đọc RC: `rc_pwm = RC_Channels::get_radio_in(SA_DOS_RC − 1)`
   5. `motor_on = (rc_pwm > 1500)` — mất tín hiệu (rc_pwm=0) → tắt an toàn
+  5b. **Chặn tự chạy lại sau reboot (mới, 2026-09-04):** nếu `_dos_rc_seen_off` còn `false` (chưa thấy switch ở OFF lần nào kể từ lúc boot) thì: `rc_pwm` trong khoảng `(0, 1500]` → set `_dos_rc_seen_off = true`; ngược lại (kể cả `rc_pwm > 1500`) → ép `motor_on = false`. `_dos_rc_seen_off` chỉ reset khi FC reboot (không reset khi disarm) — mục đích: nếu FC bị mất điện/reboot đột ngột (vd pin chập chờn) trong lúc switch `SA_DOS_RC` vẫn đang ở vị trí ON, motor sẽ KHÔNG tự chạy lại ngay khi có điện — phải gạt switch về OFF rồi bật lại ON mới chạy được, tránh cho ăn ngoài ý muốn khi không ai theo dõi lúc mất điện.
   6. Nếu state thay đổi → STATUSTEXT ON/OFF
   7. Nếu `!motor_on` → `_dos_pwm = 1500`; xuất; log; return
   8. **DOS_MODE=0 (PWM trực tiếp, mới 2026-08-20):** `dos_sp_active ≤ 0` → `_dos_pwm = 1500` (an toàn — tránh chạy full tốc nếu quên set); ngược lại `_dos_pwm = constrain(dos_sp_active, SERVOx_MIN, SERVOx_MAX)` — ghi thẳng, KHÔNG qua `SA_DOS_V`/`SA_DOS_Fx`/`SA_DOS_Dx`/`SA_DOS_REV`. Nhảy thẳng xuống bước 13 (bỏ qua 9-12).
@@ -146,8 +147,8 @@ update() [Module 1, 10 Hz]
   12. **DOS_MODE=2:**
       - `mission_dist = _get_mission_dist()`
       - `speed = _get_spray_speed()` — **từ bản này, dùng chung hàm với Module 1** (trước đây tự viết inline `SIM ? _sim_speed : groundspeed()`, thiếu lớp `SA_FLOW_VEL`; nay đủ 3 cấp: SIM > SA_FLOW_VEL > AHRS groundspeed)
-      - `SA_DOS_SPD_PCT=0` → `speed_min_start = 0.05 m/s` (tắt hẳn kiểm tra %, giống hành vi cũ). `SA_DOS_SPD_PCT>0` → `speed_min_start = max(0.05 m/s, (SA_DOS_SPD_PCT/100) × _target_speed)` — `_target_speed` = tốc độ ĐẶT cho mission (`WP_SPEED`, Rover.cpp bơm vào qua `set_target_speed()`, dùng chung với Module 1)
-      - Điều kiện: `dist > 1.0m && speed ≥ speed_min_start` (2026-08-19: không rải khi xe mới nhích/đang tăng tốc — mặc định phải đạt ≥50% (`SA_DOS_SPD_PCT` mặc định 50) tốc độ đặt mới bắt đầu rải, tránh dồn thức ăn vào đoạn xe đi chậm lúc bắt đầu/qua cua)
+      - `SA_SPD_START=0` → `speed_min_start = 0.05 m/s` (tắt hẳn kiểm tra %, giống hành vi cũ). `SA_SPD_START>0` → `speed_min_start = max(0.05 m/s, (SA_SPD_START/100) × _target_speed)` — `_target_speed` = tốc độ ĐẶT cho mission (`WP_SPEED`, Rover.cpp bơm vào qua `set_target_speed()`, dùng chung với Module 1)
+      - Điều kiện: `dist > 1.0m && speed ≥ speed_min_start` (2026-08-19: không rải khi xe mới nhích/đang tăng tốc — mặc định phải đạt ≥80% (`SA_SPD_START` mặc định 80) tốc độ đặt mới bắt đầu rải, tránh dồn thức ăn vào đoạn xe đi chậm lúc bắt đầu/qua cua)
       - Đủ: `dos_rate_gpm = dos_sp_active × speed × 60 / dist`; `offset_us = dos_rate_gpm × 50 / effective`
       - Không đủ: `dos_rate_gpm = 0`, `offset_us = 0` (pwm=1500) + STATUSTEXT mỗi 5s
   13. `_dos_pwm = _offset_to_dos_pwm(offset_us)` (áp dụng chiều quay SA_DOS_REV) — chỉ mode 1/2, mode 0 đã có `_dos_pwm` tuyệt đối từ bước 8
@@ -167,7 +168,7 @@ update() [Module 1, 10 Hz]
 | `SA_DOS_RC` | 26 | Int8 | 8 | 1 | 16 | Kênh RC bật/tắt motor. PWM>1500 → bật; ≤1500 hoặc =0 (mất tín hiệu) → tắt. |
 | `SA_DOS_SP` | 28 | Float | 0.0 | — | — | **Ý nghĩa đổi theo `SA_DOS_MODE`:** mode 0 = xung PWM (µs) ghi thẳng ra servo; mode 1 = tốc độ cố định (g/phút); mode 2 = tổng gam cho cả mission. Luôn theo **ao đang chọn** (`SA_POND_IDX`) — đổi ao nạp lại giá trị đã lưu của ao đó; sửa giá trị này lưu lại cho ao đang chọn. |
 | `SA_DOS_REV` | 29 | Int8 | 0 | 0 | 1 | Chiều quay: **0**=thuận (800–1500), **1**=ngược (1500–2200). Chỉ áp dụng mode 1/2 — mode 0 (PWM trực tiếp) không qua REV. |
-| `SA_DOS_SPD_PCT` | 19 | Int8 | 50 | 0 | 100 | **% tốc độ ĐẶT cho mission (`WP_SPEED`) tối thiểu để bắt đầu rải, DOS_MODE=2.** `0` = tắt hẳn kiểm tra này (quay về hành vi cũ: chỉ cần vượt sàn tuyệt đối 0.05 m/s là rải). Sàn 0.05 m/s luôn áp dụng dù giá trị này là bao nhiêu. Thêm 2026-08-19. |
+| `SA_SPD_START` | 19 | Int8 | 80 | 0 | 100 | **% tốc độ ĐẶT cho mission (`WP_SPEED`) tối thiểu để bắt đầu rải/bơm — DÙNG CHUNG DOS_MODE=2 (Module 3) và FLOW_MODE=1 (Module 1, xem MODULE1_FLOW_DETAIL_DESIGN.md).** `0` = tắt hẳn kiểm tra này (quay về hành vi cũ: chỉ cần vượt sàn tuyệt đối 0.05 m/s là chạy). Sàn 0.05 m/s luôn áp dụng dù giá trị này là bao nhiêu. Thêm 2026-08-19 (tên cũ `SA_DOS_SPD_PCT`, mặc định 50, chỉ Module 3); đổi tên + mặc định 80 + dùng chung Module 1, 2026-09-04. |
 | `SA_DOS_LOG` | 30 | Int8 | 0 | 0 | 1 | Bật (1) console log dosing motor theo chu kỳ `SA_DOS_LOG_MS`. |
 | `SA_DOS_LOG_MS` | 31 | Int16 | 1000 | 100 | 60000 | Chu kỳ console log dosing (ms). |
 | `SA_DOS_MODE` | 36 | Int8 | 0 | 0 | 2 | **0**=PWM trực tiếp (mới, 2026-08-20 — SA_DOS_SP là xung PWM, dùng để hiệu chuẩn tại bàn), **1**=tốc độ cố định (số cũ = 0), **2**=tỉ lệ theo vận tốc + mission (số cũ = 1). Mode 1/2 dùng chung `SA_DOS_Fx`/`SA_DOS_Dx`; mode 0 không dùng. |
@@ -329,10 +330,10 @@ Ví dụ: SP=500, V=100mL/50us, F1=1.0 (fill_k), D1=0.6g/mL
 speed_ms     = _get_spray_speed()   (dùng chung Module 1: SIM > SA_FLOW_VEL > AHRS groundspeed)
 mission_dist = _get_mission_dist()  (dùng chung Module 1, xem MODULE1_FLOW_DETAIL_DESIGN)
 
-SA_DOS_SPD_PCT == 0:
+SA_SPD_START == 0:
     speed_min_start = 0.05 m/s                        (tắt hẳn kiểm tra %, y hệt hành vi cũ)
-SA_DOS_SPD_PCT > 0 (mặc định 50):
-    speed_min_start = max(0.05 m/s, (SA_DOS_SPD_PCT/100) × _target_speed)
+SA_SPD_START > 0 (mặc định 80):
+    speed_min_start = max(0.05 m/s, (SA_SPD_START/100) × _target_speed)
     (_target_speed = tốc độ ĐẶT cho mission, WP_SPEED, dùng chung với Module 1 — xem set_target_speed())
 
 Điều kiện đủ: mission_dist > 1.0m AND speed_ms ≥ speed_min_start
@@ -345,12 +346,12 @@ Không đủ: offset_us = 0 → pwm = 1500 + warn mỗi 5s
 
 > **Ngưỡng bắt đầu rải (từ 2026-08-19):** trước đây chỉ cần `speed_ms ≥
 > 0.05m/s` (gần như bất kỳ chuyển động nào) là bắt đầu rải. Từ nay mặc định
-> phải đạt **≥ `SA_DOS_SPD_PCT`% tốc độ ĐẶT cho mission** (mặc định 50%)
+> phải đạt **≥ `SA_SPD_START`% tốc độ ĐẶT cho mission** (mặc định 80%)
 > mới bắt đầu — tránh rải dồn thức ăn vào đoạn xe còn đang tăng tốc từ lúc
 > dừng hoặc mới qua khúc cua (xe đi chậm ở đoạn đó lâu hơn nên nếu rải ngay
-> sẽ bị dồn liều). Đặt `SA_DOS_SPD_PCT=0` để tắt hẳn kiểm tra này, quay về
+> sẽ bị dồn liều). Đặt `SA_SPD_START=0` để tắt hẳn kiểm tra này, quay về
 > đúng hành vi cũ (chỉ cần vượt sàn tuyệt đối 0.05 m/s). Sàn 0.05 m/s luôn
-> áp dụng bất kể `SA_DOS_SPD_PCT`, kể cả khi `_target_speed` chưa có (vd
+> áp dụng bất kể `SA_SPD_START`, kể cả khi `_target_speed` chưa có (vd
 > chưa từng vào Auto). Vẫn dùng `speed_ms` (tốc độ GPS tức thời) cho công
 > thức `dos_gpm`, chỉ đổi NGƯỠNG bắt đầu, không đổi công thức tính tốc độ
 > rải.
@@ -458,34 +459,31 @@ N/A — Module 3 không ghi DataFlash riêng. Trạng thái theo dõi qua SA_DAT
 
 ### 4.3 Console Log
 
-Format khác nhau theo `SA_DOS_MODE` — vì ý nghĩa của `SA_DOS_SP` khác nhau giữa các mode (xem mục 3.5): mode 0 (PWM trực tiếp) không có khái niệm thức ăn/tốc độ, chỉ in PWM; mode 1 thì `SA_DOS_SP` CHÍNH LÀ tốc độ (g/phút) nên chỉ in `Rate`; mode 2 thì `SA_DOS_SP` là tổng gam cho cả mission, nên in thêm `Rate` (tốc độ tức thời suy ra từ speed/mission_dist hiện tại) bên cạnh `SP` (tổng).
+> **Rút gọn (2026-09-04):** đồng bộ theo đúng kiểu Module 1 — đúng 1 dòng
+> `[DOS] FM<x> Q:<y>` cho mọi `SA_DOS_MODE`, bỏ hẳn `SERVO<n>`/`ON-OFF`/
+> `PWM`/`F<food>`/`D:<density>`/`SP:<sp>` khỏi log định kỳ (vẫn xem đầy đủ
+> qua `SA_DATA` nếu cần). Format cũ (3 dòng khác nhau theo mode) xem lịch
+> sử ở mục 7.
 
 ```
 Trigger: mỗi SA_DOS_LOG_MS ms khi SA_DOS_LOG=1
 
-DOS_MODE=0:  [DOS] M0 SERVO<n> ON/OFF PWM:<pwm>
-DOS_MODE=1:  [DOS] M1 F<food> SERVO<n> ON/OFF Rate:<rate>g/ph D:<density>g/mL PWM:<pwm>
-DOS_MODE=2:  [DOS] M2 F<food> SERVO<n> ON/OFF SP:<sp>g Rate:<rate>g/ph D:<density>g/mL PWM:<pwm>
+[DOS] FM<x> Q:<y>
 
-<sp>   = tổng setpoint của ao đang active (dos_sp_active) — chỉ có ở mode 2
-<rate> = tốc độ cấp tức thời (g/phút): mode 1 = chính dos_sp_active;
-         mode 2 = dos_gpm tính từ dos_sp_active × speed × 60 / mission_dist (0 nếu chưa đủ điều kiện chạy)
-<food> = dos_food_active (mode 1/2 — mode 0 không có)
-```
-
-Ví dụ (DOS_MODE=0, SP=1300 → xuất thẳng PWM=1300):
-```
-[DOS] M0 SERVO10 ON PWM:1300
+<x> = SA_DOS_MODE hiện tại (0/1/2)
+<y> = dos_rate_gpm (g/phút):
+        mode 0 (PWM trực tiếp) — luôn 0.00, không có khái niệm tốc độ
+        mode 1 (tốc độ cố định) — chính dos_sp_active
+        mode 2 (tỉ lệ mission) — dos_sp_active × speed × 60 / mission_dist
+                                  (0 nếu chưa đủ điều kiện chạy: chưa đủ
+                                  quãng đường hoặc chưa đạt SA_SPD_START)
 ```
 
-Ví dụ (DOS_MODE=1, F1, D1=0.62, SP=500 → chạy liên tục 500g/ph):
+Ví dụ:
 ```
-[DOS] M1 F1 SERVO10 ON Rate:500g/ph D:0.62g/mL PWM:1083
-```
-
-Ví dụ (DOS_MODE=2, F1, D1=0.62, SP=3860g cho mission 301m @1.3m/s → tốc độ tức thời ≈1000g/ph):
-```
-[DOS] M2 F1 SERVO10 ON SP:3860g Rate:1000.27g/ph D:0.62g/mL PWM:1083
+[DOS] FM0 Q:0.00        (PWM trực tiếp, không có khái niệm lưu lượng)
+[DOS] FM1 Q:500.00      (tốc độ cố định, đặt 500 g/phút)
+[DOS] FM2 Q:1000.27     (tỉ lệ mission, tốc độ tức thời suy ra ≈1000 g/phút)
 ```
 
 ### 4.4 STATUSTEXT — Toàn bộ thông báo
@@ -506,7 +504,7 @@ Ví dụ (DOS_MODE=2, F1, D1=0.62, SP=3860g cho mission 301m @1.3m/s → tốc �
 | `SA: Dosing motor ON` | INFO | RC bật (edge rising) | 1 lần/lần bật |
 | `SA: Dosing motor OFF` | INFO | RC tắt (edge falling) | 1 lần/lần tắt |
 | `SA DOS2: no mission (dist=<x>m) - motor stopped` | WARNING | DOS_MODE=2, dist ≤ 1m (đổi tên từ "SA DOS1" 2026-08-20, khớp số mode mới) | Mỗi 5s |
-| `SA DOS2: speed too low (<x>m/s < <y>m/s min) - motor stopped` | WARNING | DOS_MODE=2, speed < max(0.05, `SA_DOS_SPD_PCT`% tốc độ đặt) — cập nhật 2026-08-19, trước đây ngưỡng cố định 0.05 | Mỗi 5s |
+| `SA DOS2: speed too low (<x>m/s < <y>m/s min) - motor stopped` | WARNING | DOS_MODE=2, speed < max(0.05, `SA_SPD_START`% tốc độ đặt) — cập nhật 2026-08-19, trước đây ngưỡng cố định 0.05 | Mỗi 5s |
 | `SA: SA_DOS_F<n>=<x> looks uncalibrated for new V x fill-factor formula (expected ~0.05-2.0)` | WARNING | `SA_DOS_Fx` của loại thức ăn active > 5.0 — nghi vẫn còn giá trị cũ (thang mL/50us, thường ~100) từ trước khi tách `SA_DOS_V × SA_DOS_Fx`, chưa được hiệu chuẩn lại (xem mục 2, 3.6) | Mỗi 5s |
 
 ---
@@ -519,8 +517,8 @@ SERVOx_MIN      = 800                      │  Sai bất kỳ 1 → KHÔNG ch�
 SERVOx_TRIM     = 1500                     │
 SERVOx_MAX      = 2200                     ┘
 
-SA_DOS_MODE=2: mission đã upload lên FC VÀ speed ≥ max(0.05m/s, SA_DOS_SPD_PCT% tốc độ đặt WP_SPEED)
-               (SA_DOS_SPD_PCT=0 → chỉ còn sàn 0.05m/s, y hệt hành vi cũ)
+SA_DOS_MODE=2: mission đã upload lên FC VÀ speed ≥ max(0.05m/s, SA_SPD_START% tốc độ đặt WP_SPEED)
+               (SA_SPD_START=0 → chỉ còn sàn 0.05m/s, y hệt hành vi cũ)
                thiếu 1 trong 2 → motor dừng (offset=0)
 
 SA_DOS_V  > 0.1            (firmware clamp, không crash) — mL/50us, DÙNG CHUNG mọi loại thức ăn, chỉ áp dụng mode 1/2
@@ -574,8 +572,11 @@ FC config (x = SA_DOS_CHAN):
 | Setpoint/loại thức ăn theo ao | Không có — 1 giá trị SA_DOS_SP/SA_DOS_FOOD chung toàn hệ thống | **Lưu riêng theo từng ao** (`PondEntry.dos_sp/.dos_food`), đồng bộ 2 chiều qua `_sync_dosing_setpoint()`, tồn tại qua reboot (SD) | Mỗi ao có thể cần lượng/loại thức ăn khác nhau; tránh phải nhập lại tay mỗi lần đổi ao |
 | SA_DATA index | data[12..15] | **data[15..18]** (dịch do Module 2 tăng từ 7 lên 10 field) | Module 2 (pond, ph_morn/aft/last_day) chiếm thêm chỗ trong mảng |
 | Console log | `F<n> SERVO<m> ON/OFF SP:<sp>g PWM:<pwm>` | Thêm `M<mode>` và `D:<density>g/mL`; SP hiển thị là setpoint của ao active | Người dùng thấy ngay khối lượng riêng và ao đang áp dụng |
-| Ngưỡng bắt đầu rải, DOS_MODE=2 (2026-08-19) | Ngưỡng cố định 0.05 m/s (gần như bất kỳ chuyển động nào) | `speed_min_start = max(0.05 m/s, (SA_DOS_SPD_PCT/100) × _target_speed)`, tham số `SA_DOS_SPD_PCT` (0–100, mặc định 50) — `=0` tắt hẳn kiểm tra %, về đúng hành vi cũ | Tránh rải dồn thức ăn vào đoạn xe còn đang tăng tốc từ lúc dừng/qua khúc cua, giống lý do đổi nguồn tốc độ ở Module 1; để dạng tham số vì mỗi xe/mission có thể cần ngưỡng khác nhau |
+| Ngưỡng bắt đầu rải, DOS_MODE=2 (2026-08-19) | Ngưỡng cố định 0.05 m/s (gần như bất kỳ chuyển động nào) | `speed_min_start = max(0.05 m/s, (SA_SPD_START/100) × _target_speed)`, tham số `SA_SPD_START` (0–100, mặc định 50) — `=0` tắt hẳn kiểm tra %, về đúng hành vi cũ | Tránh rải dồn thức ăn vào đoạn xe còn đang tăng tốc từ lúc dừng/qua khúc cua, giống lý do đổi nguồn tốc độ ở Module 1; để dạng tham số vì mỗi xe/mission có thể cần ngưỡng khác nhau |
 | Mode PWM trực tiếp + đổi số mode (2026-08-20) | Không có | Thêm `SA_DOS_MODE=0` (PWM trực tiếp — `SA_DOS_SP` xuất thẳng ra servo, bỏ qua V/Fx/Dx/REV); 2 mode cũ đẩy số lên 1 (tốc độ cố định, cũ=0) và 2 (tỉ lệ mission, cũ=1) | Hiệu chuẩn tại bàn (đo RPM/sản lượng ở PWM biết trước) không cần công cụ test servo riêng của GCS; tái sử dụng `SA_DOS_SP` thay vì thêm tham số mới (hết slot — xem mục 2) |
+| Chặn motor tự chạy lại sau reboot (2026-09-04) | Không có — motor chạy ngay theo vị trí RC hiện tại, không phân biệt vừa boot hay đang chạy sẵn | Thêm cờ `_dos_rc_seen_off`: sau mỗi lần FC reboot, motor bị ép OFF cho tới khi thấy `SA_DOS_RC` ở vị trí OFF ít nhất 1 lần, dù switch đang ở ON | Bug thật: pin chập chờn khiến FC brown-out/reboot trong lúc switch cho ăn đang ở ON → RC receiver (boot nhanh hơn FC) vẫn báo đúng vị trí ON → motor tự quay lại ngay khi có điện, không ai chủ động bật. Chọn hướng "gạt lại OFF→ON" thay vì bắt buộc ARM để vẫn test/xả thức ăn được lúc DISARM |
+| `SA_DOS_SPD_PCT` → `SA_SPD_START`, dùng chung Module 1 (2026-09-04) | Không có | Đổi tên tham số + mặc định `50`→`80`; Module 1 (FLOW_MODE=1, nấc 2/3) giờ dùng CHUNG tham số này để gate bơm bắt đầu chạy (thay cho gate WP1 cũ) qua hàm dùng chung `_speed_min_start()` | Không còn slot AP_Param trống để thêm tham số riêng cho Module 1; đổi tên bỏ tiền tố `DOS_` vì tham số không còn là của riêng Module 3 nữa — đổi `SA_SPD_START` giờ ảnh hưởng cả 2 module |
+| Rút gọn log console (2026-09-04) | Không có | Đổi từ 3 format khác nhau theo mode (`M0 SERVO/PWM`, `M1 F/SERVO/Rate/D/PWM`, `M2 F/SERVO/SP/Rate/D/PWM`) còn ĐÚNG 1 dòng `FM<x> Q:<y>` cho mọi mode — `x`=SA_DOS_MODE, `y`=dos_rate_gpm (0 ở mode 0) | Đồng bộ hình thức với log Module 1 (`[FLOW] FM<x> N<nấc> Q:<target>`) theo yêu cầu người dùng; chi tiết SERVO/PWM/mật độ/ao vẫn xem được qua `SA_DATA` khi cần |
 
 ---
 

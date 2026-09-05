@@ -118,13 +118,13 @@ Trạng thái motor gửi lên GCS
 
 ### Case 4: Nút RC bật — Chế độ 1 (phân bổ theo tuyến đường) — đủ điều kiện
 
-- **Điều kiện:** DOS_MODE=2 + đã upload tuyến đường + xe đã đạt ≥`SA_DOS_SPD_PCT`% tốc độ ĐẶT cho mission (mặc định 50%, xem Case 5)
+- **Điều kiện:** DOS_MODE=2 + đã upload tuyến đường + xe đã đạt ≥`SA_SPD_START`% tốc độ ĐẶT cho mission (mặc định 80%, xem Case 5)
 - **Hành vi hệ thống:** Motor thay đổi tốc độ theo tốc độ xe để phân bổ đều `SA_DOS_SP` gam trên toàn tuyến đường. Xe nhanh → quay nhanh hơn, xe chậm → quay chậm hơn
 - **Output người dùng thấy:** Motor quay nhanh/chậm theo xe; GCS hiển thị PWM thay đổi
 
 ### Case 5: Nút RC bật — Chế độ 1 — Chưa có tuyến đường hoặc xe chưa đủ tốc độ
 
-- **Điều kiện:** DOS_MODE=2 nhưng chưa upload tuyến đường lên FC, hoặc xe đứng yên/mới tăng tốc chưa đạt **`SA_DOS_SPD_PCT`% tốc độ ĐẶT cho mission** (mặc định 50%, `SA_DOS_SPD_PCT=0` tắt kiểm tra này; ngưỡng tối thiểu tuyệt đối 0.05 m/s luôn áp dụng — cập nhật 2026-08-19, trước đây chỉ cần xe nhích bánh là đủ)
+- **Điều kiện:** DOS_MODE=2 nhưng chưa upload tuyến đường lên FC, hoặc xe đứng yên/mới tăng tốc chưa đạt **`SA_SPD_START`% tốc độ ĐẶT cho mission** (mặc định 80%, `SA_SPD_START=0` tắt kiểm tra này; ngưỡng tối thiểu tuyệt đối 0.05 m/s luôn áp dụng — cập nhật 2026-08-19, trước đây chỉ cần xe nhích bánh là đủ)
 - **Hành vi hệ thống:** Motor DỪNG — không fallback sang tốc độ cố định; phát cảnh báo. Mục đích: tránh rải dồn thức ăn vào đoạn xe còn đang tăng tốc lúc bắt đầu chạy hoặc vừa qua khúc cua
 - **Output người dùng thấy:** Motor dừng; cảnh báo "no mission" hoặc "speed too low"
 

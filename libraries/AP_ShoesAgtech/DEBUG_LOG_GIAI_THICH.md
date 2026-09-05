@@ -37,10 +37,8 @@
 | `ShoesAgtech: IRQ attach failed`                                             | CRITICAL  | Không gắn được ngắt (interrupt) cho chân `SA_FLOW_PIN` — cảm biến flow sẽ không đếm xung được.                                                                                          |
 | `ShoesAgtech: Flow sensor ready`                                             | INFO      | Khởi tạo cảm biến flow (YF-S402B) thành công.                                                                                                                                           |
 | `SA: TANK EMPTY - flow %.1fL/min > 1.7 for 5s`                               | INFO      | Phát hiện hết vi sinh trong thùng: lưu lượng thực tế đo được > 1.7 L/ph liên tục 5 giây dù đang bơm — dấu hiệu bơm chạy không tải (thùng cạn). 1 lần/phiên ARM.                          |
-| `SA FM1: no mission - pump stopped`                                          | WARNING   | **`SA_FLOW_MODE=1`**: `mission_dist ≤ 1m` — chưa upload mission lên FC, hoặc mission không có ≥2 waypoint NAV hợp lệ (tọa độ khác 0,0). `flow_target=0`, bơm dừng. Lặp mỗi 5s.          |
-| `SA FM1: q1=<x>L/min < 0.9 (pump range) - shorten mission or increase speed` | WARNING   | q1 tính ra thấp hơn 0.9 L/ph — **dải lưu lượng THẬT bơm hiện tại đạt được** (đo thực tế, không phải ngưỡng nghiệp vụ), mission quá dài so với `SA_TANK_VOL × SA_MIX_STD × tốc độ`. Bơm dừng. **Chỉ in 1 lần/phiên ARM**, không lặp mỗi 5s. |
-| `SA FM1: q1=<x>L/min > 1.2 (pump range) - lengthen mission or reduce speed`  | WARNING   | q1 tính ra cao hơn 1.2 L/ph — vượt dải lưu lượng THẬT bơm đạt được, mission quá ngắn so với tank/tốc độ. Bơm dừng. **Chỉ in 1 lần/phiên ARM**, không lặp mỗi 5s.                          |
-| `%s FM<m> N<n> Q: <x>`                                                       | INFO      | Log định kỳ duy nhất (`SA_FLOW_LOG`): `%s`=`[FLOW]`/`[SIM][FLOW]`, `m`=`SA_FLOW_MODE` hiện tại (0/1), `n`=nấc gạt (spray_mode+1, 1/2/3), `<x>`=`_flow_target` — 0 ở nấc 1 (manual), số cố định ở `SA_FLOW_MODE=0`, số dao động ở `SA_FLOW_MODE=1`. |
+| `SA FM1: no mission - pump stopped`                                          | WARNING   | **`SA_FLOW_MODE=1`**: `mission_dist ≤ 1m` — chưa upload mission lên FC, hoặc mission không có ≥2 waypoint NAV hợp lệ (tọa độ khác 0,0). `flow_target=0`, bơm dừng. **Chỉ in 1 lần/phiên ARM** (cờ `_no_mission_warned`, đổi từ lặp mỗi 5s, 2026-09-04). |
+| `%s FM<m> N<n> Q: <x>[ - out range]`                                         | INFO      | Log định kỳ duy nhất (`SA_FLOW_LOG`): `%s`=`[FLOW]`/`[SIM][FLOW]`, `m`=`SA_FLOW_MODE` hiện tại (0/1), `n`=nấc gạt (spray_mode+1, 1/2/3), `<x>`=`_flow_target` — 0 ở nấc 1 (manual), số cố định ở `SA_FLOW_MODE=0`, **q1 THẬT đã tính ở `SA_FLOW_MODE=1`** (luôn hiện đúng số, kể cả ngoài dải bơm 0.8-1.3 hoặc chưa đạt `SA_SPD_START` — không còn ép về 0, 2026-09-04). Hậu tố `" - out range"` chỉ xuất hiện khi q1 (FM1) đang ngoài dải 0.8-1.3 — **thay thế hoàn toàn** 2 dòng WARNING `q1=... (pump range) ...` đã bị gỡ bỏ. |
 
 ---
 
@@ -81,10 +79,8 @@
 | `SA: SERVO<m> MAX=<x>, must set =2200`                                    | WARNING | Sai `SERVOx_MAX`.                                                                                              |
 | `SA: Dosing motor ON` / `OFF`                                             | INFO    | RC bật/tắt motor cho ăn thủ công.                                                                              |
 | `SA DOS2: no mission (dist=<x>m) - motor stopped`                         | WARNING | **`SA_DOS_MODE=2`**: chưa upload mission (tương tự lỗi FM1 ở Module 1) — motor dừng (PWM=1500). Lặp mỗi 5s.    |
-| `SA DOS2: speed too low (<x>m/s < <y>m/s min) - motor stopped`            | WARNING | **`SA_DOS_MODE=2`**: tốc độ chưa đạt `<y>` = max(0.05 m/s, `SA_DOS_SPD_PCT`% tốc độ ĐẶT cho mission, mặc định 50%) — motor chưa rải (tránh dồn liều lúc xe mới tăng tốc/qua cua). Đặt `SA_DOS_SPD_PCT=0` để tắt kiểm tra này, về hành vi cũ (chỉ cần vượt 0.05 m/s). Cập nhật 2026-08-19, trước đây ngưỡng cố định 0.05 m/s. Lặp mỗi 5s. |
-| `[DOS] M0 SERVO<c> <ON/OFF> PWM:<w>`                                      | INFO    | Log định kỳ `SA_DOS_MODE=0` (PWM trực tiếp, mới 2026-08-20): không có thức ăn/tốc độ, chỉ in PWM đang xuất — dùng khi hiệu chuẩn tại bàn. |
-| `[DOS] M1 F<n> SERVO<c> <ON/OFF> Rate:<x>g/min D:<y>g/mL PWM:<w>`         | INFO    | Log định kỳ `SA_DOS_MODE=1` (đổi số từ 0 cũ, 2026-08-20): F=loại thức ăn active, Rate=tốc độ cấp cố định (g/phút), D=tỷ trọng, PWM=xung ra. |
-| `[DOS] M2 F<n> SERVO<c> <ON/OFF> SP:<x>g Rate:<y>g/min D:<z>g/mL PWM:<w>` | INFO    | Log định kỳ `SA_DOS_MODE=2` (đổi số từ 1 cũ, 2026-08-20): SP=tổng gam cho cả mission, Rate=tốc độ tức thời suy ra từ speed/mission_dist.    |
+| `SA DOS2: speed too low (<x>m/s < <y>m/s min) - motor stopped`            | WARNING | **`SA_DOS_MODE=2`**: tốc độ chưa đạt `<y>` = max(0.05 m/s, `SA_SPD_START`% tốc độ ĐẶT cho mission, mặc định 80%) — motor chưa rải (tránh dồn liều lúc xe mới tăng tốc/qua cua). Đặt `SA_SPD_START=0` để tắt kiểm tra này, về hành vi cũ (chỉ cần vượt 0.05 m/s). Cập nhật 2026-08-19, trước đây ngưỡng cố định 0.05 m/s. Lặp mỗi 5s. |
+| `[DOS] FM<x> Q:<y>`                                                       | INFO    | Log định kỳ duy nhất (`SA_DOS_LOG`, rút gọn 2026-09-04 giống hệt kiểu Module 1): `x`=`SA_DOS_MODE` hiện tại (0/1/2), `y`=`dos_rate_gpm` (g/phút) — luôn 0.00 ở mode 0 (PWM trực tiếp, không có khái niệm tốc độ), bằng `SA_DOS_SP` ở mode 1 (tốc độ cố định), tính từ `SA_DOS_SP × speed × 60 / mission_dist` ở mode 2 (tỉ lệ mission). Đã bỏ `SERVO<c>`/`ON-OFF`/`PWM`/`F<food>`/`D:<density>`/`SP:<sp>` khỏi log định kỳ — xem `SA_DATA` nếu cần chi tiết. |
 | `SA: SA_DOS_F<n>=<x> looks uncalibrated for new V x fill-factor formula (expected ~0.05-2.0)` | WARNING | **Chỉ xuất hiện sau khi đổi công thức hiệu chuẩn (xem mục 6)**: `SA_DOS_Fx` đang lớn hơn 5.0 — nghi vẫn còn giá trị cũ (thang mL/50us, thường ~100) từ trước khi tách `SA_DOS_V x SA_DOS_Fx`, chưa được đo/hiệu chuẩn lại theo công thức mới. Nếu không sửa, lượng thức ăn cấp ra sẽ sai (thường là quá ít). Lặp mỗi 5s. |
 
 ---
@@ -155,14 +151,20 @@ này với độ dài mission hiện tại để biết cần kéo dài thêm ba
 - Nếu `SA_TANK_VOL = 0` (giá trị mặc định), code **không** vào công thức
   trên — setpoint sẽ fallback về `SA_FLOW_SP` (mặc định 5.0 L/ph), không
   bao giờ về 0 trong trường hợp đó.
-- **Hành vi hiện tại (từ 2026-08-20, thay cho mô tả 2026-08-19 ở trên):**
-  sau khi đo thực tế phát hiện bơm chỉ đạt lưu lượng thật 0.9–1.2 L/phút
-  trên toàn dải PWM MIN→MAX, đã **thêm lại** cả sàn và trần cho `q1`,
-  nhưng đổi số thành đúng dải phần cứng thật: `q1 < 0.9` hoặc `q1 > 1.2`
-  đều khiến bơm dừng (không phải ngưỡng nghiệp vụ 0.3/2.0 cũ). Khác biệt
-  quan trọng: cảnh báo này **chỉ in 1 lần mỗi phiên ARM** (cờ
-  `_q1_range_warned`), KHÔNG lặp lại mỗi 5s như cảnh báo "no mission". Xem
-  mục 2 và `MODULE1_FLOW_DETAIL_DESIGN.md` mục 3.5.
+- **Hành vi 2026-08-20 (đã đổi lại 2026-09-04, xem bên dưới):** sau khi đo
+  thực tế phát hiện bơm chỉ đạt lưu lượng thật 0.8–1.3 L/phút (chỉnh lại
+  2026-09-04, ban đầu đo 0.9–1.2) trên toàn dải PWM MIN→MAX, đã thêm cả
+  sàn và trần cho `q1`: `q1 < 0.8` hoặc `q1 > 1.3` đều khiến bơm dừng VÀ
+  `_flow_target` bị ép về 0 (log hiện `Q: 0.00`), kèm 1 WARNING riêng lúc
+  đó (`_q1_range_warned`, chỉ 1 lần/phiên ARM).
+- **Hành vi hiện tại (từ 2026-09-04, cuối ngày):** vẫn giữ nguyên dải
+  `[0.8, 1.3]` và việc bơm dừng khi ngoài dải, nhưng **bỏ hẳn WARNING
+  riêng và việc ép `_flow_target` về 0**. Log định kỳ `[FLOW]` giờ LUÔN
+  hiện đúng q1 thật đã tính (kể cả ngoài dải), chỉ thêm hậu tố
+  `" - out range"` vào cuối dòng khi đang ngoài dải — giúp kỹ thuật viên
+  thấy ngay cần chỉnh mission/tốc độ bao nhiêu, không phải chỉ thấy
+  `Q: 0.00` chung chung. Xem mục 2 và `MODULE1_FLOW_DETAIL_DESIGN.md` mục
+  3.5/4.3.
 - **Nguồn `speed` trong công thức đổi từ 2026-08-19:** trước đây `speed` là
   tốc độ GPS TỨC THỜI (`AP::ahrs().groundspeed()`), khiến `q1`/setpoint bơm
   dao động theo từng cú tăng/giảm tốc, vào cua — gây phun không đều dọc
@@ -266,16 +268,22 @@ những gì thật sự cần hành động. Bảng đầy đủ hiện tại xe
 
 **Đơn giản hoá log định kỳ (`SA_FLOW_LOG`):** từ 2 dòng
 (`M<n> Tgt/Act/Avg/PWM` + `FM1 r/q1/miss/dmax/spd/vi_run`) rút còn **đúng 1
-dòng**: `FM<m> N<n> Q: <target>` — `<m>` = `SA_FLOW_MODE` hiện tại (0/1,
-tách riêng 2026-09-04 vì ban đầu gộp chung với nấc gây nhầm lẫn), `<n>` =
-nấc gạt (spray_mode+1, hiển thị đúng 1/2/3 khớp vị trí gạt vật lý thay vì
-spray_mode nội bộ 0/1/2), `<target>` = `_flow_target` (0 ở manual, cố định
-ở FLOW_MODE=0, dao động ở FLOW_MODE=1).
+dòng**: `FM<m> N<n> Q: <target>[ - out range]` — `<m>` = `SA_FLOW_MODE`
+hiện tại (0/1, tách riêng 2026-09-04 vì ban đầu gộp chung với nấc gây
+nhầm lẫn), `<n>` = nấc gạt (spray_mode+1, hiển thị đúng 1/2/3 khớp vị trí
+gạt vật lý thay vì spray_mode nội bộ 0/1/2), `<target>` = `_flow_target`
+(0 ở manual, cố định ở FLOW_MODE=0, **q1 THẬT đã tính ở FLOW_MODE=1 —
+luôn hiện đúng số, kể cả ngoài dải bơm 0.8-1.3, không còn ép về 0 như
+trước 2026-09-04**), hậu tố `" - out range"` chỉ thêm khi q1 (FLOW_MODE=1)
+đang ngoài dải 0.8-1.3.
 
-**Vẫn giữ nguyên 3 cảnh báo có hành động cần làm:** `SA: TANK EMPTY`,
-`SA FM1: no mission`, `SA FM1: q1=... (pump range)` (2 chiều) — đây là các
-trường hợp người vận hành cần biết để xử lý, khác với các log đã xóa vốn
-chỉ mang tính thông tin/xác nhận.
+**Vẫn giữ nguyên 2 cảnh báo có hành động cần làm:** `SA: TANK EMPTY`,
+`SA FM1: no mission` — đây là các trường hợp người vận hành cần biết để
+xử lý, khác với các log đã xóa vốn chỉ mang tính thông tin/xác nhận.
+**Đã gỡ bỏ thêm (2026-09-04):** 2 WARNING `SA FM1: q1=... (pump range)`
+(cả 2 chiều) — thay bằng hậu tố `" - out range"` ngay trong log định kỳ ở
+trên, không cần WARNING riêng nữa vì log đã hiện đủ thông tin (q1 thật +
+trạng thái ngoài dải) mỗi chu kỳ thay vì chỉ 1 lần lúc phát hiện.
 
 ---
 

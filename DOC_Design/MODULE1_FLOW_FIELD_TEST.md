@@ -3,7 +3,7 @@
 **Dùng cho:** Người đánh giá vận hành / QA hiện trường (không cần biết kỹ thuật)
 **Mục đích module:** Tự động phun vi sinh xử lý nước ao, có 3 chế độ: điều khiển tay, tự động theo mức cố định, tự động theo mức cao (chống nghẹt).
 **Ngày viết:** 2026-08-10
-**Cập nhật:** 2026-08-15 — bổ sung chi tiết Đạt/Không đạt cho từng mục, thêm các tình huống thực tế khi dùng chế độ tự động theo công thức mission. | 2026-08-19 — gỡ bỏ giới hạn trần q1 (2.0 L/phút). | 2026-08-20 — thêm lại dải q1 [0.9, 1.2] theo đúng khả năng thật của bơm (đo thực tế), cảnh báo chỉ 1 lần/ARM; cập nhật lại tình huống 6.
+**Cập nhật:** 2026-08-15 — bổ sung chi tiết Đạt/Không đạt cho từng mục, thêm các tình huống thực tế khi dùng chế độ tự động theo công thức mission. | 2026-08-19 — gỡ bỏ giới hạn trần q1 (2.0 L/phút). | 2026-08-20 — thêm lại dải q1 [0.9, 1.2] theo đúng khả năng thật của bơm (đo thực tế), cảnh báo chỉ 1 lần/ARM; cập nhật lại tình huống 6. | 2026-09-04 — chỉnh lại dải q1 thành [0.8, 1.3] theo đo/hiệu chỉnh thêm; bỏ WARNING riêng khi q1 ngoài dải, thay bằng hậu tố "- out range" ngay trong log định kỳ (vẫn hiện đúng q1 thật, không còn ép về 0); cập nhật lại tình huống 6.
 
 > Trước khi đánh giá, đề nghị kỹ thuật viên cài đặt/hiệu chuẩn xong hệ thống theo đúng ao/mission dự kiến chạy, và **cho biết rõ đang dùng mức setpoint nào**:
 > - **Cố định** (kỹ thuật viên đặt sẵn 1 con số lưu lượng) — dùng cho tình huống 3, 4.
@@ -95,22 +95,24 @@ Module này điều khiển trực tiếp một cơ cấu vật lý (bơm/van vi
 
 ---
 
-### 6. Tự động theo công thức mission — mission quá ngắn/quá dài so với khả năng bơm thật ⚠️ (cập nhật 2026-08-20)
+### 6. Tự động theo công thức mission — mission quá ngắn/quá dài so với khả năng bơm thật ⚠️ (cập nhật 2026-09-04)
 
-> Đo thực tế cho thấy bơm hiện tại chỉ đạt lưu lượng thật **0.9–1.2 L/phút**
+> Đo thực tế cho thấy bơm hiện tại chỉ đạt lưu lượng thật **0.8–1.3 L/phút**
 > trên toàn dải PWM MIN→MAX — ngoài dải này bơm vật lý không thể đạt được
-> con số tính toán, nên hệ thống chủ động dừng bơm thay vì chạy sai. Cảnh
-> báo chỉ hiện **1 lần mỗi phiên ARM** (không lặp lại liên tục).
+> con số tính toán, nên hệ thống chủ động dừng bơm thay vì chạy sai. Từ
+> 2026-09-04, hệ thống **không còn báo WARNING riêng** cho trường hợp này
+> — thay vào đó, log định kỳ trên màn hình vẫn hiện đúng con số lưu lượng
+> đã tính (dù ngoài dải), kèm thêm chữ "- out range" ở cuối dòng.
 
-**Tình huống:** Dùng setpoint tự động theo công thức mission, upload một **mission rất ngắn** (vài chục mét) trong khi thùng vi sinh và tốc độ xe đang cài đặt cho tuyến dài hơn nhiều (khiến lưu lượng tính ra vượt quá 1.2 L/phút). Cho xe chạy AUTO theo mission ngắn này.
+**Tình huống:** Dùng setpoint tự động theo công thức mission, upload một **mission rất ngắn** (vài chục mét) trong khi thùng vi sinh và tốc độ xe đang cài đặt cho tuyến dài hơn nhiều (khiến lưu lượng tính ra vượt quá 1.3 L/phút). Cho xe chạy AUTO theo mission ngắn này, bật `SA_FLOW_LOG=1` để xem log định kỳ.
 
-**Quan sát:** Nhìn bơm và đọc dòng chữ xuất hiện trên màn hình điều khiển khi xe bắt đầu di chuyển.
+**Quan sát:** Nhìn bơm và đọc dòng log định kỳ dạng `[FLOW] FM1 N<nấc> Q: <số>` xuất hiện trên màn hình điều khiển khi xe bắt đầu di chuyển.
 
-**Kết quả ĐẠT:** Bơm đứng yên (không phun), màn hình hiện **đúng 1 lần** dòng cảnh báo dạng **"SA FM1: q1=...L/min > 1.2 (pump range) - lengthen mission or reduce speed"** — người vận hành biết ngay lý do và cách xử lý (kéo dài mission hoặc giảm tốc độ), không phải đoán mò.
+**Kết quả ĐẠT:** Bơm đứng yên (không phun), dòng log định kỳ vẫn hiện đúng con số lưu lượng đã tính được (ví dụ `Q: 1.45`, không phải `Q: 0.00`) và có thêm chữ **"- out range"** ở cuối dòng (ví dụ `[FLOW] FM1 N2 Q: 1.45 - out range`) — người vận hành thấy ngay con số thật đang vượt bao nhiêu để biết cần kéo dài mission hay giảm tốc độ bao nhiêu cho vừa, không phải đoán mò.
 
-**Kết quả KHÔNG ĐẠT:** Bơm vẫn phun vi sinh bất chấp mission quá ngắn (nguy cơ phun quá liều, vượt khả năng thật của bơm), HOẶC bơm đứng yên nhưng không có cảnh báo nào, HOẶC cảnh báo lặp lại liên tục thay vì chỉ 1 lần/phiên ARM.
+**Kết quả KHÔNG ĐẠT:** Bơm vẫn phun vi sinh bất chấp mission quá ngắn (nguy cơ phun quá liều, vượt khả năng thật của bơm), HOẶC log định kỳ hiện `Q: 0.00` thay vì con số thật, HOẶC không có chữ "- out range" khi lưu lượng tính ra thực sự đang ngoài dải 0.8-1.3.
 
-**Lưu ý cho người đánh giá:** Đây là giới hạn PHẦN CỨNG thật (bơm không thể vượt quá 1.2 L/phút dù PID cố gắng thế nào), không phải lỗi hệ thống — mục đích test là xác nhận cảnh báo xuất hiện đúng và chỉ đúng 1 lần, giúp kỹ thuật viên biết cần chỉnh lại mission/tốc độ thay vì để bơm chạy sai liều lượng trong im lặng.
+**Lưu ý cho người đánh giá:** Đây là giới hạn PHẦN CỨNG thật (bơm không thể vượt quá 1.3 L/phút dù PID cố gắng thế nào), không phải lỗi hệ thống — mục đích test là xác nhận bơm dừng đúng lúc VÀ log vẫn cho thấy con số thật + trạng thái ngoài dải, giúp kỹ thuật viên biết cần chỉnh lại mission/tốc độ bao nhiêu thay vì chỉ biết "có gì đó sai" mà không rõ lệch bao nhiêu.
 
 ☐ Đạt ☐ Không đạt
 
@@ -192,7 +194,7 @@ Module này điều khiển trực tiếp một cơ cấu vật lý (bơm/van vi
 | 3 | Tự động mức tiêu chuẩn (setpoint cố định) | ☐ | ☐ | | |
 | 4 | Tự động mức cao (setpoint cố định) | ☐ | ☐ | | |
 | 5 | Công thức mission — chưa có mission | ☐ | ☐ | | |
-| 6 | Công thức mission — mission ngoài dải bơm (0.9-1.2), cảnh báo 1 lần | ☐ | ☐ | | |
+| 6 | Công thức mission — mission ngoài dải bơm (0.8-1.3), cảnh báo 1 lần | ☐ | ☐ | | |
 | 7 | Phát hiện hết vi sinh trong thùng | ☐ | ☐ | | |
 | 8 | Đầu phun bị bịt tạm | ☐ | ☐ | | |
 | 9 | Mất tín hiệu tay cầm | ☐ | ☐ | | |
