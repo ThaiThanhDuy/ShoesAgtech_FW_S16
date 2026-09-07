@@ -3,6 +3,82 @@
 #include <AP_HAL/AP_HAL.h>
 #include <AP_Param/AP_Param.h>
 
+// =============================================================
+// Bảng tham số riêng theo module (2026-09-07) — mỗi class dưới đây có
+// var_info[] RIÊNG (64 slot riêng, độc lập với 2 class kia và với
+// AP_ShoesAgtech), đăng ký làm subgroup lồng bên trong AP_ShoesAgtech
+// (xem AP_SUBGROUPINFO trong AP_ShoesAgtech.cpp). Đây là cấp lồng CUỐI
+// CÙNG được AP_Param cho phép (18 bit group_element = 3 cấp x 6 bit,
+// AP_ShoesAgtech đã ở cấp 2 dưới Parameters->g2). Đăng ký với tiền tố
+// rỗng "" nên tên tham số hiển thị KHÔNG đổi (vẫn SA_FLOW_MODE,
+// SA_PH_EN... như cũ) — chỉ đổi VỊ TRÍ LƯU trên EEPROM, nên giá trị đã
+// cấu hình sẽ về lại mặc định sau khi flash (cần backup/restore file
+// .param, xem DOC_Design).
+// =============================================================
+
+class AP_ShoesAgtech_FlowParams {
+public:
+  static const AP_Param::GroupInfo var_info[];
+
+  AP_Float cal_factor;    // SA_CAL_FAC
+  AP_Float ema_alpha;     // SA_EMA_AL
+  AP_Int8  flow_log_enable; // SA_FLOW_LOG
+  AP_Int8  rc_chan;       // SA_RC_CHAN
+  AP_Int8  rc_pump;       // SA_RC_PUMP
+  AP_Int8  pump_chan;     // SA_PUMP_CHAN
+  AP_Float flow_setpoint; // SA_FLOW_SP
+  AP_Float pid_p;         // SA_PID_P
+  AP_Float pid_i;         // SA_PID_I
+  AP_Float pid_lpf;       // SA_PID_LPF
+  AP_Int16 flow_log_ms;   // SA_LOG_FL_MS
+  AP_Int16 flow_pin;      // SA_FLOW_PIN
+  AP_Float tank_vol;      // SA_TANK_VOL
+  AP_Int8  flow_mode;     // SA_FLOW_MODE
+  AP_Float mix_std;       // SA_MIX_STD
+  AP_Float mix_cnt;       // SA_MIX_CNT
+  AP_Float flow_vel;      // SA_FLOW_VEL
+};
+
+class AP_ShoesAgtech_PHParams {
+public:
+  static const AP_Param::GroupInfo var_info[];
+
+  AP_Int8  ph_en;         // SA_PH_EN
+  AP_Int8  ph_port;       // SA_PH_PORT
+  AP_Float ph_toff;       // SA_PH_TOFF
+  AP_Float ph_off;        // SA_PH_OFF
+  AP_Float ph_kh;         // SA_PH_KH
+  AP_Int8  ph_log_enable; // SA_PH_LOG
+  AP_Int8  ph_tz;         // SA_PH_TZ
+  AP_Int16 ph_log_ms;     // SA_PH_LOG_MS
+  AP_Int16 ph_timeout;    // SA_PH_TIMEOUT
+  AP_Float ph_ms;         // SA_PH_MS
+  AP_Float ph_me;         // SA_PH_ME
+  AP_Float ph_as;         // SA_PH_AS
+  AP_Float ph_ae;         // SA_PH_AE
+  AP_Float ph_pond_dist;  // SA_PH_POND_D
+  AP_Int16 ph_cap_s;      // SA_PH_CAP_S
+  AP_Int8  ph_cap_sam;    // SA_PH_CAP_SAM
+  AP_Int8  ph_cap_m;      // SA_PH_CAP_M
+};
+
+class AP_ShoesAgtech_DosingParams {
+public:
+  static const AP_Param::GroupInfo var_info[];
+
+  AP_Int8  dos_chan;      // SA_DOS_CHAN
+  AP_Int8  dos_rc;        // SA_DOS_RC
+  AP_Float dos_sp;        // SA_DOS_SP
+  AP_Int8  dos_rev;       // SA_DOS_REV
+  AP_Int8  dos_log_enable; // SA_DOS_LOG
+  AP_Int16 dos_log_ms;    // SA_DOS_LOG_MS
+  AP_Int8  dos_mode;      // SA_DOS_MODE
+  AP_Int8  dos_food;      // SA_DOS_FOOD
+  AP_Float dos_v;         // SA_DOS_V
+  AP_Float dos_fr[7];     // SA_DOS_F1..F7
+  AP_Float dos_dr[7];     // SA_DOS_D1..D7
+};
+
 class AP_ShoesAgtech {
 public:
   AP_ShoesAgtech();
@@ -43,7 +119,7 @@ public:
   float    get_alk_dkh(void)         const { return _alk_dkh; }
   float    get_alk_mgl(void)         const { return _alk_mgl; }
   float    get_delta_ph(void)        const { return _delta_ph; }
-  bool     ph_is_enabled(void)       const { return _ph_en.get() > 0; }
+  bool     ph_is_enabled(void)       const { return _ph_params.ph_en.get() > 0; }
   // consume_alk_log_pending — pop ONE pond pending SD write per call.
   // Sets output mirror getters (get_ph_morn, get_alk_dkh, ...) for Log.cpp.
   bool     consume_alk_log_pending(void);
@@ -77,7 +153,7 @@ public:
   // last SA_PH_TIMEOUT seconds (matches the "mất kết nối" threshold used
   // for the GCS warning)
   bool     ph_has_data(void)         const {
-    const uint32_t timeout_ms = (uint32_t)((_ph_timeout.get() > 0) ? _ph_timeout.get() : 1) * 1000U;
+    const uint32_t timeout_ms = (uint32_t)((_ph_params.ph_timeout.get() > 0) ? _ph_params.ph_timeout.get() : 1) * 1000U;
     return (_ph_last_good_ms != 0) &&
            (AP_HAL::millis() - _ph_last_good_ms <= timeout_ms);
   }
@@ -87,8 +163,8 @@ public:
   // Tốc độ vít tải (mL/50us) của loại thức ăn đang dùng cho ao active (SA_DOS_Fx).
   float    get_active_dos_rate(void) const {
     const int8_t food = _ponds[_active_pond_idx].valid ? _ponds[_active_pond_idx].dos_food
-                                                        : (int8_t)_dos_food.get();
-    return _dos_fr[_clamp_food(food) - 1].get();
+                                                        : (int8_t)_dos_params.dos_food.get();
+    return _dos_params.dos_fr[_clamp_food(food) - 1].get();
   }
 
   static const AP_Param::GroupInfo var_info[];
@@ -99,65 +175,19 @@ private:
   // PARAMETERS
   // ================================================================
 
-  // ---- MODULE 0: shared across modules (slots 1, 32, 59, 63) ----
+  // ---- Dùng chung nhiều module, giữ trực tiếp ở cấp AP_ShoesAgtech ----
   AP_Int8  _enable_flag;    // SA_ENABLE
   AP_Int16 _robot_id;       // SA_ROBOT_ID  dinh danh robot (0-999), khong dung noi bo
+  AP_Int16 _pond_select;    // SA_POND_IDX  ao dang do - dung chung Module 2 (pH) va Module 3 (dosing)
+  AP_Int8  _simulation;     // SA_SIM  0=real sensors, 1=simulated data - dung chung ca 3 module
+  AP_Int8  _spd_start_pct;  // SA_SPD_START  % toc do dat toi thieu de bat dau bom/rai - dung chung Module 1 (FLOW_MODE=1) va Module 3 (DOS_MODE=2)
 
-  // ---- MODULE 1: flow sensor YF-S402B + spray controller (slots 1-11, 22, 33-35, 37-39) ----
-  AP_Float _cal_factor;     // SA_CAL_FAC   pulses/Litre
-  AP_Float _ema_alpha;      // SA_EMA_AL    EMA smoothing
-  AP_Int8  _flow_log_enable; // SA_FLOW_LOG  console print for flow sensor
-  AP_Int8  _rc_chan;         // SA_RC_CHAN   RC channel for mode switch (1-indexed)
-  AP_Int8  _rc_pump;        // SA_RC_PUMP  RC channel passed to pump in mode 0 (1-indexed)
-  AP_Int8  _pump_chan;       // SA_PUMP_CHAN servo output channel (1-indexed, e.g. 8)
-  AP_Float _flow_setpoint;  // SA_FLOW_SP   target L/min (mode 1)
-  AP_Float _pid_p;          // SA_PID_P     P gain (us per L/min)
-  AP_Float _pid_i;          // SA_PID_I     I gain (us per L/min/s)
-  AP_Float _pid_lpf;        // SA_PID_LPF   output LPF alpha (0.01-1.0)
-  AP_Int16 _flow_log_ms;    // SA_LOG_FL_MS   flow console log interval (ms, default 1000)
-  AP_Int16 _flow_pin;       // SA_FLOW_PIN  GPIO pin number (default 55)
-  AP_Float _tank_vol;       // SA_TANK_VOL  tank volume in litres (0 = disabled)
-  AP_Int8  _flow_mode;      // SA_FLOW_MODE 0=direct setpoint, 1=tank+mission formula
-  AP_Float _mix_std;        // SA_MIX_STD  ti le vi sinh nac giua (Mac dinh van), default 0.35
-  AP_Float _mix_cnt;        // SA_MIX_CNT  ti le vi sinh nac cao (Chong nghet van), default 0.50
-  AP_Float _flow_vel;       // SA_FLOW_VEL  0=dung van toc that, >0=dung gia tri nay (m/s)
-
-  // ---- MODULE 2: pH sensor — Nengshi ASPS3801D-0.5M (slots 14-24, 55-62; slot 12 reused) ----
-  AP_Int8  _ph_en;          // SA_PH_EN     enable pH sensor
-  AP_Int8  _ph_port;        // SA_PH_PORT   UART port number (matches SERIALx)
-  AP_Float _ph_toff;        // SA_PH_TOFF   temperature offset °C
-  AP_Float _ph_off;         // SA_PH_OFF    pH calibration offset
-  AP_Float _ph_kh;          // SA_PH_KH     base alkalinity dKH (from test kit)
-  AP_Int8  _ph_log_enable;  // SA_PH_LOG      console print for pH sensor (independent of SA_FLOW_LOG)
-  AP_Int8  _ph_tz;          // SA_PH_TZ       UTC offset hours (Vietnam = 7)
-  AP_Int16 _ph_log_ms;      // SA_PH_LOG_MS   pH console log interval (ms, default 2000)
-  AP_Int16 _ph_timeout;     // SA_PH_TIMEOUT  pH "mat ket noi" timeout, seconds (default 1)
-  AP_Float _ph_ms;          // SA_PH_MS    gio bat dau slot sang  (0.0-23.99, default 5.0)
-  AP_Float _ph_me;          // SA_PH_ME    gio ket thuc slot sang  (0.0-24.0,  default 11.0)
-  AP_Float _ph_as;          // SA_PH_AS    gio bat dau slot chieu (0.0-23.99, default 12.0)
-  AP_Float _ph_ae;          // SA_PH_AE    gio ket thuc slot chieu (0.0-24.0,  default 16.0)
-  AP_Float _ph_pond_dist;   // SA_PH_POND_D  nguong GPS validate cung ao (m), default 300
-  AP_Int16 _pond_select;    // SA_POND_IDX   ao dang do (1-based, nhap thu cong), default 1
-  AP_Int16 _ph_cap_s;       // SA_PH_CAP_S   khoang thoi gian giua hai mau (giay, default 20)
-  AP_Int8  _ph_cap_sam;     // SA_PH_CAP_SAM so mau tich luy de tinh trung binh (default 20)
-  AP_Int8  _ph_cap_m;       // SA_PH_CAP_M   ban kinh capture (m), 1-100 - chi dung cho app, firmware khong doc
-
-  // ---- MODULE 3: dosing motor (vit tai thuc an tom) — servo xoay lien tuc 360° (slots 13, 19, 25-26, 28-31, 36, 40-54; slot 27 retired) ----
-  AP_Int8  _dos_chan;   // SA_DOS_CHAN   servo output channel (1-indexed)
-  AP_Int8  _dos_rc;     // SA_DOS_RC     RC channel bat/tat motor (1-indexed)
-  AP_Float _dos_sp;     // SA_DOS_SP     setpoint: luong thuc an muon cap, gam
-  AP_Int8  _dos_rev;    // SA_DOS_REV    chieu quay: 0=thuan, 1=nguoc
-  AP_Int8  _spd_start_pct; // SA_SPD_START  % toc do dat (WP_SPEED) toi thieu de bat dau bom/rai, dung chung Module 1 (FLOW_MODE=1) va Module 3 (DOS_MODE=2), 1-100, default 80
-  AP_Int8  _dos_log_enable; // SA_DOS_LOG     console log enable cho dosing motor
-  AP_Int16 _dos_log_ms;     // SA_DOS_LOG_MS  khoang thoi gian giua hai lan in log (ms)
-  AP_Int8  _dos_mode;       // SA_DOS_MODE    0=fixed PWM, 1=variable theo speed+mission
-  AP_Int8  _dos_food;       // SA_DOS_FOOD    chon loai thuc an 1-7
-  AP_Float _dos_v;          // SA_DOS_V       hang so hinh hoc vit tai (mL/50us tai fill=100%), DUNG CHUNG cho ca 7 loai - chi doi khi thay truc vit khac
-  AP_Float _dos_fr[7];      // SA_DOS_F1..F7  he so dien day hat k_x (khong thu nguyen, ~0.05-2.0) theo tung loai thuc an - effective = SA_DOS_V * k_x
-  AP_Float _dos_dr[7];      // SA_DOS_D1..D7  khoi luong rieng (g/mL) theo tung loai thuc an
-
-  // ---- SIMULATION (slot 32) ----
-  AP_Int8  _simulation;  // SA_SIM  0=real sensors, 1=simulated data
+  // ---- Tham số riêng từng module (2026-09-07) — mỗi object dưới đây có
+  // var_info[] RIÊNG (64 slot riêng), đăng ký subgroup trong
+  // AP_ShoesAgtech::var_info[] (xem AP_ShoesAgtech.cpp) ----
+  AP_ShoesAgtech_FlowParams   _flow_params;   // Module 1 — Bơm
+  AP_ShoesAgtech_PHParams     _ph_params;     // Module 2 — Giám sát nước
+  AP_ShoesAgtech_DosingParams _dos_params;    // Module 3 — Cho ăn
 
   // ================================================================
   // STATE
@@ -315,6 +345,7 @@ private:
   // ================================================================
 
   // ---- MODULE 1: flow sensor + spray control ----
+  void     _update_flow(void);
   void     _update_spray_mode(void);
   void     _check_pump_config(void);
   uint16_t _run_flow_pid(float target_lmin, float dt);
@@ -329,6 +360,11 @@ private:
   void     _ph_init(void);
   void     _ph_update(void);
   void     _ph_update_daily_slots(float ph_cal);
+  // Log định kỳ pH ra console (SA_PH_LOG) — tách riêng (2026-09-07) để
+  // dùng chung cho cả _ph_update() (cảm biến thật) và _run_simulation()
+  // (SA_SIM=1); trước đó chỉ _ph_update() có, nên bật SA_SIM thì
+  // SA_PH_LOG không in được gì dù giá trị pH vẫn cập nhật bình thường.
+  void     _ph_print_log(uint32_t now);
   float    _ph_calc_alkalinity(float ph, float base_kh_dkh, float temp_c);
   void     _io_update(void);   // chạy trong IO thread — load/save _ponds[] an toàn với AP::FS()
   void     _pond_load(void);

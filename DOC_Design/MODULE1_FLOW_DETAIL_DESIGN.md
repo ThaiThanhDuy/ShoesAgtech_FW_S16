@@ -67,9 +67,9 @@ update() [10 Hz — ArduPilot scheduler]
     │         now_armed=false: reset _mission_ncmds, _mission_dist_m,
     │                          _tank_empty_detected, _tank_empty_ms, _no_mission_warned,
     │                          _flow_ramp_val (2026-09-04)
-    │                          + TOÀN BỘ trạng thái đọc lưu lượng (2026-08-20):
-    │                          _last_pulse_snapshot, _flow_rate_filtered,
-    │                          _flow_rate_avg, buffer trung bình trượt
+    │                          + (chỉ khi SA_SIM<=0, 2026-09-07) TOÀN BỘ trạng
+    │                          thái đọc lưu lượng (2026-08-20): _last_pulse_snapshot,
+    │                          _flow_rate_filtered, _flow_rate_avg, buffer trung bình trượt
     │         (2026-08-20: bỏ hẳn _print_fm1_arm_status() + biến _was_armed/
     │          _arm_dist_warned — không còn in gì lúc vừa ARM, xem mục 7)
     │
@@ -451,9 +451,21 @@ if (!hal.util->get_soft_armed()) {
     _tank_empty_ms       = 0
     _no_mission_warned   = false
     _flow_ramp_val       = 0.0    // reset ramp — lần ARM sau lại bắt đầu từ 0
-    // + reset toàn bộ trạng thái đọc cảm biến lưu lượng (xem mục 8)
+
+    if (SA_SIM <= 0) {            // 2026-09-07 — CHỈ reset khi dùng cảm biến thật
+        // + reset toàn bộ trạng thái đọc cảm biến lưu lượng (xem mục 8)
+    }
 }
 ```
+**⚠️ Không reset khi SA_SIM=1 (2026-09-07):** trước đây khối reset lưu
+lượng (pulse/`_flow_rate_filtered`/`_flow_rate_avg`/buffer) chạy vô điều
+kiện mỗi khi disarm — kể cả đang ở `SA_SIM=1`. Vì bench-test mô phỏng
+thường KHÔNG cần ARM, `_run_simulation()` vừa ghi dữ liệu giả vào
+`_flow_rate_filtered` đầu mỗi chu kỳ thì khối reset này lại ép về 0 ngay
+sau đó trong cùng chu kỳ → GCS/app luôn thấy `0.00 L/min` dù đang bật
+SIM. Lý do reset ban đầu (dòng chảy dư do trọng lực tạo xung ảo lúc
+disarm) chỉ đúng với cảm biến thật, không áp dụng cho dữ liệu giả lập —
+nên từ nay chỉ reset khối này khi `SA_SIM<=0`.
 
 **Bật bơm thật chỉ sau khi đạt đủ % tốc độ ĐẶT — `_speed_min_start()`
 (2026-09-04, thay cho gate WP1 cũ cùng ngày):**

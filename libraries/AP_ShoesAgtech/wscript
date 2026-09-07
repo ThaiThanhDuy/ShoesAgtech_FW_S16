@@ -15,9 +15,18 @@ def configure(conf):
 
 
 def build(bld):
+    # Thư viện tách thành nhiều file .cpp theo module (2026-09-07):
+    # AP_ShoesAgtech.cpp (chung: param, constructor, init, update),
+    # AP_ShoesAgtech_Flow.cpp (Module 1 - Bơm), AP_ShoesAgtech_PH.cpp
+    # (Module 2 - Giám sát nước), AP_ShoesAgtech_Dosing.cpp (Module 3 -
+    # Cho ăn). Cơ chế build mặc định của ArduPilot (bld.ap_library(name,
+    # vehicle) trong Tools/ardupilotwaf) tự quét toàn bộ .cpp trong thư
+    # mục thư viện, không cần liệt kê tên file - liệt kê tường minh ở
+    # đây chỉ để phòng trường hợp có cơ chế khác đọc 'src' này.
     bld.ap_library(
         name='AP_ShoesAgtech',
-        src='AP_ShoesAgtech.cpp',
+        src=['AP_ShoesAgtech.cpp', 'AP_ShoesAgtech_Flow.cpp',
+             'AP_ShoesAgtech_PH.cpp', 'AP_ShoesAgtech_Dosing.cpp'],
         dependencies=['AP_HAL', 'AP_Param', 'AP_Common', 'AP_Math',
                       'GCS_MAVLink', 'AP_AHRS', 'RC_Channel', 'SRV_Channel',
                       'AP_RTC'],

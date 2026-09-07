@@ -104,7 +104,7 @@ init() [1 lần boot]
     2. **Đọc response** (sau tối thiểu 150ms, timeout 500ms nếu chưa đủ 23 byte): validate header + CRC → decode `ph_cal`, `_ph_mv`, `_ph_temp`
     3. Cập nhật moving-average 10 mẫu → `_ph_value_ma`
     4. Gọi `_ph_update_daily_slots(ph_cal)`
-    5. Console log nếu SA_PH_LOG=1 (theo chu kỳ SA_PH_LOG_MS)
+    5. Gọi `_ph_print_log(now)` — console log nếu SA_PH_LOG=1 (theo chu kỳ SA_PH_LOG_MS)
 - **Ghi chú:** Không còn bước làm mịn EMA — tham số `SA_PH_EMA` đã bị gỡ bỏ khỏi hệ thống; `get_ph()` trả về moving-average, `get_ph_raw()` trả về mẫu calib mới nhất (không lọc).
 
 ---
@@ -114,6 +114,15 @@ init() [1 lần boot]
 - **File:** `AP_ShoesAgtech.cpp : 1135`
 - CRC16/Modbus, poly 0xA001, init 0xFFFF
 - Dùng validate 21 byte đầu của response 23-byte
+
+---
+
+**`_ph_print_log(uint32_t now)`** — mới, 2026-09-07
+
+- **File:** `AP_ShoesAgtech_PH.cpp`
+- **Được gọi bởi:** `_ph_update()` (SA_SIM=0) **và** `_run_simulation()` (SA_SIM=1)
+- **Xử lý:** In log pH định kỳ (`[WM]`/`[SIM][WM]` pH/MA/Tmp/mV + slot tag, dòng Alk khi ao FULL, dòng khung giờ AM/PM), gate theo `SA_PH_LOG`/`SA_PH_LOG_MS` — y hệt nội dung log cũ, chỉ tách ra thành hàm riêng.
+- **⚠️ Bug đã sửa (2026-09-07):** Trước đây đoạn in log này nằm **trực tiếp trong** `_ph_update()`, nên khi `SA_SIM=1` (không bao giờ gọi `_ph_update()`) thì **console không in được dòng pH định kỳ nào cả**, dù `_ph_value`/`_ph_value_ma`/... vẫn được `_run_simulation()` cập nhật đúng và các getter (`get_ph()`...) vẫn trả đúng số. Người dùng bật `SA_PH_LOG=1` khi test SIM sẽ không thấy log nào — dễ nhầm là lỗi mô phỏng trong khi giá trị pH thực ra vẫn đúng, chỉ là log không được gọi tới.
 
 ---
 
