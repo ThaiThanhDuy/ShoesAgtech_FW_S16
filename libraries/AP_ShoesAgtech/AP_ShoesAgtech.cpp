@@ -97,6 +97,8 @@ AP_ShoesAgtech::AP_ShoesAgtech()
       _ponds_dirty(false), _ponds_loaded(false), _dos_pwm(1500),
       _dos_config_ok(false), _dos_warn_ms(0), _dos_was_ok(false),
       _dos_was_on(false), _dos_rc_seen_off(false), _dos_last_log_ms(0),
+      _dos_seq_ms(0), _disc_running(false), _disc_pwm(1500),
+      _disc_config_ok(false), _disc_was_ok(false), _disc_warn_ms(0),
       _dos_sync_pond(0xFF),
       _dos_sp_sync_val(0.0f), _dos_food_sync_val(0) {
   memset(_sample_buffer, 0, sizeof(_sample_buffer));

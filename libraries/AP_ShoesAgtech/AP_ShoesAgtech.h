@@ -77,6 +77,12 @@ public:
   AP_Float dos_v;         // SA_DOS_V
   AP_Float dos_fr[7];     // SA_DOS_F1..F7
   AP_Float dos_dr[7];     // SA_DOS_D1..D7
+
+  // ---- Đĩa rải ly tâm (ESC riêng, quay liên tục 1 chiều — KHÁC hẳn
+  // trục vít 360° đảo chiều được) — mới 2026-09-08 ----
+  AP_Int8  disc_chan;     // SA_DISC_CHAN  kênh servo/ESC đĩa rải, 0=tắt tính năng
+  AP_Int8  disc_pct;      // SA_DISC_PCT   % tốc độ đĩa khi chạy (0-100, 100=full PWM max)
+  AP_Float disc_delay;    // SA_DISC_DLY   độ trễ (giây) giữa đĩa và trục vít khi bật/tắt
 };
 
 class AP_ShoesAgtech {
@@ -160,6 +166,9 @@ public:
 
   // ---- MODULE 3: Dosing motor getters (for logging) ----
   uint16_t get_dosing_pwm(void)     const { return _dos_pwm; }
+  // Đĩa rải ly tâm — mới 2026-09-08
+  uint16_t get_disc_pwm(void)       const { return _disc_pwm; }
+  bool     get_disc_running(void)   const { return _disc_running; }
   // Tốc độ vít tải (mL/50us) của loại thức ăn đang dùng cho ao active (SA_DOS_Fx).
   float    get_active_dos_rate(void) const {
     const int8_t food = _ponds[_active_pond_idx].valid ? _ponds[_active_pond_idx].dos_food
@@ -334,6 +343,21 @@ private:
   bool     _dos_rc_seen_off;
   uint32_t _dos_last_log_ms;
 
+  // ---- Đĩa rải ly tâm — ESC riêng qua SA_DISC_CHAN, quay TRƯỚC khi trục
+  // vít bật và tắt SAU khi trục vít tắt, cách nhau SA_DISC_DLY giây (mới
+  // 2026-09-08). _dos_seq_ms = thời điểm SA_DOS_RC vừa đổi trạng thái
+  // ON/OFF gần nhất (dùng chung với STATUSTEXT "Dosing motor ON/OFF" đã
+  // có sẵn) — dùng để tính đã trôi qua bao lâu kể từ lúc đổi trạng thái.
+  uint32_t _dos_seq_ms;
+  bool     _disc_running;
+  uint16_t _disc_pwm;
+  // Kiểm tra cấu hình kênh đĩa rải — yêu cầu FUNCTION=0(None), MIN=1000,
+  // MAX=2200 (giống mẫu _check_dosing_config() của trục vít, KHÔNG yêu
+  // cầu TRIM vì đĩa chỉ quay 1 chiều, không có điểm giữa cần canh).
+  bool     _disc_config_ok;
+  bool     _disc_was_ok;
+  uint32_t _disc_warn_ms;
+
   // Đồng bộ SA_DOS_SP + SA_DOS_FOOD với dos_sp/dos_food riêng của ao đang
   // active (xem _sync_dosing_setpoint)
   uint8_t  _dos_sync_pond;    // ao lần đồng bộ gần nhất, 0xFF = chưa đồng bộ
@@ -374,6 +398,7 @@ private:
 
   // ---- MODULE 3: dosing motor ----
   void     _check_dosing_config(void);
+  void     _check_disc_config(void);
   void     _sync_dosing_setpoint(void);
   void     _update_dosing_motor(void);
   // Chuyển offset PWM (us, luôn dương) thành giá trị PWM xuất ra theo chiều

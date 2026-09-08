@@ -217,6 +217,41 @@ const AP_Param::GroupInfo AP_ShoesAgtech_DosingParams::var_info[] = {
     // @User: Standard
     AP_GROUPINFO("DOS_D7", 23, AP_ShoesAgtech_DosingParams, dos_dr[6], 1.0f),
 
+    // ---- Đĩa rải ly tâm (ESC riêng, quay liên tục 1 chiều) — mới
+    // 2026-09-08. Slot 24-26 — còn thừa rất nhiều chỗ trống (bảng này
+    // riêng 64 slot từ khi tách module 2026-09-07).
+
+    // @Param: DISC_CHAN
+    // @DisplayName: Centrifugal spreader disc ESC output channel (1-indexed)
+    // @Description: Servo/ESC channel driving the spreader disc motor
+    //   (separate from SA_DOS_CHAN, the auger). 0 disables this feature
+    //   entirely (no PWM ever written to any channel for the disc).
+    // @Range: 0 16
+    // @User: Standard
+    AP_GROUPINFO("DISC_CHAN", 24, AP_ShoesAgtech_DosingParams, disc_chan, 0),
+
+    // @Param: DISC_PCT
+    // @DisplayName: Spreader disc speed when running (% of PWM range)
+    // @Description: 100 = full PWM (SERVOx_MAX of SA_DISC_CHAN), 80 = 80%
+    //   of the way from SERVOx_MIN to SERVOx_MAX. Applied only while the
+    //   disc is running; PWM is SERVOx_MIN when stopped.
+    // @Range: 0 100
+    // @Units: %
+    // @User: Standard
+    AP_GROUPINFO("DISC_PCT", 25, AP_ShoesAgtech_DosingParams, disc_pct, 100),
+
+    // @Param: DISC_DLY
+    // @DisplayName: Disc/auger start-stop sequencing delay (s)
+    // @Description: When SA_DOS_RC switches ON, the disc starts spinning
+    //   immediately but the auger (SA_DOS_CHAN) is held off for this many
+    //   seconds first. When switching OFF, the auger stops immediately but
+    //   the disc keeps spinning for this many seconds before stopping.
+    //   Only applies when SA_DISC_CHAN > 0.
+    // @Range: 0 10
+    // @Units: s
+    // @User: Standard
+    AP_GROUPINFO("DISC_DLY", 26, AP_ShoesAgtech_DosingParams, disc_delay, 2.0f),
+
     AP_GROUPEND};
 
 // =============================================================
@@ -297,6 +332,68 @@ void AP_ShoesAgtech::_check_dosing_config(void) {
   if (!trim_ok) {
     gcs().send_text(MAV_SEVERITY_WARNING, "SA: SERVO%d TRIM=%u, must set =1500",
                     (int)chan, (unsigned)ch->get_trim());
+  }
+  if (!max_ok) {
+    gcs().send_text(MAV_SEVERITY_WARNING, "SA: SERVO%d MAX=%u, must set =2200",
+                    (int)chan, (unsigned)ch->get_output_max());
+  }
+}
+
+// =============================================================
+// KIỂM TRA CẤU HÌNH KÊNH ĐĨA RẢI LY TÂM — mới 2026-09-08
+// Giống mẫu _check_dosing_config() ở trên (trục vít), nhưng KHÔNG yêu
+// cầu TRIM (đĩa chỉ quay 1 chiều liên tục, không có điểm giữa cần canh
+// như trục vít 360° đảo chiều). Yêu cầu: FUNCTION=0(None), MIN=1000,
+// MAX=2200. Bỏ qua hoàn toàn nếu SA_DISC_CHAN=0 (tính năng đang tắt).
+// =============================================================
+void AP_ShoesAgtech::_check_disc_config(void) {
+  if (_dos_params.disc_chan.get() <= 0) {
+    _disc_config_ok = false;
+    _disc_was_ok = false;
+    return;
+  }
+
+  uint8_t chan_idx = (uint8_t)constrain_int16(_dos_params.disc_chan.get() - 1, 0, 15);
+  SRV_Channel *ch = SRV_Channels::srv_channel(chan_idx);
+  int32_t func_val = (int32_t)SRV_Channels::channel_function(chan_idx);
+  int32_t chan = (int32_t)_dos_params.disc_chan.get();
+
+  bool have_chan = (ch != nullptr);
+  bool func_ok = have_chan && (func_val == (int32_t)SRV_Channel::k_none);
+  bool min_ok = have_chan && (ch->get_output_min() == 1000);
+  bool max_ok = have_chan && (ch->get_output_max() == 2200);
+
+  _disc_config_ok = func_ok && min_ok && max_ok;
+
+  if (_disc_config_ok) {
+    if (!_disc_was_ok) {
+      gcs().send_text(MAV_SEVERITY_INFO,
+                      "SA: SERVO%d setup OK - spreader disc ready", (int)chan);
+    }
+    _disc_was_ok = true;
+    return;
+  }
+  _disc_was_ok = false;
+
+  uint32_t now = AP_HAL::millis();
+  if (now - _disc_warn_ms < 5000) {
+    return;
+  }
+  _disc_warn_ms = now;
+
+  if (!have_chan) {
+    gcs().send_text(MAV_SEVERITY_WARNING, "SA: SERVO%d does not exist",
+                    (int)chan);
+    return;
+  }
+  if (!func_ok) {
+    gcs().send_text(MAV_SEVERITY_WARNING,
+                    "SA: SERVO%d FUNCTION=%d, must set =0 (None)", (int)chan,
+                    (int)func_val);
+  }
+  if (!min_ok) {
+    gcs().send_text(MAV_SEVERITY_WARNING, "SA: SERVO%d MIN=%u, must set =1000",
+                    (int)chan, (unsigned)ch->get_output_min());
   }
   if (!max_ok) {
     gcs().send_text(MAV_SEVERITY_WARNING, "SA: SERVO%d MAX=%u, must set =2200",
@@ -394,13 +491,34 @@ void AP_ShoesAgtech::_update_dosing_motor(void) {
 
   if (motor_on != _dos_was_on) {
     _dos_was_on = motor_on;
+    _dos_seq_ms = now; // mốc thời gian để tính độ trễ đĩa/trục vít bên dưới
     gcs().send_text(MAV_SEVERITY_INFO, "SA: Dosing motor %s",
                     motor_on ? "ON" : "OFF");
   }
 
+  // ---- ĐĨA RẢI LY TÂM: quay TRƯỚC khi trục vít bật, tắt SAU khi trục
+  // vít tắt, cách nhau SA_DISC_DLY giây (mới 2026-09-08). SA_DISC_CHAN=0
+  // tắt hẳn tính năng này — trục vít chạy ngay lập tức như trước, không
+  // có độ trễ nào (auger_allowed = motor_on).
+  _check_disc_config();
+  const bool disc_enabled = _dos_params.disc_chan.get() > 0;
+  const uint32_t elapsed_ms = now - _dos_seq_ms;
+  const uint32_t disc_delay_ms =
+      disc_enabled
+          ? (uint32_t)(constrain_float(_dos_params.disc_delay.get(), 0.0f,
+                                       60.0f) *
+                       1000.0f)
+          : 0U;
+  // motor_on=true, chưa đủ delay  -> đĩa quay, trục vít CHƯA được chạy
+  // motor_on=true, đã đủ delay    -> đĩa quay, trục vít được chạy
+  // motor_on=false, chưa đủ delay -> đĩa VẪN quay (đang chờ tắt), trục vít tắt
+  // motor_on=false, đã đủ delay   -> đĩa tắt, trục vít tắt
+  const bool auger_allowed = motor_on && (elapsed_ms >= disc_delay_ms);
+  _disc_running = disc_enabled && (motor_on || (elapsed_ms < disc_delay_ms));
+
   float dos_rate_gpm = 0.0f; // tốc độ cấp tức thời (g/phút) — dùng để in log
 
-  if (motor_on) {
+  if (auger_allowed) {
     float pwm_f = 1500.0f;
 
     if (_dos_params.dos_mode.get() == 0) {
@@ -516,6 +634,23 @@ void AP_ShoesAgtech::_update_dosing_motor(void) {
 
   uint8_t chan_idx = (uint8_t)constrain_int16(_dos_params.dos_chan.get() - 1, 0, 15);
   SRV_Channels::set_output_pwm_chan(chan_idx, _dos_pwm);
+
+  // ---- ĐĨA RẢI LY TÂM: ghi PWM theo _disc_running tính ở trên ----
+  if (disc_enabled) {
+    uint8_t disc_idx = (uint8_t)constrain_int16(_dos_params.disc_chan.get() - 1, 0, 15);
+    SRV_Channel *ch_disc = SRV_Channels::srv_channel(disc_idx);
+    if (ch_disc != nullptr) {
+      uint16_t disc_min = ch_disc->get_output_min();
+      uint16_t disc_max = ch_disc->get_output_max();
+      if (_disc_running && _disc_config_ok) {
+        float pct = constrain_float(_dos_params.disc_pct.get(), 0.0f, 100.0f) * 0.01f;
+        _disc_pwm = (uint16_t)((float)disc_min + pct * (float)(disc_max - disc_min));
+      } else {
+        _disc_pwm = disc_min;
+      }
+      SRV_Channels::set_output_pwm_chan(disc_idx, _disc_pwm);
+    }
+  }
 
   // ---- IN LOG MOTOR CHO ĂN RA CONSOLE (SA_DOS_LOG) ----
   // Rút gọn (2026-09-04), giống hệt kiểu Module 1: đúng 1 dòng

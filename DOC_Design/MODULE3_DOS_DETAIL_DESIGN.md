@@ -98,6 +98,24 @@ update() [Module 1, 10 Hz]
 
 ---
 
+**`_check_disc_config()`** — mới, 2026-09-08
+- **File:** `AP_ShoesAgtech_Dosing.cpp`
+- **Được gọi bởi:** `_update_dosing_motor()` mỗi chu kỳ 10 Hz
+- **Đầu vào:** không có (đọc `_dos_params.disc_chan` từ param)
+- **Xử lý:**
+  1. `SA_DISC_CHAN ≤ 0` → tính năng đang tắt, `_disc_config_ok=false`, return ngay (không cảnh báo)
+  2. Lấy `chan_idx = SA_DISC_CHAN − 1`
+  3. Kiểm tra 3 điều kiện trên `SRV_Channel` (**KHÔNG kiểm tra TRIM**, khác `_check_dosing_config()` — đĩa quay 1 chiều liên tục, không cần điểm giữa):
+     - `FUNCTION = k_none (0)`
+     - `MIN = 1000`
+     - `MAX = 2200`
+  4. Nếu tất cả đúng: nếu vừa chuyển từ sai → OK, in "setup thành công" 1 lần
+  5. Nếu sai bất kỳ: in từng điều kiện sai mỗi 5s (dùng `_disc_warn_ms` riêng, không tranh chấp `_dos_warn_ms` của trục vít)
+- **Đầu ra / Return:** `void` — cập nhật `_disc_config_ok` và `_disc_was_ok`
+- **Ghi chú:** Cấu hình sai không chặn trục vít chạy — chỉ chặn riêng việc ghi PWM ra đĩa rải (xem bước 14b trong `_update_dosing_motor()`); độ trễ `SA_DISC_DLY` giữa đĩa/trục vít vẫn áp dụng bình thường dựa theo `SA_DISC_CHAN > 0`, không phụ thuộc kết quả kiểm tra này.
+
+---
+
 **`_clamp_food(int8_t food) → int8_t`** — static
 - **File:** `AP_ShoesAgtech.cpp : 1800`
 - Kẹp giá trị loại thức ăn về dải hợp lệ 1–7 (khớp `SA_DOS_FOOD` `@Range`). Dùng ở mọi nơi truy cập `_dos_fr[]`/`_dos_dr[]` để tránh index ngoài mảng.
@@ -138,8 +156,12 @@ update() [Module 1, 10 Hz]
   4. Đọc RC: `rc_pwm = RC_Channels::get_radio_in(SA_DOS_RC − 1)`
   5. `motor_on = (rc_pwm > 1500)` — mất tín hiệu (rc_pwm=0) → tắt an toàn
   5b. **Chặn tự chạy lại sau reboot (mới, 2026-09-04):** nếu `_dos_rc_seen_off` còn `false` (chưa thấy switch ở OFF lần nào kể từ lúc boot) thì: `rc_pwm` trong khoảng `(0, 1500]` → set `_dos_rc_seen_off = true`; ngược lại (kể cả `rc_pwm > 1500`) → ép `motor_on = false`. `_dos_rc_seen_off` chỉ reset khi FC reboot (không reset khi disarm) — mục đích: nếu FC bị mất điện/reboot đột ngột (vd pin chập chờn) trong lúc switch `SA_DOS_RC` vẫn đang ở vị trí ON, motor sẽ KHÔNG tự chạy lại ngay khi có điện — phải gạt switch về OFF rồi bật lại ON mới chạy được, tránh cho ăn ngoài ý muốn khi không ai theo dõi lúc mất điện.
-  6. Nếu state thay đổi → STATUSTEXT ON/OFF
-  7. Nếu `!motor_on` → `_dos_pwm = 1500`; xuất; log; return
+  6. Nếu state thay đổi (`motor_on != _dos_was_on`) → STATUSTEXT ON/OFF, ghi mốc `_dos_seq_ms = now`
+  6b. **Đĩa rải ly tâm — sequencing (mới 2026-09-08):** `disc_enabled = SA_DISC_CHAN > 0`; `elapsed = now − _dos_seq_ms`; `disc_delay_ms = disc_enabled ? SA_DISC_DLY×1000 : 0`. Tính:
+      - `auger_allowed = motor_on && (elapsed ≥ disc_delay_ms)` — trục vít chỉ được chạy SAU khi đã đủ độ trễ kể từ lúc bật
+      - `_disc_running = disc_enabled && (motor_on || elapsed < disc_delay_ms)` — đĩa chạy NGAY khi bật, và còn chạy thêm `SA_DISC_DLY` giây sau khi tắt trước khi dừng hẳn
+      - `disc_enabled=false` (mặc định `SA_DISC_CHAN=0`) → `auger_allowed = motor_on` (giống hệt hành vi cũ, không có độ trễ nào)
+  7. Nếu `!auger_allowed` (bao gồm cả `!motor_on` VÀ giai đoạn đang chờ đĩa quay lên trước khi cho trục vít chạy) → `_dos_pwm = 1500` (KHÔNG return — hàm vẫn chạy tiếp để ghi PWM đĩa rải và in log như bình thường)
   8. **DOS_MODE=0 (PWM trực tiếp, mới 2026-08-20):** `dos_sp_active ≤ 0` → `_dos_pwm = 1500` (an toàn — tránh chạy full tốc nếu quên set); ngược lại `_dos_pwm = constrain(dos_sp_active, SERVOx_MIN, SERVOx_MAX)` — ghi thẳng, KHÔNG qua `SA_DOS_V`/`SA_DOS_Fx`/`SA_DOS_Dx`/`SA_DOS_REV`. Nhảy thẳng xuống bước 13 (bỏ qua 9-12).
   9. **DOS_MODE=1 hoặc 2** — `food_idx = clamp(dos_food_active, 1, 7) − 1` (0-indexed, dùng chung cho cả 2 mode)
   10. `fill_k = max(SA_DOS_Fx[food_idx], 0.01)` (hệ số điền đầy hạt, không thứ nguyên, RIÊNG theo loại thức ăn); nếu `fill_k > 5.0` → STATUSTEXT cảnh báo nghi chưa hiệu chuẩn lại theo công thức mới (rate-limit 5s, dùng chung `_dos_warn_ms`); `v_const = max(SA_DOS_V, 0.1)` (mL/50us, hằng số hình học vít tải, DÙNG CHUNG mọi loại thức ăn); `vol_rate = v_const × fill_k`; `density = max(SA_DOS_Dx[food_idx], 0.01)` (g/mL); `effective = vol_rate × density` — **giống hệt công thức cho cả DOS_MODE=1 và 2**
@@ -153,9 +175,10 @@ update() [Module 1, 10 Hz]
       - Không đủ: `dos_rate_gpm = 0`, `offset_us = 0` (pwm=1500) + STATUSTEXT mỗi 5s
   13. `_dos_pwm = _offset_to_dos_pwm(offset_us)` (áp dụng chiều quay SA_DOS_REV) — chỉ mode 1/2, mode 0 đã có `_dos_pwm` tuyệt đối từ bước 8
   14. `SRV_Channels::set_output_pwm_chan(SA_DOS_CHAN − 1, _dos_pwm)`
+  14b. **Đĩa rải ly tâm (mới 2026-09-08):** gọi `_check_disc_config()` đầu hàm (yêu cầu FUNCTION=0/MIN=1000/MAX=2200 trên `SA_DISC_CHAN`, xem mục 1.2). Nếu `disc_enabled` — `_disc_pwm = (_disc_running && _disc_config_ok) ? (SERVOx_MIN + SA_DISC_PCT% × (SERVOx_MAX−SERVOx_MIN)) : SERVOx_MIN`, ghi qua `SRV_Channels::set_output_pwm_chan()`. Cấu hình sai → PWM luôn ở MIN (không quay) dù `_disc_running=true`, đồng thời in cảnh báo (xem `_check_disc_config()`). Hoàn toàn độc lập với `_dos_pwm`/`SA_DOS_REV` — đĩa chỉ quay 1 chiều, không có khái niệm đảo chiều như trục vít.
   - `dos_rate_gpm` (biến cục bộ, khởi tạo 0.0f đầu hàm, luôn =0 ở mode 0) được giữ lại đến bước in log (15) để hiển thị tốc độ tức thời — không có getter public, chỉ dùng nội bộ cho console log
-  15. Console log nếu SA_DOS_LOG=1
-- **Đầu ra / Return:** `void` — side effects: `_dos_pwm`, servo output
+  15. Console log nếu SA_DOS_LOG=1 — **không đổi**, vẫn chỉ hiện `FM<x> Q:<y>` của trục vít, không có thông tin đĩa rải trong dòng log này (xem `get_disc_pwm()`/`get_disc_running()` nếu cần đọc qua code khác)
+- **Đầu ra / Return:** `void` — side effects: `_dos_pwm`, `_disc_pwm`, 2 servo output riêng biệt
 - **Ghi chú:** `DOS_MODE=1` và `DOS_MODE=2` dùng chung một nguồn thông số (`SA_DOS_V` dùng chung + `SA_DOS_Fx`/`SA_DOS_Dx` theo loại thức ăn) — không còn tham số `SA_DOS_RATE` riêng. `DOS_MODE=0` (PWM trực tiếp) không dùng bất kỳ thông số nào trong nhóm này. `SA_DOS_Fx` đổi ý nghĩa 2026-08-19 (xem mục 2 và 3.5); số thứ tự 3 mode đổi 2026-08-20 (xem mục 1.1).
 
 ---
@@ -164,18 +187,21 @@ update() [Module 1, 10 Hz]
 
 | Tham số | Slot | Kiểu | Mặc định | Min | Max | Mô tả đầy đủ |
 |---|---|---|---|---|---|---|
-| `SA_DOS_CHAN` | 25 | Int8 | 10 | 1 | 16 | Kênh servo đầu ra motor (1-indexed). Phải đúng 4 điều kiện SERVO. |
-| `SA_DOS_RC` | 26 | Int8 | 8 | 1 | 16 | Kênh RC bật/tắt motor. PWM>1500 → bật; ≤1500 hoặc =0 (mất tín hiệu) → tắt. |
-| `SA_DOS_SP` | 28 | Float | 0.0 | — | — | **Ý nghĩa đổi theo `SA_DOS_MODE`:** mode 0 = xung PWM (µs) ghi thẳng ra servo; mode 1 = tốc độ cố định (g/phút); mode 2 = tổng gam cho cả mission. Luôn theo **ao đang chọn** (`SA_POND_IDX`) — đổi ao nạp lại giá trị đã lưu của ao đó; sửa giá trị này lưu lại cho ao đang chọn. |
-| `SA_DOS_REV` | 29 | Int8 | 0 | 0 | 1 | Chiều quay: **0**=thuận (800–1500), **1**=ngược (1500–2200). Chỉ áp dụng mode 1/2 — mode 0 (PWM trực tiếp) không qua REV. |
+| `SA_DOS_CHAN` | 1 | Int8 | 10 | 1 | 16 | Kênh servo đầu ra motor (1-indexed). Phải đúng 4 điều kiện SERVO. |
+| `SA_DOS_RC` | 2 | Int8 | 8 | 1 | 16 | Kênh RC bật/tắt motor. PWM>1500 → bật; ≤1500 hoặc =0 (mất tín hiệu) → tắt. |
+| `SA_DOS_SP` | 3 | Float | 0.0 | — | — | **Ý nghĩa đổi theo `SA_DOS_MODE`:** mode 0 = xung PWM (µs) ghi thẳng ra servo; mode 1 = tốc độ cố định (g/phút); mode 2 = tổng gam cho cả mission. Luôn theo **ao đang chọn** (`SA_POND_IDX`) — đổi ao nạp lại giá trị đã lưu của ao đó; sửa giá trị này lưu lại cho ao đang chọn. |
+| `SA_DOS_REV` | 4 | Int8 | 0 | 0 | 1 | Chiều quay: **0**=thuận (800–1500), **1**=ngược (1500–2200). Chỉ áp dụng mode 1/2 — mode 0 (PWM trực tiếp) không qua REV. |
 | `SA_SPD_START` | 19 | Int8 | 80 | 0 | 100 | **% tốc độ ĐẶT cho mission (`WP_SPEED`) tối thiểu để bắt đầu rải/bơm — DÙNG CHUNG DOS_MODE=2 (Module 3) và FLOW_MODE=1 (Module 1, xem MODULE1_FLOW_DETAIL_DESIGN.md).** `0` = tắt hẳn kiểm tra này (quay về hành vi cũ: chỉ cần vượt sàn tuyệt đối 0.05 m/s là chạy). Sàn 0.05 m/s luôn áp dụng dù giá trị này là bao nhiêu. Thêm 2026-08-19 (tên cũ `SA_DOS_SPD_PCT`, mặc định 50, chỉ Module 3); đổi tên + mặc định 80 + dùng chung Module 1, 2026-09-04. |
-| `SA_DOS_LOG` | 30 | Int8 | 0 | 0 | 1 | Bật (1) console log dosing motor theo chu kỳ `SA_DOS_LOG_MS`. |
-| `SA_DOS_LOG_MS` | 31 | Int16 | 1000 | 100 | 60000 | Chu kỳ console log dosing (ms). |
-| `SA_DOS_MODE` | 36 | Int8 | 0 | 0 | 2 | **0**=PWM trực tiếp (mới, 2026-08-20 — SA_DOS_SP là xung PWM, dùng để hiệu chuẩn tại bàn), **1**=tốc độ cố định (số cũ = 0), **2**=tỉ lệ theo vận tốc + mission (số cũ = 1). Mode 1/2 dùng chung `SA_DOS_Fx`/`SA_DOS_Dx`; mode 0 không dùng. |
-| `SA_DOS_FOOD` | 40 | Int8 | 1 | 1 | 7 | Loại thức ăn đang dùng **cho ao đang chọn**. Đổi ao sẽ nạp lại giá trị đã lưu của ao đó; sửa giá trị này sẽ lưu lại cho ao đang chọn. Không dùng ở mode 0. |
-| `SA_DOS_V` | 13 | Float | 100.0 | 0.1 | 10000 | **Hằng số hình học vít tải (mL/50us, ở fill=100%)** — DÙNG CHUNG cho MỌI loại thức ăn, chỉ đổi khi thay trục vít vật lý khác. Tính từ đường kính cánh vít, đường kính trục và bước ren, hoặc đo thực nghiệm (xem mục 3.5, 3.6). Không dùng ở mode 0. |
-| `SA_DOS_F1..F7` | 41–47 | Float | 1.0 | 0.05 | 2.0 | **Hệ số điền đầy hạt (không thứ nguyên) theo loại thức ăn** — dùng cho CẢ DOS_MODE=1 và 2, không dùng ở mode 0. Bù cho khoảng trống không khí giữa các hạt thức ăn trong vít (hạt to/không đều → hệ số thấp hơn). Lưu lượng hiệu dụng = `SA_DOS_V × SA_DOS_Fx`. |
-| `SA_DOS_D1..D7` | 48–54 | Float | 1.0 | 0.1 | 5.0 | **Khối lượng riêng (g/mL) theo loại thức ăn** — mặc định 1.0. Đo: đổ đầy 1000mL, cân → chia 1000. Thức ăn tôm viên thực tế ≈ 0.5–0.7 g/mL. Không dùng ở mode 0. |
+| `SA_DOS_LOG` | 5 | Int8 | 0 | 0 | 1 | Bật (1) console log dosing motor theo chu kỳ `SA_DOS_LOG_MS`. |
+| `SA_DOS_LOG_MS` | 6 | Int16 | 1000 | 100 | 60000 | Chu kỳ console log dosing (ms). |
+| `SA_DOS_MODE` | 7 | Int8 | 0 | 0 | 2 | **0**=PWM trực tiếp (mới, 2026-08-20 — SA_DOS_SP là xung PWM, dùng để hiệu chuẩn tại bàn), **1**=tốc độ cố định (số cũ = 0), **2**=tỉ lệ theo vận tốc + mission (số cũ = 1). Mode 1/2 dùng chung `SA_DOS_Fx`/`SA_DOS_Dx`; mode 0 không dùng. |
+| `SA_DOS_FOOD` | 8 | Int8 | 1 | 1 | 7 | Loại thức ăn đang dùng **cho ao đang chọn**. Đổi ao sẽ nạp lại giá trị đã lưu của ao đó; sửa giá trị này sẽ lưu lại cho ao đang chọn. Không dùng ở mode 0. |
+| `SA_DOS_V` | 9 | Float | 100.0 | 0.1 | 10000 | **Hằng số hình học vít tải (mL/50us, ở fill=100%)** — DÙNG CHUNG cho MỌI loại thức ăn, chỉ đổi khi thay trục vít vật lý khác. Tính từ đường kính cánh vít, đường kính trục và bước ren, hoặc đo thực nghiệm (xem mục 3.5, 3.6). Không dùng ở mode 0. |
+| `SA_DOS_F1..F7` | 10–16 | Float | 1.0 | 0.05 | 2.0 | **Hệ số điền đầy hạt (không thứ nguyên) theo loại thức ăn** — dùng cho CẢ DOS_MODE=1 và 2, không dùng ở mode 0. Bù cho khoảng trống không khí giữa các hạt thức ăn trong vít (hạt to/không đều → hệ số thấp hơn). Lưu lượng hiệu dụng = `SA_DOS_V × SA_DOS_Fx`. |
+| `SA_DOS_D1..D7` | 17–23 | Float | 1.0 | 0.1 | 5.0 | **Khối lượng riêng (g/mL) theo loại thức ăn** — mặc định 1.0. Đo: đổ đầy 1000mL, cân → chia 1000. Thức ăn tôm viên thực tế ≈ 0.5–0.7 g/mL. Không dùng ở mode 0. |
+| `SA_DISC_CHAN` | 24 | Int8 | 0 | 0 | 16 | **Mới 2026-09-08.** Kênh servo/ESC đĩa rải ly tâm (1-indexed) — ESC RIÊNG với `SA_DOS_CHAN` (trục vít), quay liên tục 1 chiều (không đảo chiều như trục vít). `0` = tắt hẳn tính năng đĩa rải, không ghi PWM ra bất kỳ kênh nào. |
+| `SA_DISC_PCT` | 25 | Int8 | 100 | 0 | 100 | **Mới 2026-09-08.** % tốc độ đĩa khi đang chạy: `100` = PWM tối đa (`SERVOx_MAX` của `SA_DISC_CHAN`), `80` = 80% quãng đường từ `SERVOx_MIN` đến `SERVOx_MAX`. Lúc dừng luôn là `SERVOx_MIN`. |
+| `SA_DISC_DLY` | 26 | Float | 2.0 | 0 | 10 | **Mới 2026-09-08.** Độ trễ (giây) giữa đĩa và trục vít lúc bật/tắt `SA_DOS_RC`: bật → đĩa quay ngay, trục vít chờ đủ `SA_DISC_DLY` giây mới chạy; tắt → trục vít dừng ngay, đĩa quay thêm `SA_DISC_DLY` giây rồi mới dừng. Chỉ có tác dụng khi `SA_DISC_CHAN > 0`. |
 
 > **Param đã bị gỡ bỏ (không còn tồn tại):** `SA_DOS_RATE` (slot 27, cũ) — trước đây là thể tích vít tải dùng riêng cho mode tốc độ cố định. Từ bản 2026-08-19, mode tốc độ cố định dùng chung `SA_DOS_Fx`/`SA_DOS_Dx` (theo `SA_DOS_FOOD`) với mode tỉ lệ mission — không còn công thức/param riêng cho từng mode. Slot 27 hiện bỏ trống, không tái sử dụng.
 >
@@ -190,6 +216,15 @@ update() [Module 1, 10 Hz]
 > buộc kiểm tra/chỉnh lại giá trị này trên máy đã triển khai.**
 >
 > **Tham số dùng chung với Module 2:** `SA_POND_IDX` (slot 59) chọn ao — quyết định `SA_DOS_SP`/`SA_DOS_FOOD` đang áp dụng (xem `_sync_dosing_setpoint()` và MODULE2_PH_DETAIL_DESIGN.md).
+>
+> **⚠️ Đổi hệ đánh số slot (2026-09-07):** Module 3 được tách thành class
+> `AP_ShoesAgtech_DosingParams` riêng (xem MODULE1_FLOW_DETAIL_DESIGN.md
+> mục kiến trúc, hoặc code `AP_ShoesAgtech.h`), có bảng 64 slot **riêng**
+> thay vì dùng chung 64 slot với toàn bộ thư viện như trước — cột "Slot"
+> trong bảng trên là số MỚI (1-26), không còn là 13/19/25-54 như tài liệu
+> cũ. Tên tham số hiển thị (`SA_DOS_CHAN`...) không đổi. Đĩa rải ly tâm
+> (`SA_DISC_*`, slot 24-26) là tính năng mới thêm ngay sau khi tách,
+> chiếm 3 trong số ~38 slot còn trống của bảng riêng này.
 
 ---
 
@@ -501,6 +536,11 @@ Ví dụ:
 | `SA: SERVO<m> MIN=<x>, must set =800` | WARNING | MIN sai | Mỗi 5s |
 | `SA: SERVO<m> TRIM=<x>, must set =1500` | WARNING | TRIM sai | Mỗi 5s |
 | `SA: SERVO<m> MAX=<x>, must set =2200` | WARNING | MAX sai | Mỗi 5s |
+| `SA: SERVO<m> setup OK - spreader disc ready` | INFO | **Đĩa rải (mới 2026-09-08):** 3 điều kiện OK (edge rising), chỉ khi `SA_DISC_CHAN>0` | 1 lần/lần vừa đúng |
+| `SA: SERVO<m> does not exist` | WARNING | **Đĩa rải:** không tìm thấy kênh servo — dùng chung câu chữ với trục vít, phân biệt qua số kênh `<m>` (`SA_DISC_CHAN` khác `SA_DOS_CHAN`) | Mỗi 5s |
+| `SA: SERVO<m> FUNCTION=<x>, must set =0 (None)` | WARNING | **Đĩa rải:** FUNCTION sai | Mỗi 5s |
+| `SA: SERVO<m> MIN=<x>, must set =1000` | WARNING | **Đĩa rải:** MIN sai (khác 800 của trục vít — đĩa dùng dải 1000-2200, không có nửa dưới đảo chiều) | Mỗi 5s |
+| `SA: SERVO<m> MAX=<x>, must set =2200` | WARNING | **Đĩa rải:** MAX sai | Mỗi 5s |
 | `SA: Dosing motor ON` | INFO | RC bật (edge rising) | 1 lần/lần bật |
 | `SA: Dosing motor OFF` | INFO | RC tắt (edge falling) | 1 lần/lần tắt |
 | `SA DOS2: no mission (dist=<x>m) - motor stopped` | WARNING | DOS_MODE=2, dist ≤ 1m (đổi tên từ "SA DOS1" 2026-08-20, khớp số mode mới) | Mỗi 5s |
