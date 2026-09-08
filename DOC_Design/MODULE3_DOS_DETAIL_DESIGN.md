@@ -156,11 +156,13 @@ update() [Module 1, 10 Hz]
   4. Đọc RC: `rc_pwm = RC_Channels::get_radio_in(SA_DOS_RC − 1)`
   5. `motor_on = (rc_pwm > 1500)` — mất tín hiệu (rc_pwm=0) → tắt an toàn
   5b. **Chặn tự chạy lại sau reboot (mới, 2026-09-04):** nếu `_dos_rc_seen_off` còn `false` (chưa thấy switch ở OFF lần nào kể từ lúc boot) thì: `rc_pwm` trong khoảng `(0, 1500]` → set `_dos_rc_seen_off = true`; ngược lại (kể cả `rc_pwm > 1500`) → ép `motor_on = false`. `_dos_rc_seen_off` chỉ reset khi FC reboot (không reset khi disarm) — mục đích: nếu FC bị mất điện/reboot đột ngột (vd pin chập chờn) trong lúc switch `SA_DOS_RC` vẫn đang ở vị trí ON, motor sẽ KHÔNG tự chạy lại ngay khi có điện — phải gạt switch về OFF rồi bật lại ON mới chạy được, tránh cho ăn ngoài ý muốn khi không ai theo dõi lúc mất điện.
+  5c. **Bắt tay an toàn lúc boot (mới, 2026-09-08):** nếu `!_system_ready` (chưa từng ARM rồi DISARM đủ 1 lần kể từ boot — `_update_boot_handshake()`, xem MODULE1_FLOW_DETAIL_DESIGN.md mục 1.2) → ép `motor_on = false`, bất kể `rc_pwm`/`_dos_rc_seen_off`. Đặt SAU bước 5b để không ảnh hưởng cờ `_dos_rc_seen_off` (2 cơ chế độc lập: một cái theo dõi RC, một cái theo dõi trạng thái ARM). DÙNG CHUNG `_system_ready` với Module 1 (`is_system_ready()`) — chỉ cần ARM/DISARM 1 lần cho cả 2 module.
   6. Nếu state thay đổi (`motor_on != _dos_was_on`) → STATUSTEXT ON/OFF, ghi mốc `_dos_seq_ms = now`
   6b. **Đĩa rải ly tâm — sequencing (mới 2026-09-08):** `disc_enabled = SA_DISC_CHAN > 0`; `elapsed = now − _dos_seq_ms`; `disc_delay_ms = disc_enabled ? SA_DISC_DLY×1000 : 0`. Tính:
       - `auger_allowed = motor_on && (elapsed ≥ disc_delay_ms)` — trục vít chỉ được chạy SAU khi đã đủ độ trễ kể từ lúc bật
-      - `_disc_running = disc_enabled && (motor_on || elapsed < disc_delay_ms)` — đĩa chạy NGAY khi bật, và còn chạy thêm `SA_DISC_DLY` giây sau khi tắt trước khi dừng hẳn
+      - `_disc_running = _system_ready && disc_enabled && (motor_on || elapsed < disc_delay_ms)` — đĩa chạy NGAY khi bật, và còn chạy thêm `SA_DISC_DLY` giây sau khi tắt trước khi dừng hẳn
       - `disc_enabled=false` (mặc định `SA_DISC_CHAN=0`) → `auger_allowed = motor_on` (giống hệt hành vi cũ, không có độ trễ nào)
+      - **⚠️ Lý do thêm `_system_ready &&` vào `_disc_running` (2026-09-08):** nếu chỉ ép `motor_on=false` mà không chặn thêm công thức này, đĩa vẫn có thể quay giả do `_dos_seq_ms` mặc định = 0 lúc boot → `elapsed` nhỏ → nhánh `elapsed < disc_delay_ms` vô tình đúng trong `disc_delay_ms` mili-giây đầu tiên sau boot dù `motor_on` đã bị ép false — phải chặn tận gốc bằng cờ `_system_ready`.
   7. Nếu `!auger_allowed` (bao gồm cả `!motor_on` VÀ giai đoạn đang chờ đĩa quay lên trước khi cho trục vít chạy) → `_dos_pwm = 1500` (KHÔNG return — hàm vẫn chạy tiếp để ghi PWM đĩa rải và in log như bình thường)
   8. **DOS_MODE=0 (PWM trực tiếp, mới 2026-08-20):** `dos_sp_active ≤ 0` → `_dos_pwm = 1500` (an toàn — tránh chạy full tốc nếu quên set); ngược lại `_dos_pwm = constrain(dos_sp_active, SERVOx_MIN, SERVOx_MAX)` — ghi thẳng, KHÔNG qua `SA_DOS_V`/`SA_DOS_Fx`/`SA_DOS_Dx`/`SA_DOS_REV`. Nhảy thẳng xuống bước 13 (bỏ qua 9-12).
   9. **DOS_MODE=1 hoặc 2** — `food_idx = clamp(dos_food_active, 1, 7) − 1` (0-indexed, dùng chung cho cả 2 mode)
@@ -546,6 +548,7 @@ Ví dụ:
 | `SA DOS2: no mission (dist=<x>m) - motor stopped` | WARNING | DOS_MODE=2, dist ≤ 1m (đổi tên từ "SA DOS1" 2026-08-20, khớp số mode mới) | Mỗi 5s |
 | `SA DOS2: speed too low (<x>m/s < <y>m/s min) - motor stopped` | WARNING | DOS_MODE=2, speed < max(0.05, `SA_SPD_START`% tốc độ đặt) — cập nhật 2026-08-19, trước đây ngưỡng cố định 0.05 | Mỗi 5s |
 | `SA: SA_DOS_F<n>=<x> looks uncalibrated for new V x fill-factor formula (expected ~0.05-2.0)` | WARNING | `SA_DOS_Fx` của loại thức ăn active > 5.0 — nghi vẫn còn giá trị cũ (thang mL/50us, thường ~100) từ trước khi tách `SA_DOS_V × SA_DOS_Fx`, chưa được hiệu chuẩn lại (xem mục 2, 3.6) | Mỗi 5s |
+| `SA: System ready - pump/feeder can now run` | INFO | **Bắt tay an toàn boot (mới 2026-09-08):** vừa DISARM sau khi đã từng ARM ít nhất 1 lần kể từ boot (`_update_boot_handshake()`, dùng chung với Module 1 — chỉ in 1 lần cho cả 2 module, xem MODULE1_FLOW_DETAIL_DESIGN.md mục 4.4) | 1 lần duy nhất mỗi phiên boot |
 
 ---
 
@@ -570,6 +573,12 @@ SA_DOS_MODE=0: SA_DOS_SP là PWM tuyệt đối, tự constrain về đúng dả
 
 SA_DOS_SP/SA_DOS_FOOD hiển thị trên GCS luôn phản ánh ao đang chọn (SA_POND_IDX)
 — đổi ao sẽ tự đổi giá trị hiển thị, không phải lỗi đồng bộ
+
+Bắt tay an toàn lúc boot (mới 2026-09-08): phải ARM rồi DISARM đúng 1 lần
+kể từ lúc cấp nguồn/nạp param thì motor cho ăn + đĩa rải mới được phép
+chạy — xem _update_boot_handshake() (MODULE1_FLOW_DETAIL_DESIGN.md mục
+1.2). DÙNG CHUNG với Module 1 (is_system_ready()), chỉ cần 1 lần cho cả
+2 module, không lặp lại ở các lần arm/disarm sau đó trong cùng phiên.
 ```
 
 **Ràng buộc phần cứng:** Cần BEC riêng cho servo — không dùng nguồn FC (servo 360° tải cao)

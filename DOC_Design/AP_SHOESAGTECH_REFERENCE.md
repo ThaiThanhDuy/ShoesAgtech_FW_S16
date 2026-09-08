@@ -59,15 +59,15 @@ rover.g2.custom_nav   →   object AP_ShoesAgtech
 |---|---|---|---|---|---|---|
 | `SA_ENABLE` | 1 | Int8 | **1** | 0 | 1 | Bật (1) / tắt (0) toàn bộ thư viện. Khi = 0, không có task nào chạy. |
 | `SA_CAL_FAC` | 2 | Float | **3874.5** | 100 | 10000 | Hệ số hiệu chuẩn cảm biến YF-S402B: số xung trên mỗi lít (pulses/Litre). Dãy hoạt động 0.3–6 L/min. |
-| `SA_EMA_AL` | 3 | Float | **0.1** | 0.01 | 1.0 | Alpha làm mịn EMA cho lưu lượng tức thời. Nhỏ = mịn hơn, phản hồi chậm hơn. |
-| `SA_FLOW_LOG` | 4 | Int8 | **0** | 0 | 1 | Bật (1) in dữ liệu lưu lượng/bơm ra console GCS theo chu kỳ `SA_LOG_FL_MS`. |
+| `SA_FLOW_EMA_AL` | 3 | Float | **0.1** | 0.01 | 1.0 | Alpha làm mịn EMA cho lưu lượng tức thời. Nhỏ = mịn hơn, phản hồi chậm hơn. |
+| `SA_FLOW_LOG` | 4 | Int8 | **0** | 0 | 1 | Bật (1) in dữ liệu lưu lượng/bơm ra console GCS theo chu kỳ `SA_FLOW_LOG_MS`. |
 | `SA_RC_CHAN` | 5 | Int8 | **6** | 1 | 16 | Kênh RC (1-indexed) chọn chế độ phun: PWM<1300→mode 0, 1300–1700→mode 1, >1700→mode 2. |
 | `SA_RC_PUMP` | 6 | Int8 | **9** | 1 | 16 | Kênh RC (1-indexed) đọc PWM bơm thủ công ở mode 0 (passthrough). |
 | `SA_PUMP_CHAN` | 7 | Int8 | **8** | 1 | 16 | Kênh servo đầu ra bơm (1-indexed). **Bắt buộc** `SERVOx_FUNCTION = 0 (None)`. |
 | `SA_FLOW_SP` | 8 | Float | **5.0** | 0 | 200 | Setpoint lưu lượng (L/min) ở mode 1 khi `SA_FLOW_MODE=0`, hoặc dùng làm fallback khi `SA_FLOW_MODE=1` mà `SA_TANK_VOL=0`. |
-| `SA_PID_P` | 9 | Float | **80.0** | 0 | 500 | Hệ số P của PI controller: us PWM trên mỗi L/min sai số. |
-| `SA_PID_I` | 10 | Float | **20.0** | 0 | 200 | Hệ số I của PI controller: us PWM trên mỗi L/min/giây. |
-| `SA_PID_LPF` | 11 | Float | **0.3** | 0.01 | 1.0 | Alpha LPF cho đầu ra PID (0.01 = rất mịn, 1.0 = không lọc). |
+| `SA_FLOW_PID_P` | 9 | Float | **80.0** | 0 | 500 | Hệ số P của PI controller: us PWM trên mỗi L/min sai số. |
+| `SA_FLOW_PID_I` | 10 | Float | **20.0** | 0 | 200 | Hệ số I của PI controller: us PWM trên mỗi L/min/giây. |
+| `SA_FLOW_PID_LPF` | 11 | Float | **0.3** | 0.01 | 1.0 | Alpha LPF cho đầu ra PID (0.01 = rất mịn, 1.0 = không lọc). |
 | `SA_APP_RATE` | 12 | Float | **100.0** | 0 | 2000 | Tỉ lệ phun L/ha ở mode 2 — Auto Rate (tính theo tốc độ xe + boom). |
 | `SA_BOOM_W` | 13 | Float | **1.0** | 0 | 30 | Chiều rộng boom phun (mét) dùng tính toán ở mode 2. |
 
@@ -118,7 +118,7 @@ Nếu SA_TANK_VOL > 0: mỗi 30s gửi STATUSTEXT ước tính quãng đường 
 | `SA_PH_EMA` | 19 | Float | **0.15** | 0.01 | 1.0 | Alpha EMA làm mịn pH. Nhỏ = mịn hơn, phản hồi chậm hơn. |
 | `SA_PH_LOG` | 20 | Int8 | **0** | 0 | 1 | Bật (1) in dữ liệu pH/nhiệt độ/kiềm ra console GCS theo chu kỳ `SA_PH_LOG_MS`. Độc lập với `SA_FLOW_LOG`. |
 | `SA_PH_TZ` | 21 | Int8 | **7** | -12 | 14 | UTC offset (giờ). Việt Nam = 7 (UTC+7). Dùng phân loại slot sáng/chiều cho tính kiềm ΔpH. |
-| `SA_LOG_FL_MS` | 22 | Int16 | **1000** | 100 | 60000 | Chu kỳ in log lưu lượng ra console (ms). Chỉ hoạt động khi `SA_FLOW_LOG=1`. |
+| `SA_FLOW_LOG_MS` | 22 | Int16 | **2000** | 100 | 60000 | Chu kỳ in log lưu lượng ra console (ms). Chỉ hoạt động khi `SA_FLOW_LOG=1`. |
 | `SA_PH_LOG_MS` | 23 | Int16 | **2000** | 500 | 60000 | Chu kỳ in log pH ra console (ms). Không nên đặt < 2000 (Modbus chỉ trả dữ liệu mỗi 2s). |
 | `SA_PH_TIMEOUT` | 24 | Int16 | **2** | 1 | 300 | Ngưỡng "mất kết nối" (giây): nếu không nhận được frame pH hợp lệ quá thời gian này, phát cảnh báo STATUSTEXT và xóa `data[4..8]` về 0 trong gói SA_DATA. |
 
@@ -262,7 +262,7 @@ Sai bất kỳ 1 trong 4 → firmware KHÔNG xuất PWM động cơ
 
 | Index | Tên field | Đơn vị | Điều kiện | Mô tả |
 |---|---|---|---|---|
-| `data[0]` | `flow_rate` | L/min | Luôn gửi | Lưu lượng tức thời sau EMA (`SA_EMA_AL`). Noise < 0.01 ép = 0. |
+| `data[0]` | `flow_rate` | L/min | Luôn gửi | Lưu lượng tức thời sau EMA (`SA_FLOW_EMA_AL`). Noise < 0.01 ép = 0. |
 | `data[1]` | `flow_rate_avg` | L/min | Luôn gửi | Moving average lưu lượng (10 mẫu). Noise < 0.01 ép = 0. |
 | `data[2]` | `flow_target` | L/min | Luôn gửi | Setpoint hiện tại. Mode 0=0.0; mode 1=`SA_FLOW_SP`; mode 2=`APP_RATE×speed×BOOM_W×0.006`. |
 | `data[3]` | `pump_pwm` | µs | Luôn gửi | PWM thực tế đang xuất ra kênh bơm (`SA_PUMP_CHAN`). Dải: 800–2200. |

@@ -69,14 +69,14 @@ Cảm biến đếm xung liên tục → hệ thống tính lưu lượng thực
 │  Nấc giữa → PID bám lưu lượng vi sinh (van Mặc định)             │
 │    SA_FLOW_MODE=0: bám SA_FLOW_SP (người dùng calib tay)          │
 │    SA_FLOW_MODE=1: bám công thức phân phối đều vi sinh            │
-│        q1 = TANK_VOL × SA_MIX_STD × vận_tốc × 60 / mission_dist  │
+│        q1 = TANK_VOL × SA_FLOW_MIX_STD × vận_tốc × 60 / mission_dist  │
 │        → vi sinh phân phối đều toàn tuyến, luôn dùng đúng         │
-│           TANK_VOL × SA_MIX_STD lít mỗi lần chạy                  │
+│           TANK_VOL × SA_FLOW_MIX_STD lít mỗi lần chạy                  │
 │                                                                    │
 │  Nấc cao → PID bám lưu lượng vi sinh (van Chống nghẹt)            │
-│    SA_FLOW_MODE=0: bám SA_FLOW_SP × (SA_MIX_CNT/SA_MIX_STD)      │
-│    SA_FLOW_MODE=1: bám công thức với SA_MIX_CNT                   │
-│        q1 = TANK_VOL × SA_MIX_CNT × vận_tốc × 60 / mission_dist  │
+│    SA_FLOW_MODE=0: bám SA_FLOW_SP × (SA_FLOW_MIX_CNT/SA_FLOW_MIX_STD)      │
+│    SA_FLOW_MODE=1: bám công thức với SA_FLOW_MIX_CNT                   │
+│        q1 = TANK_VOL × SA_FLOW_MIX_CNT × vận_tốc × 60 / mission_dist  │
 └────────────────────────────────────────────────────────────────────┘
     ↓
 Bơm điều chỉnh PWM theo PID
@@ -106,7 +106,7 @@ Dữ liệu lưu lượng + trạng thái bơm gửi lên GCS liên tục
 ### Case 3 — Nấc giữa, FLOW_MODE=1: phân phối vi sinh đều theo tuyến
 
 - **Điều kiện:** RC nấc giữa + SA_FLOW_MODE=1 + đã upload mission + xe đang chạy
-- **Hành vi:** Tự tính lưu lượng theo công thức `q1 = TANK_VOL × SA_MIX_STD × speed × 60 / mission_dist`. Lưu lượng tăng khi xe đi nhanh, giảm khi xe đi chậm — đảm bảo luôn dùng hết đúng `TANK_VOL × SA_MIX_STD` lít mỗi lần chạy mission.
+- **Hành vi:** Tự tính lưu lượng theo công thức `q1 = TANK_VOL × SA_FLOW_MIX_STD × speed × 60 / mission_dist`. Lưu lượng tăng khi xe đi nhanh, giảm khi xe đi chậm — đảm bảo luôn dùng hết đúng `TANK_VOL × SA_FLOW_MIX_STD` lít mỗi lần chạy mission.
 - **Khi ARM:** GCS thông báo q1 ước tính, thời gian hoàn thành, lượng vi sinh sẽ dùng
 - **Output GCS:** Mode=1, q1 thực tế, dist_max (khoảng tối đa theo tốc độ hiện tại), vi/run
 
@@ -119,13 +119,13 @@ Dữ liệu lưu lượng + trạng thái bơm gửi lên GCS liên tục
 ### Case 5 — Nấc cao, FLOW_MODE=0: setpoint Chống nghẹt
 
 - **Điều kiện:** RC nấc cao + SA_FLOW_MODE=0
-- **Hành vi:** Setpoint vi sinh tăng theo tỉ lệ SA_MIX_CNT/SA_MIX_STD; van vi sinh giữ nguyên vị trí như nấc giữa, chỉ chỉnh van hồ
+- **Hành vi:** Setpoint vi sinh tăng theo tỉ lệ SA_FLOW_MIX_CNT/SA_FLOW_MIX_STD; van vi sinh giữ nguyên vị trí như nấc giữa, chỉ chỉnh van hồ
 - **Output GCS:** Mode=2, setpoint cao hơn nấc giữa
 
-### Case 6 — Nấc cao, FLOW_MODE=1: phân phối vi sinh đều với MIX_CNT
+### Case 6 — Nấc cao, FLOW_MODE=1: phân phối vi sinh đều với FLOW_MIX_CNT
 
 - **Điều kiện:** RC nấc cao + SA_FLOW_MODE=1 + xe đang chạy
-- **Hành vi:** Như Case 3 nhưng dùng SA_MIX_CNT → vi_per_run = TANK_VOL × MIX_CNT (lớn hơn nấc giữa)
+- **Hành vi:** Như Case 3 nhưng dùng SA_FLOW_MIX_CNT → vi_per_run = TANK_VOL × FLOW_MIX_CNT (lớn hơn nấc giữa)
 - **Output GCS:** vi/run cao hơn nấc giữa; dist_max ngắn hơn (cùng tốc độ)
 
 ### Case 7 — Cảnh báo khi ARM (FLOW_MODE=1)
@@ -155,7 +155,7 @@ Dữ liệu lưu lượng + trạng thái bơm gửi lên GCS liên tục
 - Module pH (Module 2) và Dosing Motor (Module 3)
 - GCS hiển thị tất cả thông số khác của ArduRover
 
-> **Đã loại bỏ so với bản thiết kế ban đầu:** `SA_APP_RATE` và `SA_BOOM_W` (slot 12–13) đã bị gỡ bỏ hoàn toàn khỏi param — không chỉ "không dùng". Slot 12 được tái sử dụng cho `SA_PH_CAP_M` (Module 2); slot 13 không còn tham số nào. Vai trò của hai param này được thay bằng `SA_MIX_STD` / `SA_MIX_CNT` (tỉ lệ vi sinh theo nấc RC).
+> **Đã loại bỏ so với bản thiết kế ban đầu:** `SA_APP_RATE` và `SA_BOOM_W` (slot 12–13) đã bị gỡ bỏ hoàn toàn khỏi param — không chỉ "không dùng". Slot 12 được tái sử dụng cho `SA_PH_CAP_M` (Module 2); slot 13 không còn tham số nào. Vai trò của hai param này được thay bằng `SA_FLOW_MIX_STD` / `SA_FLOW_MIX_CNT` (tỉ lệ vi sinh theo nấc RC).
 
 ---
 

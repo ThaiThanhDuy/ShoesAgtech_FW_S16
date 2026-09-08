@@ -24,19 +24,19 @@
 | Cảm biến lưu lượng | YF-S402B      | Dải 0.3–6 L/min                                  |
 | SA_CAL_FAC         | **1745**      | Calibrated (pulses/L)                            |
 | SA_TANK_VOL        | **16** L      | Tham chiếu định lượng vi sinh cho FLOW_MODE=1 — xem lưu ý TC-04 |
-| SA_MIX_STD         | **0.35**      | Nấc giữa — van vi sinh mức 2                     |
-| SA_MIX_CNT         | **0.50**      | Nấc cao — van vi sinh mức 2 (same), chỉnh van hồ |
+| SA_FLOW_MIX_STD         | **0.35**      | Nấc giữa — van vi sinh mức 2                     |
+| SA_FLOW_MIX_CNT         | **0.50**      | Nấc cao — van vi sinh mức 2 (same), chỉnh van hồ |
 | SA_FLOW_SP         | **1.2** L/min | Max vi sinh vật lý tại van vi sinh mức 2 (dùng cho TC-02/03, FLOW_MODE=0) |
-| SA_PID_P           | **80**        | µs per L/min error                               |
-| SA_PID_I           | **20**        | µs per L/min/s                                   |
-| SA_PID_LPF         | **0.3**       | Output smoothing                                 |
+| SA_FLOW_PID_P           | **80**        | µs per L/min error                               |
+| SA_FLOW_PID_I           | **20**        | µs per L/min/s                                   |
+| SA_FLOW_PID_LPF         | **0.3**       | Output smoothing                                 |
 | SERVO8_MIN         | **1000**      | pwm_min bơm                                      |
 | SERVO8_TRIM        | **1500**      | pwm_trim bơm                                     |
 | SERVO8_MAX         | **2000**      | pwm_max bơm                                      |
 | Vận tốc thực tế    | **1.3** m/s   | Tốc độ xe phun (nấc giữa) — xem TC-05 cho nấc cao |
 | Mission distance   | **301** m     | Tuyến đường đã upload                            |
 
-> **Lưu ý:** Từ bản này, `SA_TANK_VOL` **không phải** dung tích vật lý của thùng chứa — đây là hằng số hiệu chuẩn: "tổng lượng vi sinh sẽ dùng cho **một** lần chạy hết mission, nếu tỉ lệ trộn r=1.0 (100%)". Với `r` (SA_MIX_STD/SA_MIX_CNT) < 1.0, lượng thực tế dùng mỗi lần chạy = `SA_TANK_VOL × r` (xem TC-04). Firmware **không** theo dõi mức vi sinh còn lại trong thùng vật lý ở FLOW_MODE=1 — người vận hành tự đối chiếu bằng cách đo trực tiếp.
+> **Lưu ý:** Từ bản này, `SA_TANK_VOL` **không phải** dung tích vật lý của thùng chứa — đây là hằng số hiệu chuẩn: "tổng lượng vi sinh sẽ dùng cho **một** lần chạy hết mission, nếu tỉ lệ trộn r=1.0 (100%)". Với `r` (SA_FLOW_MIX_STD/SA_FLOW_MIX_CNT) < 1.0, lượng thực tế dùng mỗi lần chạy = `SA_TANK_VOL × r` (xem TC-04). Firmware **không** theo dõi mức vi sinh còn lại trong thùng vật lý ở FLOW_MODE=1 — người vận hành tự đối chiếu bằng cách đo trực tiếp.
 
 ---
 
@@ -117,14 +117,14 @@ PWM sẽ lên đến 2000 µs nhưng không bị unbounded
 ```
 SA_FLOW_MODE = 0
 SA_FLOW_SP   = 1.2
-SA_MIX_STD   = 0.35
-SA_MIX_CNT   = 0.50
+SA_FLOW_MIX_STD   = 0.35
+SA_FLOW_MIX_CNT   = 0.50
 ```
 
 **Flow target tự động tính:**
 
 ```
-flow_target = SA_FLOW_SP × (MIX_CNT / MIX_STD)
+flow_target = SA_FLOW_SP × (FLOW_MIX_CNT / FLOW_MIX_STD)
             = 1.2 × (0.50 / 0.35)
             = 1.2 × 1.4286
             = 1.714 L/min
@@ -149,7 +149,7 @@ flow_target = SA_FLOW_SP × (MIX_CNT / MIX_STD)
 ```
 SA_FLOW_MODE = 1
 SA_TANK_VOL  = 16
-SA_MIX_STD   = 0.35
+SA_FLOW_MIX_STD   = 0.35
 SA_FLOW_VEL  = 0       (dùng vận tốc thật)
 ```
 
@@ -255,7 +255,7 @@ SA FM1 OK: r=0.35 q1=1.45L/ph miss=301m dmax=1456m ~3m51s vi/run=5.6L
 ```
 SA_FLOW_MODE = 1
 SA_TANK_VOL  = 16
-SA_MIX_CNT   = 0.50
+SA_FLOW_MIX_CNT   = 0.50
 SA_FLOW_VEL  = 0
 ```
 
@@ -374,7 +374,7 @@ vi_per_run = SA_TANK_VOL × r = 16 × 0.50 = 8.0 L    (không đổi theo speed,
 ```
 SA_FLOW_MODE = 1
 SA_TANK_VOL  = 3
-SA_MIX_STD   = 0.35
+SA_FLOW_MIX_STD   = 0.35
 ```
 
 Mission 301 m, tốc độ vận hành 1.3 m/s (giống TC-04):
@@ -419,7 +419,7 @@ SA FM1: q1=0.27L/ph < 0.3 @1.3m/s dist=301m - rút ngắn mission (dmax=273m)
 
 ```
 SA_TANK_VOL  = 16
-SA_MIX_STD   = 0.35
+SA_FLOW_MIX_STD   = 0.35
 SA_FLOW_VEL  = 1.3   (ép vận tốc = 1.3 m/s, xe đứng yên)
 SA_FLOW_MODE = 1
 ```
@@ -438,7 +438,7 @@ Bơm chạy như xe đang đi 1.3 m/s dù đứng yên → dùng để calib PID
 
 ## TC-09 — Kiểm tra cảnh báo q1 ngoài dải (0.3–2.0 L/min), khi đang chạy (không phải lúc ARM)
 
-Cấu hình giống TC-04 (`TANK_VOL=16`, `r=SA_MIX_STD=0.35`, mission=301m). Cảnh báo runtime này **không kèm dmax/dmin** (khác với cảnh báo lúc ARM ở TC-05a/TC-06) — dmax/dmin chỉ được tính và in trong thông báo lúc ARM.
+Cấu hình giống TC-04 (`TANK_VOL=16`, `r=SA_FLOW_MIX_STD=0.35`, mission=301m). Cảnh báo runtime này **không kèm dmax/dmin** (khác với cảnh báo lúc ARM ở TC-05a/TC-06) — dmax/dmin chỉ được tính và in trong thông báo lúc ARM.
 
 ### TC-09a — q1 < 0.3 L/min (speed quá thấp)
 
@@ -468,7 +468,7 @@ q1 = 16 × 0.35 × 2.5 × 60 / 301 = 840 / 301 = 2.791 L/min   > 2.0
 SA FM1: q1=2.79L/ph > 2.0 - kéo dài mission hoặc giảm speed
 ```
 
-**Cách fix:** Giảm tốc độ xe, hoặc kéo dài mission, hoặc giảm `SA_MIX_STD`/tăng `SA_TANK_VOL` cho phù hợp.
+**Cách fix:** Giảm tốc độ xe, hoặc kéo dài mission, hoặc giảm `SA_FLOW_MIX_STD`/tăng `SA_TANK_VOL` cho phù hợp.
 
 ---
 
@@ -514,7 +514,7 @@ actual_flow  = volume_L / time_min (đo bằng bình + đồng hồ)
 
 - [ ] `SA_CAL_FAC = 1745` (đã calib)
 - [ ] `SA_FLOW_MODE = 1`, `SA_TANK_VOL = 16`
-- [ ] `SA_MIX_STD = 0.35`, `SA_MIX_CNT = 0.50`
+- [ ] `SA_FLOW_MIX_STD = 0.35`, `SA_FLOW_MIX_CNT = 0.50`
 - [ ] `SA_FLOW_VEL = 0` (dùng vận tốc thật)
 - [ ] Upload mission, ARM → kiểm tra GCS message `SA FM1 OK`
 - [ ] **Nấc giữa:** vận tốc mục tiêu ~1.3 m/s, đảm bảo `301m` nằm trong `(218m, 1456m)`

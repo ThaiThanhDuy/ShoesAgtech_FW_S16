@@ -39,7 +39,7 @@ update() [10 Hz — ArduPilot scheduler]
     ├──► switch(_spray_mode)
     │         mode 0 ──► _write_pump_pwm(RC_passthrough), ramp_val=0 (reset để nấc sau ramp lại từ đầu)
     │         mode 1 ──► [FLOW_MODE=0] flow_target = SA_FLOW_SP, ramp_val = min(ramp_val+0.3×dt, flow_target)
-    │         (nấc giữa)  [FLOW_MODE=1] flow_target = _compute_visin_target(SA_MIX_STD)
+    │         (nấc giữa)  [FLOW_MODE=1] flow_target = _compute_visin_target(SA_FLOW_MIX_STD)
     │                         ├──► _get_mission_dist()
     │                         ├──► _get_dosing_ref_speed() [tốc độ ĐẶT WP_SPEED,
     │                         │      KHÔNG phải GPS tức thời — xem 1.2/3.5]
@@ -52,8 +52,8 @@ update() [10 Hz — ArduPilot scheduler]
     │                     ramp_val = min(ramp_val + 0.3×dt, flow_target)   [ramp 0.3 L/min/s]
     │                     _run_flow_pid(ramp_val, dt)
     │                     └──► return pwm  ──► _write_pump_pwm(pwm)
-    │         mode 2 ──► [FLOW_MODE=0] flow_target = SA_FLOW_SP × (MIX_CNT/MIX_STD), ramp_val = min(ramp_val+0.3×dt, flow_target)
-    │         (nấc cao)  [FLOW_MODE=1] flow_target = _compute_visin_target(SA_MIX_CNT)
+    │         mode 2 ──► [FLOW_MODE=0] flow_target = SA_FLOW_SP × (FLOW_MIX_CNT/FLOW_MIX_STD), ramp_val = min(ramp_val+0.3×dt, flow_target)
+    │         (nấc cao)  [FLOW_MODE=1] flow_target = _compute_visin_target(SA_FLOW_MIX_CNT)
     │                         ├──► _get_mission_dist()
     │                         ├──► _get_dosing_ref_speed() [tốc độ ĐẶT WP_SPEED]
     │                         ├──► kiểm tra mission/speed — không hợp lệ thì trả 0
@@ -79,7 +79,7 @@ update() [10 Hz — ArduPilot scheduler]
     │         Nếu flow ≤ 1.7: reset _tank_empty_ms về 0
     │
     └──► [Console log — SA_FLOW_LOG=1]
-              in theo chu kỳ SA_LOG_FL_MS, thêm "- out range" cuối dòng
+              in theo chu kỳ SA_FLOW_LOG_MS, thêm "- out range" cuối dòng
               nếu _flow_out_of_range=true (2026-09-04)
 ```
 
@@ -121,17 +121,28 @@ update() [10 Hz — ArduPilot scheduler]
 - **Đầu vào:** không có
 - **Xử lý:**
   1. Nếu `!is_enabled()` → zero flow, return
-  2. Gọi `_check_pump_config()`
-  3. Nếu SA_SIM=1 → `_run_simulation()`, ngược lại → `_ph_update()`
-  4. Gọi `_update_dosing_motor()`
-  5. Tính flow rate (nếu Δt ≥ 100ms): đọc `_pulse_count`, tính raw L/min → EMA → MA
-  6. Tính dt PID (clamp 0 < dt ≤ 1s)
-  7. Gọi `_update_spray_mode()`
-  8. Switch theo `_spray_mode`: tính flow_target, chạy PID
-  9. ARM edge detection: phát hiện disarm→arm và arm→disarm
-  10. Tank-empty detection: phát hiện bơm hút không khí
-  11. Console log nếu SA_FLOW_LOG=1
+  2. Gọi `_update_boot_handshake()` (mới 2026-09-08 — xem mục riêng bên dưới)
+  3. Gọi `_check_pump_config()`
+  4. Nếu SA_SIM=1 → `_run_simulation()`, ngược lại → `_ph_update()`
+  5. Gọi `_update_dosing_motor()`
+  6. Gọi `_update_flow()` — chứa toàn bộ phần còn lại (tính flow rate, PID,
+     switch theo `_spray_mode`, ARM/tank-empty detection, log) — đã tách ra
+     `AP_ShoesAgtech_Flow.cpp` khi chia module (xem mục 7)
 - **Đầu ra / Return:** `void` — side effects: `_flow_rate_filtered`, `_flow_rate_avg`, `_pump_pwm`, `_flow_target`
+
+---
+
+**`_update_boot_handshake()`** — mới, 2026-09-08
+- **File:** `AP_ShoesAgtech.cpp : 195`
+- **Được gọi bởi:** `update()`, ngay sau kiểm tra `is_enabled()`, TRƯỚC `_check_pump_config()`
+- **Đầu vào:** không có
+- **Xử lý:**
+  1. Nếu `_system_ready` đã `true` → return ngay (chỉ chạy logic 1 lần duy nhất mỗi phiên boot)
+  2. Đọc `hal.util->get_soft_armed()`
+  3. Đang ARM → gán `_seen_armed_once = true`
+  4. Đang DISARM **và** đã từng thấy ARM (`_seen_armed_once == true`) → gán `_system_ready = true`, gửi STATUSTEXT INFO `"SA: System ready - pump/feeder can now run"`
+- **Đầu ra / Return:** `void` — cập nhật `_seen_armed_once`, `_system_ready`
+- **Ghi chú:** Bắt buộc người vận hành phải **ARM rồi DISARM đúng 1 lần** kể từ lúc boot/nạp param thì `_system_ready` mới bật — tránh trường hợp RC dial/nút bấm chưa về đúng vị trí ngay sau khi cấp nguồn khiến bơm (Module 1) hoặc motor cho ăn (Module 3) tự chạy ngoài ý muốn. Chỉ cần đúng 1 lần trong cả phiên làm việc (không lặp lại ở các lần arm/disarm sau đó). Getter công khai: `is_system_ready()`. Trong lúc `_system_ready == false`: `_update_flow()` (Module 1) ép PWM bơm về SERVO_MIN và return sớm trước `switch(_spray_mode)` — xem mục 3.2; `_update_dosing_motor()` (Module 3) ép `motor_on = false` — xem MODULE3_DOS_DETAIL_DESIGN.md.
 
 ---
 
@@ -155,7 +166,7 @@ update() [10 Hz — ArduPilot scheduler]
 - **Xử lý:**
   1. Đọc PWM kênh `SA_RC_CHAN - 1` (0-indexed)
   2. Nếu PWM=0 (mất tín hiệu) → giữ nguyên mode cũ, return
-  3. PWM < 1300 → mode 0 (passthrough); 1300–1699 → mode 1 (nấc giữa, MIX_STD); ≥ 1700 → mode 2 (nấc cao, MIX_CNT)
+  3. PWM < 1300 → mode 0 (passthrough); 1300–1699 → mode 1 (nấc giữa, FLOW_MIX_STD); ≥ 1700 → mode 2 (nấc cao, FLOW_MIX_CNT)
 - **Đầu ra / Return:** `void` — cập nhật `_spray_mode`
 
 ---
@@ -287,30 +298,38 @@ update() [10 Hz — ArduPilot scheduler]
 
 | Tham số | Slot | Kiểu | Mặc định | Min | Max | Mô tả đầy đủ |
 |---|---|---|---|---|---|---|
-| `SA_ENABLE` | 1 | Int8 | 1 | 0 | 1 | Bật/tắt toàn bộ library. Tắt → không có task nào chạy. |
-| `SA_CAL_FAC` | 2 | Float | 3874.5 | 100 | 10000 | Hệ số cảm biến YF-S402B (pulses/Litre). Đo thực nghiệm: xả X lít, đếm xung, CAL_FAC = pulses/X. |
-| `SA_EMA_AL` | 3 | Float | 0.1 | 0.01 | 1.0 | Alpha EMA lưu lượng tức thời. Nhỏ = mịn hơn, phản hồi chậm hơn. |
-| `SA_FLOW_LOG` | 4 | Int8 | 0 | 0 | 1 | Bật (1) console log lưu lượng theo chu kỳ `SA_LOG_FL_MS`. |
-| `SA_RC_CHAN` | 5 | Int8 | 6 | 1 | 16 | Kênh RC (1-indexed) chọn chế độ phun. |
-| `SA_RC_PUMP` | 6 | Int8 | 9 | 1 | 16 | Kênh RC passthrough (mode 0). |
-| `SA_PUMP_CHAN` | 7 | Int8 | 8 | 1 | 16 | Kênh servo đầu ra bơm. Bắt buộc `SERVOx_FUNCTION=0`. |
-| `SA_FLOW_SP` | 8 | Float | 5.0 | 0 | 200 | Setpoint mode 1 khi `SA_FLOW_MODE=0` (L/min). |
-| `SA_PID_P` | 9 | Float | 80.0 | 0 | 500 | Hệ số P: µs PWM / (L/min sai số). |
-| `SA_PID_I` | 10 | Float | 20.0 | 0 | 200 | Hệ số I: µs PWM / (L/min·s). |
-| `SA_PID_LPF` | 11 | Float | 0.3 | 0.01 | 1.0 | Alpha LPF đầu ra PID (1.0 = không lọc). |
-| `SA_LOG_FL_MS` | 22 | Int16 | 1000 | 100 | 60000 | Chu kỳ console log lưu lượng (ms). |
-| `SA_SIM` | 32 | Int8 | 0 | 0 | 1 | Chế độ giả lập: 1=inject dữ liệu sin thay cảm biến thật. |
-| `SA_FLOW_PIN` | 33 | Int16 | 55 | 1 | 200 | Chân GPIO cảm biến. **Chỉ đọc khi init() — cần reboot khi thay đổi.** |
-| `SA_TANK_VOL` | 34 | Float | 0.0 | 0 | 2000 | Dung tích tank vi sinh (L). `=0` tắt FLOW_MODE=1. |
-| `SA_FLOW_MODE` | 35 | Int8 | 0 | 0 | 1 | Nguồn setpoint: **0**=`SA_FLOW_SP` trực tiếp, **1**=phân phối đều theo mission+tốc độ. |
-| `SA_MIX_STD` | 37 | Float | 0.35 | 0.001 | 1.0 | Tỉ lệ vi sinh nấc giữa (Mặc định van). FLOW_MODE=1: `q1 = TANK_VOL × MIX_STD × speed × 60 / dist`. FLOW_MODE=0: setpoint = SA_FLOW_SP. |
-| `SA_MIX_CNT` | 38 | Float | 0.50 | 0.001 | 1.0 | Tỉ lệ vi sinh nấc cao (Chống nghẹt van). FLOW_MODE=1: `q1 = TANK_VOL × MIX_CNT × speed × 60 / dist`. FLOW_MODE=0: `flow_target = SA_FLOW_SP × (MIX_CNT/MIX_STD)`. |
-| `SA_FLOW_VEL` | 39 | Float | 0.0 | 0 | 20 | Override vận tốc cho FLOW_MODE=1. `=0`: dùng vận tốc thật từ AHRS. `>0`: dùng giá trị này (m/s) — dùng khi calib đứng yên. |
-| `SA_SPD_START` | 19 | Int8 | 80 | 0 | 100 | % tốc độ ĐẶT cho mission tối thiểu để bắt đầu bơm thật (FLOW_MODE=1, nấc 2/3) — xem `_speed_min_start()`. **Slot 19, khai báo trong Module 3, DÙNG CHUNG với `SA_DOS_MODE=2`** (đổi giá trị này ảnh hưởng cả 2 module). `=0` tắt kiểm tra %, chỉ còn sàn 0.05 m/s. Đổi tên từ `SA_DOS_SPD_PCT` 2026-09-04. |
+| `SA_ENABLE` | 1 (top-level) | Int8 | 1 | 0 | 1 | Bật/tắt toàn bộ library. Tắt → không có task nào chạy. |
+| `SA_CAL_FAC` | 1 | Float | 3874.5 | 100 | 10000 | Hệ số cảm biến YF-S402B (pulses/Litre). Đo thực nghiệm: xả X lít, đếm xung, CAL_FAC = pulses/X. |
+| `SA_FLOW_EMA_AL` | 2 | Float | 0.1 | 0.01 | 1.0 | Alpha EMA lưu lượng tức thời. Nhỏ = mịn hơn, phản hồi chậm hơn. |
+| `SA_FLOW_LOG` | 3 | Int8 | 0 | 0 | 1 | Bật (1) console log lưu lượng theo chu kỳ `SA_FLOW_LOG_MS`. |
+| `SA_RC_CHAN` | 4 | Int8 | 6 | 1 | 16 | Kênh RC (1-indexed) chọn chế độ phun. |
+| `SA_RC_PUMP` | 5 | Int8 | 9 | 1 | 16 | Kênh RC passthrough (mode 0). |
+| `SA_PUMP_CHAN` | 6 | Int8 | 8 | 1 | 16 | Kênh servo đầu ra bơm. Bắt buộc `SERVOx_FUNCTION=0`. |
+| `SA_FLOW_SP` | 7 | Float | 5.0 | 0 | 200 | Setpoint mode 1 khi `SA_FLOW_MODE=0` (L/min). |
+| `SA_FLOW_PID_P` | 8 | Float | 80.0 | 0 | 500 | Hệ số P: µs PWM / (L/min sai số). |
+| `SA_FLOW_PID_I` | 9 | Float | 20.0 | 0 | 200 | Hệ số I: µs PWM / (L/min·s). |
+| `SA_FLOW_PID_LPF` | 10 | Float | 0.3 | 0.01 | 1.0 | Alpha LPF đầu ra PID (1.0 = không lọc). |
+| `SA_FLOW_LOG_MS` | 11 | Int16 | 2000 | 100 | 60000 | Chu kỳ console log lưu lượng (ms). Đổi tên từ `SA_LOG_FL_MS` (2026-09-08) cho nhất quán với `SA_PH_LOG_MS`/`SA_DOS_LOG_MS`. |
+| `SA_FLOW_PIN` | 12 | Int16 | 55 | 1 | 200 | Chân GPIO cảm biến. **Chỉ đọc khi init() — cần reboot khi thay đổi.** |
+| `SA_TANK_VOL` | 13 | Float | 0.0 | 0 | 2000 | Dung tích tank vi sinh (L). `=0` tắt FLOW_MODE=1. |
+| `SA_FLOW_MODE` | 14 | Int8 | 0 | 0 | 1 | Nguồn setpoint: **0**=`SA_FLOW_SP` trực tiếp, **1**=phân phối đều theo mission+tốc độ. |
+| `SA_FLOW_MIX_STD` | 15 | Float | 0.35 | 0.001 | 1.0 | Tỉ lệ vi sinh nấc giữa (Mặc định van). FLOW_MODE=1: `q1 = TANK_VOL × FLOW_MIX_STD × speed × 60 / dist`. FLOW_MODE=0: setpoint = SA_FLOW_SP. |
+| `SA_FLOW_MIX_CNT` | 16 | Float | 0.50 | 0.001 | 1.0 | Tỉ lệ vi sinh nấc cao (Chống nghẹt van). FLOW_MODE=1: `q1 = TANK_VOL × FLOW_MIX_CNT × speed × 60 / dist`. FLOW_MODE=0: `flow_target = SA_FLOW_SP × (FLOW_MIX_CNT/FLOW_MIX_STD)`. |
+| `SA_FLOW_VEL` | 17 | Float | 0.0 | 0 | 20 | Override vận tốc cho FLOW_MODE=1. `=0`: dùng vận tốc thật từ AHRS. `>0`: dùng giá trị này (m/s) — dùng khi calib đứng yên. |
+| `SA_SPD_START` | 19 (top-level) | Int8 | 80 | 0 | 100 | % tốc độ ĐẶT cho mission tối thiểu để bắt đầu bơm thật (FLOW_MODE=1, nấc 2/3) — xem `_speed_min_start()`. **Khai báo chung trong `AP_ShoesAgtech` (không thuộc riêng subgroup nào), DÙNG CHUNG với `SA_DOS_MODE=2`** (đổi giá trị này ảnh hưởng cả 2 module). `=0` tắt kiểm tra %, chỉ còn sàn 0.05 m/s. Đổi tên từ `SA_DOS_SPD_PCT` 2026-09-04. |
 
 > **Param chỉ có hiệu lực sau reboot:** `SA_FLOW_PIN`
 >
-> **Param đã bị gỡ bỏ (không còn tồn tại):** `SA_APP_RATE` (slot 12, cũ), `SA_BOOM_W` (slot 13, cũ) — thay bằng `SA_MIX_STD`/`SA_MIX_CNT`. Slot 12 nay là `SA_PH_CAP_M` (Module 2); slot 13 bỏ trống.
+> **⚠️ Đổi hệ đánh số slot (2026-09-07):** Module 1 được tách thành class
+> `AP_ShoesAgtech_FlowParams` riêng (xem mục kiến trúc/mã nguồn
+> `AP_ShoesAgtech.h`), có bảng 64 slot **riêng** thay vì dùng chung 64 slot
+> với toàn bộ thư viện như trước — cột "Slot" trong bảng trên (trừ các
+> dòng ghi "top-level") là số MỚI (1-17), không còn là 2-11/22/33-39 như
+> tài liệu cũ. Tên tham số hiển thị (`SA_CAL_FAC`...) không đổi, chỉ riêng
+> `SA_LOG_FL_MS` đổi tên thành `SA_FLOW_LOG_MS` (2026-09-08) cho nhất quán
+> với `SA_PH_LOG_MS`/`SA_DOS_LOG_MS`. Các param `SA_APP_RATE`/`SA_BOOM_W`
+> (đã gỡ bỏ từ trước, thay bằng `SA_FLOW_MIX_STD`/`SA_FLOW_MIX_CNT`) không còn liên
+> quan gì đến slot hiện tại.
 
 ---
 
@@ -335,7 +354,7 @@ Mỗi RISING edge trên SA_FLOW_PIN:
 Δpulses = _pulse_count − _last_pulse_snapshot    (xử lý wrap-around uint32)
 Δt      = delta_t_ms × 0.001   (giây)
 raw_lpm = (Δpulses / SA_CAL_FAC) / Δt × 60      (L/min)
-_flow_rate_filtered = (1−α) × prev + α × raw_lpm (EMA, α=SA_EMA_AL)
+_flow_rate_filtered = (1−α) × prev + α × raw_lpm (EMA, α=SA_FLOW_EMA_AL)
 → nếu < 0.01 L/min: ép = 0.0
 ```
 
@@ -350,8 +369,8 @@ _flow_rate_avg = sum / count  (count tăng dần đến 10)
 ```
 rc_pwm = RC_Channels::get_radio_in(SA_RC_CHAN − 1)
 rc_pwm < 1300        →  mode 0 (PASSTHROUGH — nấc thấp)
-1300 ≤ rc_pwm < 1700 →  mode 1 (FLOW PID, tỉ lệ MIX_STD — nấc giữa / Mặc định van)
-rc_pwm ≥ 1700        →  mode 2 (FLOW PID, tỉ lệ MIX_CNT — nấc cao / Chống nghẹt van)
+1300 ≤ rc_pwm < 1700 →  mode 1 (FLOW PID, tỉ lệ FLOW_MIX_STD — nấc giữa / Mặc định van)
+rc_pwm ≥ 1700        →  mode 2 (FLOW PID, tỉ lệ FLOW_MIX_CNT — nấc cao / Chống nghẹt van)
 rc_pwm = 0 (mất tín hiệu) →  giữ mode cũ
 ```
 
@@ -361,24 +380,24 @@ SA_FLOW_MODE=0 hoặc SA_TANK_VOL=0:
     flow_target = SA_FLOW_SP  (setpoint trực tiếp)
 
 SA_FLOW_MODE=1 và SA_TANK_VOL>0:
-    flow_target = _compute_visin_target(SA_MIX_STD)
+    flow_target = _compute_visin_target(SA_FLOW_MIX_STD)
     (xem luồng _compute_visin_target bên dưới)
 ```
 
 **Tính flow_target (mode 2 — nấc cao):**
 ```
 SA_FLOW_MODE=0 hoặc SA_TANK_VOL=0:
-    ratio = SA_MIX_CNT / SA_MIX_STD   (nếu MIX_STD ≤ 0.001 → ratio = 1.0)
+    ratio = SA_FLOW_MIX_CNT / SA_FLOW_MIX_STD   (nếu FLOW_MIX_STD ≤ 0.001 → ratio = 1.0)
     flow_target = constrain(SA_FLOW_SP × ratio, 0, 200)
 
 SA_FLOW_MODE=1 và SA_TANK_VOL>0:
-    flow_target = _compute_visin_target(SA_MIX_CNT)
+    flow_target = _compute_visin_target(SA_FLOW_MIX_CNT)
     (xem luồng _compute_visin_target bên dưới)
 ```
 
 **Luồng `_compute_visin_target(r)` — FLOW_MODE=1:**
 ```
-Đầu vào: r = tỉ lệ vi sinh (MIX_STD hoặc MIX_CNT, clamp 0.01–1.0)
+Đầu vào: r = tỉ lệ vi sinh (FLOW_MIX_STD hoặc FLOW_MIX_CNT, clamp 0.01–1.0)
 
 1. dist = _get_mission_dist()
    dist ≤ 1m → reset PI, cảnh báo 1 lần/ARM (cờ _no_mission_warned)
@@ -628,6 +647,7 @@ Ví dụ:
 |---|---|---|---|
 | `ShoesAgtech: IRQ attach failed` | CRITICAL | GPIO attach thất bại | 1 lần init |
 | `ShoesAgtech: Flow sensor ready` | INFO | GPIO attach thành công | 1 lần init |
+| `SA: System ready - pump/feeder can now run` | INFO | Vừa DISARM sau khi đã từng ARM ít nhất 1 lần kể từ boot (`_update_boot_handshake()`, mới 2026-09-08) | 1 lần duy nhất mỗi phiên boot |
 | `SA FM1: no mission - pump stopped` | WARNING | FLOW_MODE=1, dist ≤ 1m, đang chạy | **1 lần/phiên ARM** (cờ `_no_mission_warned`, đổi từ mỗi 5s, 2026-09-04) |
 
 > **⚠️ 2 dòng WARNING đã gỡ bỏ (2026-09-04):** `SA FM1: q1=...L/min < 0.8 (pump range) - shorten mission or increase speed` và `... > 1.3 (pump range) - lengthen mission or reduce speed` — không còn in ra nữa. Thay vào đó, log định kỳ `[FLOW]` (mục 4.3) tự thêm hậu tố `" - out range"` vào cuối dòng khi q1 ngoài dải, đồng thời vẫn hiện đúng q1 thật thay vì `Q: 0.00` như trước.
@@ -649,6 +669,10 @@ SA_FLOW_MODE=1 yêu cầu: SA_TANK_VOL > 0 + mission đã upload + speed ≥ 0.1
                          (0.8/1.3 = dải lưu lượng THẬT bơm đạt được, hardcode theo phần cứng, 2026-08-20, chỉnh lại 2026-09-04)
                          thiếu 1 trong các điều kiện trên → flow_target = 0 (bơm dừng)
 Tank-empty: chỉ cảnh báo, bơm vẫn tiếp tục — người lái tự quyết định
+Bắt tay an toàn lúc boot (mới 2026-09-08): phải ARM rồi DISARM đúng 1 lần
+                         kể từ lúc cấp nguồn/nạp param thì bơm mới được phép chạy —
+                         xem _update_boot_handshake() ở mục 1.2. DÙNG CHUNG với
+                         Module 3 (is_system_ready()), chỉ cần 1 lần cho cả 2 module.
 ```
 
 **Ràng buộc phần cứng:** GPIO pin phải 3.3V tolerant hoặc dùng voltage divider (YF-S402B output = 5V)
@@ -686,7 +710,7 @@ FC config:
 |---|---|---|---|
 | FLOW_MODE=1, TANK_VOL=0 | Không đề cập | Fallback về SA_FLOW_SP | Tránh bơm dừng khi chưa cài tank |
 | Anti-windup PI | Clamp khi chạm trần/sàn | Clamp integral `±(range/(2×I_gain))` | Chuẩn hóa theo dải PWM thực tế |
-| Điều kiện van (Chống nghẹt / Mặc định) | Basic Design Case 9–10, param SA_SPRAY_MODE | **Tích hợp vào nấc RC**: nấc giữa = MIX_STD, nấc cao = MIX_CNT. SA_SPRAY_MODE và SA_SP_PCT được thay thế | Loại bỏ param riêng; người dùng chọn trực tiếp bằng tay RC |
+| Điều kiện van (Chống nghẹt / Mặc định) | Basic Design Case 9–10, param SA_SPRAY_MODE | **Tích hợp vào nấc RC**: nấc giữa = FLOW_MIX_STD, nấc cao = FLOW_MIX_CNT. SA_SPRAY_MODE và SA_SP_PCT được thay thế | Loại bỏ param riêng; người dùng chọn trực tiếp bằng tay RC |
 | FLOW_MODE=1 công thức | `q1 = r × APP_RATE × speed × BOOM_W × 0.006` + `dist_max = TANK_VOL × 10000 / (r × APP_RATE × BOOM_W)` | `q1 = TANK_VOL × r × speed × 60 / mission_dist` | SA_APP_RATE và SA_BOOM_W loại khỏi công thức; vi_per_run = TANK_VOL×r hằng số; dist_max theo tốc độ thực tế |
 | FLOW_MODE=1 dải q1 | q1 > 6.0 → dừng (giới hạn cảm biến YF-S402B) | q1 chỉ còn sàn dưới 0.3 (không còn trần trên) | Ban đầu áp trần 2.0 (YF-S402B chạy ổn nhất 0.3–2.0 L/min); từ 2026-08-19 bỏ hẳn trần trên theo yêu cầu — chấp nhận phun đậm đặc trên mission ngắn thay vì chặn bơm |
 | Dải q1, ngưỡng + tần suất cảnh báo (2026-08-20) | Không có (thừa kế ngưỡng 2026-08-19 ở trên) | Đổi hẳn sàn/trần thành `0.9`/`1.2` — **dải lưu lượng THẬT bơm hiện tại đạt được**, hardcode trong code (không phải tham số); cảnh báo runtime đổi từ lặp mỗi 5s sang **1 lần/phiên ARM** (cờ `_q1_range_warned`) | Đo thực tế phát hiện bơm chỉ đạt 0.9-1.2 L/min trên toàn dải PWM MIN→MAX — ngưỡng nghiệp vụ 0.3/2.0 cũ không còn phản ánh đúng khả năng phần cứng; cảnh báo lặp mỗi 5s không cần thiết vì nguyên nhân (giới hạn phần cứng) không tự hết theo thời gian |

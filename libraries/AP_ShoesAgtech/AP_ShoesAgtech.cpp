@@ -85,7 +85,8 @@ AP_ShoesAgtech::AP_ShoesAgtech()
       _mission_dist_m(0.0f), _mission_ncmds(0),
       _tank_empty_detected(false), _tank_empty_ms(0),
       _no_mission_warned(false), _flow_out_of_range(false),
-      _target_speed(0.0f), _sim_speed(0.0f), _ph_uart(nullptr),
+      _target_speed(0.0f), _seen_armed_once(false), _system_ready(false),
+      _sim_speed(0.0f), _ph_uart(nullptr),
       _ph_update_ms(0), _ph_req_sent_ms(0), _ph_req_pending(false),
       _ph_last_good_ms(0), _ph_nodata_warn_ms(0), _ph_last_log_ms(0),
       _ph_value(0.0f), _ph_value_ma(0.0f), _ph_mv(0), _ph_temp(25.0f),
@@ -163,6 +164,8 @@ void AP_ShoesAgtech::update(void) {
     return;
   }
 
+  _update_boot_handshake();
+
   _check_pump_config();
 
   if (_simulation.get() > 0) {
@@ -174,6 +177,33 @@ void AP_ShoesAgtech::update(void) {
   _update_dosing_motor();
 
   _update_flow();
+}
+
+// =============================================================
+// BẮT TAY AN TOÀN LÚC MỚI BOOT — mới 2026-09-08
+// Ngay sau boot/load param, RC receiver có thể chưa gửi đúng vị trí
+// THẬT của nấc/nút (dial chưa lăn về đúng chỗ, hoặc lỡ chạm nút) — nếu
+// tin ngay giá trị RC lúc đó, bơm (Module 1) hoặc motor cho ăn (Module
+// 3) có thể tự chạy ngoài ý muốn. Bắt buộc người vận hành phải ARM rồi
+// DISARM đúng 1 lần (xác nhận đã kiểm tra hệ thống) thì _system_ready
+// mới bật — trước đó case 1/2/3 của switch(_spray_mode) trong
+// _update_flow() và motor_on trong _update_dosing_motor() đều bị ép
+// tắt hoàn toàn, bất kể RC đang ở vị trí nào. Chỉ cần đúng 1 lần kể từ
+// lúc boot — không lặp lại ở các lần arm/disarm sau đó trong cùng phiên
+// làm việc.
+// =============================================================
+void AP_ShoesAgtech::_update_boot_handshake(void) {
+  if (_system_ready) {
+    return;
+  }
+  bool now_armed = hal.util->get_soft_armed();
+  if (now_armed) {
+    _seen_armed_once = true;
+  } else if (_seen_armed_once) {
+    _system_ready = true;
+    gcs().send_text(MAV_SEVERITY_INFO,
+                    "SA: System ready - pump/feeder can now run");
+  }
 }
 
 // =============================================================

@@ -64,7 +64,8 @@ const AP_Param::GroupInfo AP_ShoesAgtech_DosingParams::var_info[] = {
     // @Range: 100 60000
     // @Units: ms
     // @User: Advanced
-    AP_GROUPINFO("DOS_LOG_MS", 6, AP_ShoesAgtech_DosingParams, dos_log_ms, 1000),
+    AP_GROUPINFO("DOS_LOG_MS", 6, AP_ShoesAgtech_DosingParams, dos_log_ms,
+                 2000),
 
     // @Param: DOS_MODE
     // @DisplayName: Dosing motor speed mode
@@ -286,7 +287,8 @@ const AP_Param::GroupInfo AP_ShoesAgtech_DosingParams::var_info[] = {
 // Khi vừa đạt đủ cả 4 -> báo "setup thành công" một lần.
 // =============================================================
 void AP_ShoesAgtech::_check_dosing_config(void) {
-  uint8_t chan_idx = (uint8_t)constrain_int16(_dos_params.dos_chan.get() - 1, 0, 15);
+  uint8_t chan_idx =
+      (uint8_t)constrain_int16(_dos_params.dos_chan.get() - 1, 0, 15);
   SRV_Channel *ch = SRV_Channels::srv_channel(chan_idx);
   int32_t func_val = (int32_t)SRV_Channels::channel_function(chan_idx);
   int32_t chan = (int32_t)_dos_params.dos_chan.get();
@@ -353,14 +355,15 @@ void AP_ShoesAgtech::_check_disc_config(void) {
     return;
   }
 
-  uint8_t chan_idx = (uint8_t)constrain_int16(_dos_params.disc_chan.get() - 1, 0, 15);
+  uint8_t chan_idx =
+      (uint8_t)constrain_int16(_dos_params.disc_chan.get() - 1, 0, 15);
   SRV_Channel *ch = SRV_Channels::srv_channel(chan_idx);
   int32_t func_val = (int32_t)SRV_Channels::channel_function(chan_idx);
   int32_t chan = (int32_t)_dos_params.disc_chan.get();
 
   bool have_chan = (ch != nullptr);
   bool func_ok = have_chan && (func_val == (int32_t)SRV_Channel::k_none);
-  bool min_ok = have_chan && (ch->get_output_min() == 1000);
+  bool min_ok = have_chan && (ch->get_output_min() == 1050);
   bool max_ok = have_chan && (ch->get_output_max() == 2200);
 
   _disc_config_ok = func_ok && min_ok && max_ok;
@@ -392,7 +395,7 @@ void AP_ShoesAgtech::_check_disc_config(void) {
                     (int)func_val);
   }
   if (!min_ok) {
-    gcs().send_text(MAV_SEVERITY_WARNING, "SA: SERVO%d MIN=%u, must set =1000",
+    gcs().send_text(MAV_SEVERITY_WARNING, "SA: SERVO%d MIN=%u, must set =1050",
                     (int)chan, (unsigned)ch->get_output_min());
   }
   if (!max_ok) {
@@ -463,8 +466,9 @@ void AP_ShoesAgtech::_update_dosing_motor(void) {
   const PondEntry &active_pond = _ponds[_active_pond_idx];
   const float dos_sp_active =
       active_pond.valid ? active_pond.dos_sp : _dos_params.dos_sp.get();
-  const int8_t dos_food_active =
-      active_pond.valid ? active_pond.dos_food : (int8_t)_dos_params.dos_food.get();
+  const int8_t dos_food_active = active_pond.valid
+                                     ? active_pond.dos_food
+                                     : (int8_t)_dos_params.dos_food.get();
 
   _check_dosing_config();
   if (!_dos_config_ok) {
@@ -473,7 +477,8 @@ void AP_ShoesAgtech::_update_dosing_motor(void) {
   }
 
   uint32_t now = AP_HAL::millis();
-  uint8_t rc_idx = (uint8_t)constrain_int16(_dos_params.dos_rc.get() - 1, 0, 15);
+  uint8_t rc_idx =
+      (uint8_t)constrain_int16(_dos_params.dos_rc.get() - 1, 0, 15);
   uint16_t rc_pwm = RC_Channels::get_radio_in(rc_idx);
   bool motor_on = (rc_pwm > 1500);
 
@@ -487,6 +492,15 @@ void AP_ShoesAgtech::_update_dosing_motor(void) {
     } else {
       motor_on = false;
     }
+  }
+
+  // Bắt tay an toàn lúc mới boot (mới 2026-09-08, xem
+  // _update_boot_handshake()): chưa ARM+DISARM đủ 1 lần kể từ boot thì
+  // ép cả trục vít lẫn đĩa rải tắt hoàn toàn, bất kể SA_DOS_RC đang ở vị
+  // trí nào — tránh RC chưa lăn về đúng chỗ hoặc lỡ chạm nút làm motor
+  // tự chạy. Đặt SAU _dos_rc_seen_off để không tính lẫn vào cờ đó.
+  if (!_system_ready) {
+    motor_on = false;
   }
 
   if (motor_on != _dos_was_on) {
@@ -504,17 +518,21 @@ void AP_ShoesAgtech::_update_dosing_motor(void) {
   const bool disc_enabled = _dos_params.disc_chan.get() > 0;
   const uint32_t elapsed_ms = now - _dos_seq_ms;
   const uint32_t disc_delay_ms =
-      disc_enabled
-          ? (uint32_t)(constrain_float(_dos_params.disc_delay.get(), 0.0f,
-                                       60.0f) *
-                       1000.0f)
-          : 0U;
+      disc_enabled ? (uint32_t)(constrain_float(_dos_params.disc_delay.get(),
+                                                0.0f, 60.0f) *
+                                1000.0f)
+                   : 0U;
   // motor_on=true, chưa đủ delay  -> đĩa quay, trục vít CHƯA được chạy
   // motor_on=true, đã đủ delay    -> đĩa quay, trục vít được chạy
   // motor_on=false, chưa đủ delay -> đĩa VẪN quay (đang chờ tắt), trục vít tắt
   // motor_on=false, đã đủ delay   -> đĩa tắt, trục vít tắt
   const bool auger_allowed = motor_on && (elapsed_ms >= disc_delay_ms);
-  _disc_running = disc_enabled && (motor_on || (elapsed_ms < disc_delay_ms));
+  // _system_ready=false ép hẳn _disc_running=false, KHÔNG dùng công thức
+  // grace-period bên dưới — nếu không, ngay lúc mới boot _dos_seq_ms vẫn
+  // = 0 nên elapsed_ms nhỏ có thể bị hiểu nhầm thành "vừa mới tắt, còn
+  // trong thời gian chờ", khiến đĩa quay vài giây dù chưa qua bắt tay.
+  _disc_running = _system_ready && disc_enabled &&
+                  (motor_on || (elapsed_ms < disc_delay_ms));
 
   float dos_rate_gpm = 0.0f; // tốc độ cấp tức thời (g/phút) — dùng để in log
 
@@ -534,8 +552,8 @@ void AP_ShoesAgtech::_update_dosing_motor(void) {
       if (dos_sp_active <= 0.0f) {
         pwm_f = 1500.0f;
       } else {
-        SRV_Channel *ch_dos =
-            SRV_Channels::srv_channel((uint8_t)(_dos_params.dos_chan.get() - 1));
+        SRV_Channel *ch_dos = SRV_Channels::srv_channel(
+            (uint8_t)(_dos_params.dos_chan.get() - 1));
         uint16_t pwm_min = (ch_dos != nullptr) ? ch_dos->get_output_min() : 800;
         uint16_t pwm_max =
             (ch_dos != nullptr) ? ch_dos->get_output_max() : 2200;
@@ -632,19 +650,23 @@ void AP_ShoesAgtech::_update_dosing_motor(void) {
     _dos_pwm = 1500;
   }
 
-  uint8_t chan_idx = (uint8_t)constrain_int16(_dos_params.dos_chan.get() - 1, 0, 15);
+  uint8_t chan_idx =
+      (uint8_t)constrain_int16(_dos_params.dos_chan.get() - 1, 0, 15);
   SRV_Channels::set_output_pwm_chan(chan_idx, _dos_pwm);
 
   // ---- ĐĨA RẢI LY TÂM: ghi PWM theo _disc_running tính ở trên ----
   if (disc_enabled) {
-    uint8_t disc_idx = (uint8_t)constrain_int16(_dos_params.disc_chan.get() - 1, 0, 15);
+    uint8_t disc_idx =
+        (uint8_t)constrain_int16(_dos_params.disc_chan.get() - 1, 0, 15);
     SRV_Channel *ch_disc = SRV_Channels::srv_channel(disc_idx);
     if (ch_disc != nullptr) {
       uint16_t disc_min = ch_disc->get_output_min();
       uint16_t disc_max = ch_disc->get_output_max();
       if (_disc_running && _disc_config_ok) {
-        float pct = constrain_float(_dos_params.disc_pct.get(), 0.0f, 100.0f) * 0.01f;
-        _disc_pwm = (uint16_t)((float)disc_min + pct * (float)(disc_max - disc_min));
+        float pct =
+            constrain_float(_dos_params.disc_pct.get(), 0.0f, 100.0f) * 0.01f;
+        _disc_pwm =
+            (uint16_t)((float)disc_min + pct * (float)(disc_max - disc_min));
       } else {
         _disc_pwm = disc_min;
       }
@@ -666,4 +688,3 @@ void AP_ShoesAgtech::_update_dosing_motor(void) {
     }
   }
 }
-

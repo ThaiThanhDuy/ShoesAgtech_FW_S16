@@ -183,7 +183,7 @@ Heuristic GCS: data[5]==0 AND data[6]==0 AND data[7]==0 → cảnh báo "pH khô
 | 1 | `flow_rate_avg` | L/min | Moving avg 10 mẫu; \|x\|<0.01 ép = 0.0 |
 | 2 | `flow_target` | L/min | Setpoint hiện hành; 0 khi mode 0 hoặc FLOW_MODE=1 không đủ điều kiện |
 | 3 | `pump_pwm` | µs | PWM thực xuất bơm; dải MIN–MAX từ SERVOx |
-| 4 | `spray_mode` | 0/1/2 | 0=PASSTHROUGH, 1=FLOW PID nấc giữa (MIX_STD), 2=FLOW PID nấc cao (MIX_CNT) |
+| 4 | `spray_mode` | 0/1/2 | 0=PASSTHROUGH, 1=FLOW PID nấc giữa (FLOW_MIX_STD), 2=FLOW PID nấc cao (FLOW_MIX_CNT) |
 
 **Module 2 — pH + ao active (data[5..14]) — chỉ khi `SA_PH_EN=1 AND ph_has_data()`:**
 

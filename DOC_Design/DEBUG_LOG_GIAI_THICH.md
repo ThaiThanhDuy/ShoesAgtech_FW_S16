@@ -102,10 +102,10 @@ Khi `SA_FLOW_MODE=1` và `SA_TANK_VOL > 0`, setpoint mode 1 **không** lấy t�
 (`_compute_visin_target()`, [AP_ShoesAgtech.cpp:967-1018](AP_ShoesAgtech.cpp#L967-L1018)):
 
 ```
-q1 = SA_TANK_VOL × SA_MIX_STD × speed × 60 / mission_dist        (L/phút)
+q1 = SA_TANK_VOL × SA_FLOW_MIX_STD × speed × 60 / mission_dist        (L/phút)
 ```
 
-Đây là **lưu lượng bơm cần thiết** để toàn bộ `SA_TANK_VOL × SA_MIX_STD` lít vi sinh
+Đây là **lưu lượng bơm cần thiết** để toàn bộ `SA_TANK_VOL × SA_FLOW_MIX_STD` lít vi sinh
 được phun đều hết trên quãng đường `mission_dist`, với tốc độ xe hiện tại `speed`.
 
 Vì lý do an toàn/thực tế phần cứng (bơm màng có dải lưu lượng hoạt động ổn định
@@ -116,14 +116,14 @@ giới hạn), code chỉ cho bơm chạy khi:
 ```
 
 Nếu `q1 > 2.0` (như trường hợp của bạn) nghĩa là: **mission quá ngắn** so với
-lượng vi sinh cần phun (`SA_TANK_VOL × SA_MIX_STD`) ở tốc độ đang chạy — nếu cứ
+lượng vi sinh cần phun (`SA_TANK_VOL × SA_FLOW_MIX_STD`) ở tốc độ đang chạy — nếu cứ
 bơm sẽ phun quá đậm đặc trong thời gian ngắn. Code chủ động **khóa bơm về 0**
 thay vì bơm sai liều lượng.
 
 ### Cách tính khoảng cách tối thiểu cần thiết
 
 ```
-dist_min = SA_TANK_VOL × SA_MIX_STD × speed × 60 / 2.0
+dist_min = SA_TANK_VOL × SA_FLOW_MIX_STD × speed × 60 / 2.0
 ```
 
 Giá trị `dist_min` này được in kèm ngay trong log lúc ARM:
@@ -137,7 +137,7 @@ này với độ dài mission hiện tại để biết cần kéo dài thêm ba
    các chặng NAV (WP/LOITER/SPLINE) ≥ `dist_min`.
 2. **Giảm tốc độ AUTO** (`WP_SPEED` / `CRUISE_SPEED`) — `q1` tỉ lệ thuận với
    `speed`, giảm tốc độ sẽ giảm `q1`.
-3. **Giảm `SA_TANK_VOL` hoặc `SA_MIX_STD`** — nếu giá trị đang đặt cao hơn
+3. **Giảm `SA_TANK_VOL` hoặc `SA_FLOW_MIX_STD`** — nếu giá trị đang đặt cao hơn
    thực tế bình chứa / tỷ lệ pha mong muốn ở nấc giữa.
 
 ### Ghi chú thêm

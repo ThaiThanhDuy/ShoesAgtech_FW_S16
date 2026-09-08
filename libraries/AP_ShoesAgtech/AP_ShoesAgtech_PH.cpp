@@ -131,7 +131,8 @@ const AP_Param::GroupInfo AP_ShoesAgtech_PHParams::var_info[] = {
     // @Range: 10 5000
     // @Units: m
     // @User: Standard
-    AP_GROUPINFO("PH_POND_D", 14, AP_ShoesAgtech_PHParams, ph_pond_dist, 300.0f),
+    AP_GROUPINFO("PH_POND_D", 14, AP_ShoesAgtech_PHParams, ph_pond_dist,
+                 300.0f),
 
     // @Param: PH_CAP_S
     // @DisplayName: pH sample interval within a slot (s)
@@ -255,7 +256,8 @@ void AP_ShoesAgtech::_ph_update(void) {
   if (avail < 23) {
     if (now - _ph_req_sent_ms > 500) {
       _ph_req_pending = false;
-      const uint32_t timeout_ms = (uint32_t)MAX(_ph_params.ph_timeout.get(), 1) * 1000U;
+      const uint32_t timeout_ms =
+          (uint32_t)MAX(_ph_params.ph_timeout.get(), 1) * 1000U;
       bool no_data =
           (_ph_last_good_ms == 0) || (now - _ph_last_good_ms > timeout_ms);
       if (no_data && now - _ph_nodata_warn_ms >= 10000) {
@@ -302,7 +304,8 @@ void AP_ShoesAgtech::_ph_update(void) {
   int16_t raw_mv = (int16_t)(((uint16_t)buf[7] << 8) | buf[8]);
   int16_t raw_temp = (int16_t)(((uint16_t)buf[19] << 8) | buf[20]);
 
-  float ph_cal = constrain_float(raw_ph / 100.0f + _ph_params.ph_off.get(), 0.0f, 14.0f);
+  float ph_cal =
+      constrain_float(raw_ph / 100.0f + _ph_params.ph_off.get(), 0.0f, 14.0f);
   _ph_mv = raw_mv;
   _ph_temp = raw_temp / 10.0f + _ph_params.ph_toff.get();
   _ph_value = ph_cal;
@@ -356,10 +359,9 @@ void AP_ShoesAgtech::_ph_print_log(uint32_t now) {
     break;
   }
   const char *ph_pfx = (_simulation.get() > 0) ? "[SIM][WM]" : "[WM]";
-  gcs().send_text(MAV_SEVERITY_INFO,
-                  "%s pH:%.2f MA:%.2f Tmp:%.1fC mV:%d [%s]", ph_pfx,
-                  (double)_ph_value, (double)_ph_value_ma, (double)_ph_temp,
-                  (int)_ph_mv, slot_tag);
+  gcs().send_text(MAV_SEVERITY_INFO, "%s pH:%.2f MA:%.2f Tmp:%.1fC mV:%d [%s]",
+                  ph_pfx, (double)_ph_value, (double)_ph_value_ma,
+                  (double)_ph_temp, (int)_ph_mv, slot_tag);
   if (_alk_slot_status == 0) {
     gcs().send_text(MAV_SEVERITY_INFO, "%s Alk:%.2fdKH %.1fmg/L dPH:%+.2f",
                     ph_pfx, (double)_alk_dkh, (double)_alk_mgl,
@@ -470,7 +472,8 @@ void AP_ShoesAgtech::_ph_update_daily_slots(float ph_cal) {
       float dlat_m = (cur_lat_f - pond.center_lat) * DEG2M;
       float dlng_m = (cur_lng_f - pond.center_lng) * DEG2M * coslat;
       float dist_m = sqrtf(dlat_m * dlat_m + dlng_m * dlng_m);
-      float pond_thr = constrain_float(_ph_params.ph_pond_dist.get(), 10.0f, 5000.0f);
+      float pond_thr =
+          constrain_float(_ph_params.ph_pond_dist.get(), 10.0f, 5000.0f);
       if (dist_m <= pond_thr) {
         gcs().send_text(MAV_SEVERITY_INFO, "[SA] Pond#%u GPS OK (%.0fm)",
                         disp_idx, (double)dist_m);
@@ -515,7 +518,8 @@ void AP_ShoesAgtech::_ph_update_daily_slots(float ph_cal) {
   if ((in_morn || in_aft) && is_armed) {
     uint32_t cap_ms =
         (uint32_t)constrain_int16(_ph_params.ph_cap_s.get(), 1, 3600) * 1000U;
-    uint8_t cap_min = (uint8_t)constrain_int16(_ph_params.ph_cap_sam.get(), 1, 100);
+    uint8_t cap_min =
+        (uint8_t)constrain_int16(_ph_params.ph_cap_sam.get(), 1, 100);
 
     if (in_morn && now - pond.morn_last_ms >= cap_ms) {
       pond.ph_morn = ph_cal;

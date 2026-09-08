@@ -21,21 +21,21 @@ public:
   static const AP_Param::GroupInfo var_info[];
 
   AP_Float cal_factor;    // SA_CAL_FAC
-  AP_Float ema_alpha;     // SA_EMA_AL
+  AP_Float ema_alpha;     // SA_FLOW_EMA_AL
   AP_Int8  flow_log_enable; // SA_FLOW_LOG
   AP_Int8  rc_chan;       // SA_RC_CHAN
   AP_Int8  rc_pump;       // SA_RC_PUMP
   AP_Int8  pump_chan;     // SA_PUMP_CHAN
   AP_Float flow_setpoint; // SA_FLOW_SP
-  AP_Float pid_p;         // SA_PID_P
-  AP_Float pid_i;         // SA_PID_I
-  AP_Float pid_lpf;       // SA_PID_LPF
-  AP_Int16 flow_log_ms;   // SA_LOG_FL_MS
+  AP_Float pid_p;         // SA_FLOW_PID_P
+  AP_Float pid_i;         // SA_FLOW_PID_I
+  AP_Float pid_lpf;       // SA_FLOW_PID_LPF
+  AP_Int16 flow_log_ms;   // SA_FLOW_LOG_MS
   AP_Int16 flow_pin;      // SA_FLOW_PIN
   AP_Float tank_vol;      // SA_TANK_VOL
   AP_Int8  flow_mode;     // SA_FLOW_MODE
-  AP_Float mix_std;       // SA_MIX_STD
-  AP_Float mix_cnt;       // SA_MIX_CNT
+  AP_Float mix_std;       // SA_FLOW_MIX_STD
+  AP_Float mix_cnt;       // SA_FLOW_MIX_CNT
   AP_Float flow_vel;      // SA_FLOW_VEL
 };
 
@@ -107,6 +107,9 @@ public:
   float    get_flow_rate_lmin(void) const { return _flow_rate_filtered; }
   float    get_flow_rate_avg(void)  const { return _flow_rate_avg; }
   bool     is_enabled(void)         const { return _enable_flag.get() > 0; }
+  // true sau khi đã ARM rồi DISARM đúng 1 lần kể từ lúc boot — trước đó
+  // bơm (Module 1) và motor cho ăn (Module 3) đều bị ép tắt hoàn toàn.
+  bool     is_system_ready(void)    const { return _system_ready; }
 
   // Spray control getters (for logging)
   uint8_t  get_spray_mode(void)       const { return _spray_mode; }
@@ -254,6 +257,18 @@ private:
   // (vd chưa vào Auto lần nào) — dùng cho công thức FLOW_MODE=1.
   float    _target_speed;
 
+  // ---- "Bắt tay" an toàn lúc mới boot — DÙNG CHUNG Module 1 (bơm) và
+  // Module 3 (cho ăn) — mới 2026-09-08. Ngay sau khi boot/load param,
+  // RC receiver có thể chưa gửi đúng vị trí thật của nấc/nút (dial chưa
+  // lăn về đúng chỗ, hoặc lỡ chạm nút) — nếu tin ngay giá trị RC lúc đó
+  // thì bơm/motor cho ăn có thể tự chạy ngoài ý muốn. Bắt buộc người vận
+  // hành phải ARM rồi DISARM đúng 1 lần (xác nhận đã kiểm tra hệ thống)
+  // thì _system_ready mới bật — trước đó CẢ 2 module đều bị ép tắt hoàn
+  // toàn, bất kể RC đang ở vị trí nào. Chỉ cần 1 lần kể từ lúc boot,
+  // không lặp lại ở các lần arm/disarm sau đó.
+  bool     _seen_armed_once;
+  bool     _system_ready;
+
   // ---- SIMULATION state (sim_speed used in M1 spray calculations) ----
   float    _sim_speed;
 
@@ -367,6 +382,9 @@ private:
   // ================================================================
   // PRIVATE METHODS
   // ================================================================
+
+  // ---- Dùng chung: bắt tay an toàn ARM+DISARM 1 lần lúc mới boot ----
+  void     _update_boot_handshake(void);
 
   // ---- MODULE 1: flow sensor + spray control ----
   void     _update_flow(void);

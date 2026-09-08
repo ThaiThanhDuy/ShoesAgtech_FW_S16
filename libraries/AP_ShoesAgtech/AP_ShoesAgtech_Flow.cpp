@@ -27,17 +27,17 @@ const AP_Param::GroupInfo AP_ShoesAgtech_FlowParams::var_info[] = {
     // @User: Standard
     AP_GROUPINFO("CAL_FAC", 1, AP_ShoesAgtech_FlowParams, cal_factor, 3874.5f),
 
-    // @Param: EMA_AL
+    // @Param: FLOW_EMA_AL
     // @DisplayName: Flow EMA smoothing alpha (0.01-1.0)
     // @Description: EMA alpha applied to raw flow rate. Lower = smoother.
     // @Range: 0.01 1.0
     // @User: Advanced
-    AP_GROUPINFO("EMA_AL", 2, AP_ShoesAgtech_FlowParams, ema_alpha, 0.1f),
+    AP_GROUPINFO("FLOW_EMA_AL", 2, AP_ShoesAgtech_FlowParams, ema_alpha, 0.1f),
 
     // @Param: FLOW_LOG
     // @DisplayName: Flow console log enable
     // @Description: Prints spray mode, flow target/actual/avg and pump PWM at
-    //   SA_LOG_FL_MS interval.
+    //   SA_FLOW_LOG_MS interval.
     // @Values: 0:Disabled,1:Enabled
     // @User: Standard
     AP_GROUPINFO("FLOW_LOG", 3, AP_ShoesAgtech_FlowParams, flow_log_enable, 0),
@@ -72,31 +72,31 @@ const AP_Param::GroupInfo AP_ShoesAgtech_FlowParams::var_info[] = {
     // @User: Standard
     AP_GROUPINFO("FLOW_SP", 7, AP_ShoesAgtech_FlowParams, flow_setpoint, 5.0f),
 
-    // @Param: PID_P
+    // @Param: FLOW_PID_P
     // @DisplayName: Flow PID P gain (us per L/min error)
     // @Range: 0 500
     // @User: Advanced
-    AP_GROUPINFO("PID_P", 8, AP_ShoesAgtech_FlowParams, pid_p, 80.0f),
+    AP_GROUPINFO("FLOW_PID_P", 8, AP_ShoesAgtech_FlowParams, pid_p, 80.0f),
 
-    // @Param: PID_I
+    // @Param: FLOW_PID_I
     // @DisplayName: Flow PID I gain (us per L/min/s)
     // @Range: 0 200
     // @User: Advanced
-    AP_GROUPINFO("PID_I", 9, AP_ShoesAgtech_FlowParams, pid_i, 20.0f),
+    AP_GROUPINFO("FLOW_PID_I", 9, AP_ShoesAgtech_FlowParams, pid_i, 20.0f),
 
-    // @Param: PID_LPF
+    // @Param: FLOW_PID_LPF
     // @DisplayName: Flow PID output LPF alpha (0.01=smooth, 1.0=raw)
     // @Range: 0.01 1.0
     // @User: Advanced
-    AP_GROUPINFO("PID_LPF", 10, AP_ShoesAgtech_FlowParams, pid_lpf, 0.3f),
+    AP_GROUPINFO("FLOW_PID_LPF", 10, AP_ShoesAgtech_FlowParams, pid_lpf, 0.3f),
 
-    // @Param: LOG_FL_MS
+    // @Param: FLOW_LOG_MS
     // @DisplayName: Flow console log interval (ms)
     // @Description: Interval between flow console prints when SA_FLOW_LOG=1.
     // @Range: 100 60000
     // @Units: ms
     // @User: Advanced
-    AP_GROUPINFO("LOG_FL_MS", 11, AP_ShoesAgtech_FlowParams, flow_log_ms, 1000),
+    AP_GROUPINFO("FLOW_LOG_MS", 11, AP_ShoesAgtech_FlowParams, flow_log_ms, 2000),
 
     // @Param: FLOW_PIN
     // @DisplayName: Flow sensor GPIO pin number
@@ -124,23 +124,23 @@ const AP_Param::GroupInfo AP_ShoesAgtech_FlowParams::var_info[] = {
     // @User: Standard
     AP_GROUPINFO("FLOW_MODE", 14, AP_ShoesAgtech_FlowParams, flow_mode, 0),
 
-    // @Param: MIX_STD
+    // @Param: FLOW_MIX_STD
     // @DisplayName: Spray ratio at mid RC position (standard nozzle)
     // @Description: Biocide fraction of total flow at mid RC. In FLOW_MODE=1
     //   used directly; in FLOW_MODE=0 the setpoint is SA_FLOW_SP.
     // @Range: 0.01 1.0
     // @Increment: 0.001
     // @User: Standard
-    AP_GROUPINFO("MIX_STD", 15, AP_ShoesAgtech_FlowParams, mix_std, 0.35f),
+    AP_GROUPINFO("FLOW_MIX_STD", 15, AP_ShoesAgtech_FlowParams, mix_std, 0.35f),
 
-    // @Param: MIX_CNT
+    // @Param: FLOW_MIX_CNT
     // @DisplayName: Spray ratio at high RC position (anti-clog nozzle)
     // @Description: Biocide fraction at high RC. In FLOW_MODE=0, flow target
-    //   is scaled by MIX_CNT/MIX_STD to keep boom output consistent.
+    //   is scaled by FLOW_MIX_CNT/FLOW_MIX_STD to keep boom output consistent.
     // @Range: 0.01 1.0
     // @Increment: 0.001
     // @User: Standard
-    AP_GROUPINFO("MIX_CNT", 16, AP_ShoesAgtech_FlowParams, mix_cnt, 0.50f),
+    AP_GROUPINFO("FLOW_MIX_CNT", 16, AP_ShoesAgtech_FlowParams, mix_cnt, 0.50f),
 
     // @Param: FLOW_VEL
     // @DisplayName: Override ground speed for FLOW_MODE=1 (m/s)
@@ -193,7 +193,9 @@ void AP_ShoesAgtech::_update_flow(void) {
       _last_pulse_snapshot = snap;
 
       float dt = delta_t_ms * 0.001f;
-      float cal = (_flow_params.cal_factor.get() > 0.0f) ? _flow_params.cal_factor.get() : 3874.5f;
+      float cal = (_flow_params.cal_factor.get() > 0.0f)
+                      ? _flow_params.cal_factor.get()
+                      : 3874.5f;
       float raw = (dt > 0.0f) ? ((float)pulses / cal) * (60.0f / dt) : 0.0f;
 
       float alpha = constrain_float(_flow_params.ema_alpha.get(), 0.01f, 1.0f);
@@ -256,11 +258,30 @@ void AP_ShoesAgtech::_update_flow(void) {
     }
   }
 
+  // Bắt tay an toàn lúc mới boot (mới 2026-09-08, xem
+  // _update_boot_handshake()): chưa ARM+DISARM đủ 1 lần kể từ boot thì
+  // ép bơm tắt hoàn toàn, bất kể _spray_mode/RC đang ở vị trí nào —
+  // tránh RC chưa lăn về đúng chỗ hoặc lỡ chạm nút làm bơm tự chạy.
+  if (!_system_ready) {
+    SRV_Channel *ch_ready =
+        SRV_Channels::srv_channel((uint8_t)(_flow_params.pump_chan.get() - 1));
+    if (ch_ready != nullptr) {
+      _write_pump_pwm(ch_ready->get_output_min());
+    }
+    _flow_target = 0.0f;
+    _flow_ramp_val = 0.0f;
+    _flow_out_of_range = false;
+    _pid_integral = 0.0f;
+    _pid_output_lpf = 0.0f;
+    return;
+  }
+
   switch (_spray_mode) {
 
   case 0: {
     // ---- MODE 0: TRUYỀN THẲNG PHẦN MỀM ----
-    uint8_t rc_pump_idx = (uint8_t)constrain_int16(_flow_params.rc_pump.get() - 1, 0, 15);
+    uint8_t rc_pump_idx =
+        (uint8_t)constrain_int16(_flow_params.rc_pump.get() - 1, 0, 15);
     uint16_t rc_pwm = RC_Channels::get_radio_in(rc_pump_idx);
     _flow_target = 0.0f;
     _flow_ramp_val = 0.0f;
@@ -271,8 +292,8 @@ void AP_ShoesAgtech::_update_flow(void) {
       // Chưa có tín hiệu RC hợp lệ (vd: chưa cắm/kết nối tay cầm) -> đưa
       // bơm về đúng vị trí AN TOÀN đã cấu hình (SERVOx_MIN), KHÔNG dùng
       // giá trị 1500 cứng vì có thể không phải là mức tắt bơm thực tế.
-      SRV_Channel *ch0 =
-          SRV_Channels::srv_channel((uint8_t)(_flow_params.pump_chan.get() - 1));
+      SRV_Channel *ch0 = SRV_Channels::srv_channel(
+          (uint8_t)(_flow_params.pump_chan.get() - 1));
       if (ch0 != nullptr) {
         _pump_pwm = ch0->get_output_min();
         _write_pump_pwm(_pump_pwm);
@@ -285,26 +306,27 @@ void AP_ShoesAgtech::_update_flow(void) {
   }
 
   case 1: {
-    // ---- MODE 1: FLOW PID (nấc giữa — MIX_STD / béc mặc định) ----
+    // ---- MODE 1: FLOW PID (nấc giữa — FLOW_MIX_STD / béc mặc định) ----
     _flow_out_of_range = false;
     if (!hal.util->get_soft_armed()) {
       _flow_target = 0.0f;
       _flow_ramp_val = 0.0f;
       _pid_integral = 0.0f;
       _pid_output_lpf = 0.0f;
-      SRV_Channel *ch1 =
-          SRV_Channels::srv_channel((uint8_t)(_flow_params.pump_chan.get() - 1));
+      SRV_Channel *ch1 = SRV_Channels::srv_channel(
+          (uint8_t)(_flow_params.pump_chan.get() - 1));
       if (ch1 != nullptr) {
         _write_pump_pwm(ch1->get_output_min());
       }
       break;
     }
-    if (_flow_params.flow_mode.get() == 1 && _flow_params.tank_vol.get() > 0.0f) {
+    if (_flow_params.flow_mode.get() == 1 &&
+        _flow_params.tank_vol.get() > 0.0f) {
       _flow_target = _compute_visin_target(_flow_params.mix_std.get());
       if (_flow_target < 0.01f) {
         _flow_ramp_val = 0.0f;
-        SRV_Channel *ch1 =
-            SRV_Channels::srv_channel((uint8_t)(_flow_params.pump_chan.get() - 1));
+        SRV_Channel *ch1 = SRV_Channels::srv_channel(
+            (uint8_t)(_flow_params.pump_chan.get() - 1));
         if (ch1 != nullptr) {
           _write_pump_pwm(ch1->get_output_min());
         }
@@ -318,8 +340,8 @@ void AP_ShoesAgtech::_update_flow(void) {
         _flow_ramp_val = 0.0f;
         _pid_integral = 0.0f;
         _pid_output_lpf = 0.0f;
-        SRV_Channel *ch1 =
-            SRV_Channels::srv_channel((uint8_t)(_flow_params.pump_chan.get() - 1));
+        SRV_Channel *ch1 = SRV_Channels::srv_channel(
+            (uint8_t)(_flow_params.pump_chan.get() - 1));
         if (ch1 != nullptr) {
           _write_pump_pwm(ch1->get_output_min());
         }
@@ -335,8 +357,8 @@ void AP_ShoesAgtech::_update_flow(void) {
         _flow_ramp_val = 0.0f;
         _pid_integral = 0.0f;
         _pid_output_lpf = 0.0f;
-        SRV_Channel *ch1 =
-            SRV_Channels::srv_channel((uint8_t)(_flow_params.pump_chan.get() - 1));
+        SRV_Channel *ch1 = SRV_Channels::srv_channel(
+            (uint8_t)(_flow_params.pump_chan.get() - 1));
         if (ch1 != nullptr) {
           _write_pump_pwm(ch1->get_output_min());
         }
@@ -356,26 +378,27 @@ void AP_ShoesAgtech::_update_flow(void) {
   }
 
   case 2: {
-    // ---- MODE 2: FLOW PID (nấc cao — MIX_CNT / béc chống nghẹt) ----
+    // ---- MODE 2: FLOW PID (nấc cao — FLOW_MIX_CNT / béc chống nghẹt) ----
     _flow_out_of_range = false;
     if (!hal.util->get_soft_armed()) {
       _flow_target = 0.0f;
       _flow_ramp_val = 0.0f;
       _pid_integral = 0.0f;
       _pid_output_lpf = 0.0f;
-      SRV_Channel *ch2 =
-          SRV_Channels::srv_channel((uint8_t)(_flow_params.pump_chan.get() - 1));
+      SRV_Channel *ch2 = SRV_Channels::srv_channel(
+          (uint8_t)(_flow_params.pump_chan.get() - 1));
       if (ch2 != nullptr) {
         _write_pump_pwm(ch2->get_output_min());
       }
       break;
     }
-    if (_flow_params.flow_mode.get() == 1 && _flow_params.tank_vol.get() > 0.0f) {
+    if (_flow_params.flow_mode.get() == 1 &&
+        _flow_params.tank_vol.get() > 0.0f) {
       _flow_target = _compute_visin_target(_flow_params.mix_cnt.get());
       if (_flow_target < 0.01f) {
         _flow_ramp_val = 0.0f;
-        SRV_Channel *ch2 =
-            SRV_Channels::srv_channel((uint8_t)(_flow_params.pump_chan.get() - 1));
+        SRV_Channel *ch2 = SRV_Channels::srv_channel(
+            (uint8_t)(_flow_params.pump_chan.get() - 1));
         if (ch2 != nullptr) {
           _write_pump_pwm(ch2->get_output_min());
         }
@@ -387,8 +410,8 @@ void AP_ShoesAgtech::_update_flow(void) {
         _flow_ramp_val = 0.0f;
         _pid_integral = 0.0f;
         _pid_output_lpf = 0.0f;
-        SRV_Channel *ch2 =
-            SRV_Channels::srv_channel((uint8_t)(_flow_params.pump_chan.get() - 1));
+        SRV_Channel *ch2 = SRV_Channels::srv_channel(
+            (uint8_t)(_flow_params.pump_chan.get() - 1));
         if (ch2 != nullptr) {
           _write_pump_pwm(ch2->get_output_min());
         }
@@ -399,8 +422,8 @@ void AP_ShoesAgtech::_update_flow(void) {
         _flow_ramp_val = 0.0f;
         _pid_integral = 0.0f;
         _pid_output_lpf = 0.0f;
-        SRV_Channel *ch2 =
-            SRV_Channels::srv_channel((uint8_t)(_flow_params.pump_chan.get() - 1));
+        SRV_Channel *ch2 = SRV_Channels::srv_channel(
+            (uint8_t)(_flow_params.pump_chan.get() - 1));
         if (ch2 != nullptr) {
           _write_pump_pwm(ch2->get_output_min());
         }
@@ -409,9 +432,11 @@ void AP_ShoesAgtech::_update_flow(void) {
       _flow_ramp_val = MIN(_flow_ramp_val + 0.3f * dt_pid, _flow_target);
     } else {
       float ratio =
-          (_flow_params.mix_std.get() > 0.01f) ? (_flow_params.mix_cnt.get() / _flow_params.mix_std.get()) : 1.0f;
-      _flow_target =
-          constrain_float(_flow_params.flow_setpoint.get() * ratio, 0.0f, 200.0f);
+          (_flow_params.mix_std.get() > 0.01f)
+              ? (_flow_params.mix_cnt.get() / _flow_params.mix_std.get())
+              : 1.0f;
+      _flow_target = constrain_float(_flow_params.flow_setpoint.get() * ratio,
+                                     0.0f, 200.0f);
       _flow_ramp_val = MIN(_flow_ramp_val + 0.3f * dt_pid, _flow_target);
     }
     _pump_pwm = _run_flow_pid(_flow_ramp_val, dt_pid);
@@ -458,8 +483,8 @@ void AP_ShoesAgtech::_update_flow(void) {
     _last_log_ms = now;
     const char *flow_pfx = (_simulation.get() > 0) ? "[SIM][FLOW]" : "[FLOW]";
     gcs().send_text(MAV_SEVERITY_INFO, "%s FM%d N%u Q: %.2f%s", flow_pfx,
-                    (int)_flow_params.flow_mode.get(), (unsigned)(_spray_mode + 1),
-                    (double)_flow_target,
+                    (int)_flow_params.flow_mode.get(),
+                    (unsigned)(_spray_mode + 1), (double)_flow_target,
                     _flow_out_of_range ? " - out range" : "");
   }
 }
@@ -490,8 +515,8 @@ void AP_ShoesAgtech::_check_pump_config(void) {
 
 // RC → CHẾ ĐỘ PHUN
 //   Nấc 1 (PWM < 1300) : mode 0 — passthrough
-//   Nấc 2 (1300-1700)  : mode 1 — FLOW PID, tỉ lệ SA_MIX_STD
-//   Nấc 3 (PWM > 1700) : mode 2 — FLOW PID, tỉ lệ SA_MIX_CNT
+//   Nấc 2 (1300-1700)  : mode 1 — FLOW PID, tỉ lệ SA_FLOW_MIX_STD
+//   Nấc 3 (PWM > 1700) : mode 2 — FLOW PID, tỉ lệ SA_FLOW_MIX_CNT
 void AP_ShoesAgtech::_update_spray_mode(void) {
   uint8_t idx = (uint8_t)constrain_int16(_flow_params.rc_chan.get() - 1, 0, 15);
   uint16_t pwm_in = RC_Channels::get_radio_in(idx);
@@ -515,7 +540,8 @@ void AP_ShoesAgtech::_update_spray_mode(void) {
 // Dải giá trị = servo MIN/MAX (tham số SERVOx_MIN/MAX)
 // =============================================================
 uint16_t AP_ShoesAgtech::_run_flow_pid(float target_lmin, float dt) {
-  SRV_Channel *ch = SRV_Channels::srv_channel((uint8_t)(_flow_params.pump_chan.get() - 1));
+  SRV_Channel *ch =
+      SRV_Channels::srv_channel((uint8_t)(_flow_params.pump_chan.get() - 1));
   uint16_t pwm_min = (ch != nullptr) ? ch->get_output_min() : 1000;
   uint16_t pwm_max = (ch != nullptr) ? ch->get_output_max() : 2000;
   uint16_t pwm_trim = (ch != nullptr) ? ch->get_trim() : 1500;
@@ -545,7 +571,8 @@ uint16_t AP_ShoesAgtech::_run_flow_pid(float target_lmin, float dt) {
 // Yêu cầu SERVOx_FUNCTION = 0 (None) trên kênh bơm.
 // =============================================================
 void AP_ShoesAgtech::_write_pump_pwm(uint16_t pwm) {
-  uint8_t chan_idx = (uint8_t)constrain_int16(_flow_params.pump_chan.get() - 1, 0, 15);
+  uint8_t chan_idx =
+      (uint8_t)constrain_int16(_flow_params.pump_chan.get() - 1, 0, 15);
   SRV_Channels::set_output_pwm_chan(chan_idx, pwm);
 }
 
