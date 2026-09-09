@@ -168,6 +168,12 @@ void AP_ShoesAgtech::update(void) {
 
   _check_pump_config();
 
+  // Chọn/tạo ao đang active theo SA_POND_IDX — chạy TRƯỚC cả pH lẫn cho
+  // ăn, độc lập với việc pH có dữ liệu hay không (mới 2026-09-09, xem
+  // AP_ShoesAgtech_PH.cpp) — đảm bảo Module 3 luôn đọc đúng dos_sp/
+  // dos_food đã lưu của ao dù cảm biến pH chưa có tín hiệu.
+  _update_active_pond();
+
   if (_simulation.get() > 0) {
     _run_simulation();
   } else {

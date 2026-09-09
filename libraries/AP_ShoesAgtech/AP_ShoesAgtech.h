@@ -390,6 +390,7 @@ private:
 
   // ---- MODULE 2: pH sensor + alkalinity + pond persistence ----
   void     _ph_init(void);
+  void     _update_active_pond(void);
   void     _ph_update(void);
   void     _ph_update_daily_slots(float ph_cal);
   // Log định kỳ pH ra console (SA_PH_LOG) — tách riêng (2026-09-07) để

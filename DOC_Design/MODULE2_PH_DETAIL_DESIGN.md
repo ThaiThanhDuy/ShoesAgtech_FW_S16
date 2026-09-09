@@ -21,6 +21,15 @@ Rover::update_custom_flow()   [main loop, ~10 Hz]
     │
     ├──► g2.custom_nav.update()
     │         │
+    │         ├──► _update_active_pond()  [MỚI 2026-09-09 — chạy TRƯỚC, ĐỘC LẬP với pH]
+    │         │         ├──► Chọn ao theo SA_POND_IDX (1-100, nhập tay) → pond_idx
+    │         │         ├──► Ao mới? → khởi tạo PondEntry (dos_sp/dos_food nạp từ
+    │         │         │       SA_DOS_SP/SA_DOS_FOOD hiện tại, last_day=0 tạm — không
+    │         │         │       còn lưu tâm GPS)
+    │         │         ├──► Đổi ao (khác _active_pond_idx)? → "[SA] Switched to pond #n"
+    │         │         └──► _active_pond_idx = pond_idx — CHẠY BẤT KỂ pH có dữ liệu hay
+    │         │               không, để Module 3 luôn đọc đúng dos_sp/dos_food đã lưu
+    │         │
     │         ├──► (SA_SIM=0) _ph_update()
     │         │         │
     │         │         ├──► [Gửi Modbus request mỗi 2000ms]
@@ -39,10 +48,8 @@ Rover::update_custom_flow()   [main loop, ~10 Hz]
     │         │                   ├──► AP::rtc().get_utc_usec() — bắt buộc, nếu chưa có → return
     │         │                   ├──► GPS fix 3D? → có: lấy lat/lng thật; không: lat/lng=0
     │         │                   │       (KHÔNG bắt buộc nữa, 2026-09-09 — chỉ để hiển thị bản đồ)
-    │         │                   ├──► Chọn ao theo SA_POND_IDX (1-100, nhập tay) → pond_idx
-    │         │                   ├──► Ao mới? → khởi tạo PondEntry (không còn lưu tâm GPS)
-    │         │                   ├──► Đổi ao (khác _active_pond_idx)? → thông báo "[SA] Switched to
-    │         │                   │       pond #n" (đã bỏ hẳn so khoảng cách GPS, 2026-09-09)
+    │         │                   ├──► Dùng thẳng ao đã được _update_active_pond() chọn/tạo
+    │         │                   │       sẵn ở trên (KHÔNG tự chọn ao nữa)
     │         │                   ├──► Ngày mới cho ao này? → reset slot hôm nay (giữ kiềm hôm qua)
     │         │                   ├──► Đang ARM + trong khung sáng/chiều + đủ SA_PH_CAP_S giây
     │         │                   │       kể từ mẫu trước → ghi đè slot (last-write-wins),
@@ -63,7 +70,8 @@ Rover::update_custom_flow()   [main loop, ~10 Hz]
     │         → logger.WriteBlock(&log_PhAlk, ...)
     │
     └──► GCS_MAVLINK_Rover::send_shoesagtech_debug_arrays()  [Rover/GCS_MAVLink_Rover.cpp]
-              → SA_DATA (array_id=0): data[5..14] pH + ao active
+              → SA_DATA (array_id=0): data[5..7] pH sống (cần ph_has_data()),
+                data[8..14] ao active LUÔN gửi (đổi 2026-09-09, xem mục 4.1)
               → SA_PHK  (array_id=1): consume_gcs_alk_pending() → gửi khi có ao vừa FULL
 
 init() [1 lần boot]
@@ -78,6 +86,21 @@ init() [1 lần boot]
 ```
 
 ### 1.2 Mô tả từng hàm
+
+---
+
+**`_update_active_pond()`** — mới, 2026-09-09
+
+- **File:** `AP_ShoesAgtech_PH.cpp`
+- **Được gọi bởi:** `AP_ShoesAgtech::update()` (file core `AP_ShoesAgtech.cpp`), ngay sau `_check_pump_config()`, **TRƯỚC** cả nhánh SIM/pH thật lẫn `_update_dosing_motor()` — chạy mỗi chu kỳ 10Hz, **không có bất kỳ điều kiện nào** (không cần pH bật/có dữ liệu, không cần giờ UTC, không cần GPS)
+- **Đầu vào:** không có (đọc `SA_POND_IDX` trực tiếp)
+- **Xử lý:**
+    1. `pond_idx = constrain(SA_POND_IDX, 1, 100) − 1`
+    2. Ao chưa tồn tại (`!_ponds[pond_idx].valid`): `memset` trắng `PondEntry`, `valid=true`, nạp `dos_sp`/`dos_food` từ `SA_DOS_SP`/`SA_DOS_FOOD` hiện tại, `last_day` để nguyên `0` (chưa chắc đã có giờ UTC lúc này — `_ph_update_daily_slots()` tự phát hiện "ngày mới" và gán đúng sau), cập nhật `_pond_count`, đánh dấu `_ponds_dirty=true`
+    3. Ao vừa đổi (`pond_idx != _active_pond_idx`) hoặc lần đầu sau boot: in STATUSTEXT INFO `"[SA] Switched to pond #n"` (+ `" (new pond)"` nếu vừa tạo)
+    4. `_active_pond_idx = pond_idx`
+- **Đầu ra / Return:** `void` — cập nhật `_ponds[pond_idx]`, `_active_pond_idx`, `_pond_count`, `_pond_first_detect_done`, `_ponds_dirty`
+- **Ghi chú:** Tách ra từ `_ph_update_daily_slots()` — trước đây việc chọn/tạo ao nằm trong hàm đó, chỉ chạy khi pH có dữ liệu; nếu cảm biến pH mất kết nối, Module 3 (cho ăn) không đọc được `dos_sp`/`dos_food` đã lưu của ao dù bản thân motor cho ăn không hề cần pH để hoạt động. Giờ tách riêng, chạy độc lập mỗi chu kỳ — cả `_sync_dosing_setpoint()` (Module 3) lẫn `_ph_update_daily_slots()` (Module 2) đều dùng thẳng `_active_pond_idx` đã được hàm này chuẩn bị sẵn, không tự chọn ao nữa.
 
 ---
 
@@ -128,28 +151,25 @@ init() [1 lần boot]
 
 **`_ph_update_daily_slots(float ph_cal)`**
 
-- **File:** `AP_ShoesAgtech.cpp : 1340`
+- **File:** `AP_ShoesAgtech_PH.cpp`
 - **Được gọi bởi:** `_ph_update()` sau mỗi frame hợp lệ (và `_run_simulation()` khi SA_SIM=1)
 - **Xử lý:**
     1. **Bắt buộc có giờ UTC** (`AP::rtc().get_utc_usec()`) — thiếu → cảnh báo mỗi 60s (nếu SA_PH_LOG=1), return ngay, không làm gì thêm. **Không còn bắt buộc GPS fix 3D** (bỏ 2026-09-09) — xem mục 3.7
     2. `local_sec = utc_sec + SA_PH_TZ×3600`; `today = local_sec/86400`; `local_h` = giờ địa phương dạng thập phân. Lấy vị trí GPS **best-effort**: có fix 3D → `cur_lat_i/cur_lng_i` = thật; không có → giữ 0
-    3. **Chọn ao:** `pond_idx = constrain(SA_POND_IDX, 1, 100) − 1` (nhập tay, hoàn toàn không liên quan tới GPS)
-    4. **Ao mới** (`!_ponds[pond_idx].valid`): khởi tạo `PondEntry` (không còn lưu tâm GPS — `center_lat/lng` đã bị gỡ bỏ khỏi struct), `dos_sp`/`dos_food` = giá trị `SA_DOS_SP`/`SA_DOS_FOOD` hiện tại, đánh dấu `_ponds_dirty=true`
-    5. **Đổi ao** (`pond_idx != _active_pond_idx` hoặc lần đầu sau boot): in `[SA] Switched to pond #n` — **đã bỏ hẳn** phần so khoảng cách GPS tới tâm ao (2026-09-09, xem mục 7)
-    6. Cập nhật `_active_pond_idx = pond_idx`
-    7. **Ngày mới cho ao này** (`pond.last_day != today`): reset `ph_morn/ph_aft/status/delta_ph/alk_pending/gcs_alk_pending/alk_computed/...` về 0/false — **giữ nguyên** `alk_dkh/alk_mgl` (kiềm hôm qua) để dùng làm PREV
-    8. **Lấy mẫu** — chỉ khi `(in_morn || in_aft) && hal.util->get_soft_armed()`:
+    3. **Dùng thẳng ao đang active** (`pond = _ponds[_active_pond_idx]`) — **KHÔNG tự chọn/tạo ao nữa** (2026-09-09, chuyển hết sang `_update_active_pond()`, chạy TRƯỚC hàm này từ `update()` — xem mục 1.2)
+    4. **Ngày mới cho ao này** (`pond.last_day != today`): reset `ph_morn/ph_aft/status/delta_ph/alk_pending/gcs_alk_pending/alk_computed/...` về 0/false — **giữ nguyên** `alk_dkh/alk_mgl` (kiềm hôm qua) để dùng làm PREV
+    5. **Lấy mẫu** — chỉ khi `(in_morn || in_aft) && hal.util->get_soft_armed()`:
        - Rate-limit `SA_PH_CAP_S` giây/mẫu theo từng slot (`morn_last_ms`/`aft_last_ms`)
        - Ghi đè giá trị mới nhất vào `ph_morn`/`ph_aft` (last-write-wins), tăng `morn_count`/`aft_count`, set bit `status` (bit0=sáng, bit1=chiều)
        - Khi vừa đạt đủ `SA_PH_CAP_SAM` mẫu và chưa từng báo → in 1 lần "Ao#n pH sang/chieu: X (N mau)"
-    9. **Tính kiềm** — khi `status == 3` (FULL) lần đầu trong ngày (`!alk_computed`):
+    6. **Tính kiềm** — khi `status == 3` (FULL) lần đầu trong ngày (`!alk_computed`):
         - `delta_ph = ph_aft − ph_morn`
         - `kh_scaled = SA_PH_KH × (1 + constrain(delta_ph×0.375, −0.5, 1.0))`
         - `alk_dkh = _ph_calc_alkalinity(ph_morn, kh_scaled, _ph_temp)`; `alk_mgl = alk_dkh × 17.85`
         - Set `alk_computed=true`, `alk_pending=true` (chờ ghi SD), `gcs_alk_pending=true` (chờ gửi MAVLink), `_ponds_dirty=true`
         - In 2 dòng INFO: `Ao#n S:x C:x dPH:x` và `Ao#n kiem:xdKH/xmgL`
-    10. Cập nhật `_alk_slot_status` hiển thị: `status==3`→0(FULL), `status==1`→1(MORN), `status==2`→2(AFT), else nếu `alk_dkh>0`→3(PREV, dùng dữ liệu ngày trước), else→4(NODATA)
-- **Đầu ra:** Cập nhật `_ponds[pond_idx]`, các mirror `_alk_dkh/_alk_mgl/_delta_ph/_alk_slot_status`, `_active_pond_idx`
+    7. Cập nhật `_alk_slot_status` hiển thị: `status==3`→0(FULL), `status==1`→1(MORN), `status==2`→2(AFT), else nếu `alk_dkh>0`→3(PREV, dùng dữ liệu ngày trước), else→4(NODATA)
+- **Đầu ra:** Cập nhật `_ponds[_active_pond_idx]`, các mirror `_alk_dkh/_alk_mgl/_delta_ph/_alk_slot_status`. **Không còn** cập nhật `_active_pond_idx` (việc đó nay là của `_update_active_pond()`).
 
 ---
 

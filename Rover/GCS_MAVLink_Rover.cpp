@@ -256,17 +256,18 @@ void GCS_MAVLINK_Rover::send_water_depth() {
 //     [4] spray_mode    (0=PASSTHROUGH 1=FLOW_PID 2=AUTO_RATE)
 //
 //   Module 2 — pH sensor:
-//     [5] ph            (moving-avg, 10 mẫu)     }
-//     [6] ph_mv         (mV, signed)             }
-//     [7] ph_temp       (°C)                     } chỉ khi SA_PH_EN=1
-//     [8] alk_dkh       (dKH, ao active — 0 nếu chưa đủ dữ liệu)   } AND
-//     ph_has_data() [9] alk_mgl       (mg/L CaCO3, ao active — 0 nếu chưa đủ) }
-//    [10] delta_ph      (pH chiều - pH sáng, ao active — 0 nếu chưa đủ) }
-//    [11] pond_idx      (index ao detect được trong vòng lặp hiện tại)
+//     [5] ph            (moving-avg, 10 mẫu)     } chỉ khi SA_PH_EN=1 AND
+//     [6] ph_mv         (mV, signed)             } ph_has_data() — số đọc
+//     [7] ph_temp       (°C)                     } SỐNG, không có thì =0
+//     [8] alk_dkh       (dKH, ao active — 0 nếu chưa đủ dữ liệu)
+//     [9] alk_mgl       (mg/L CaCO3, ao active — 0 nếu chưa đủ)
+//    [10] delta_ph      (pH chiều - pH sáng, ao active — 0 nếu chưa đủ)
+//    [11] pond_idx      (số ao đang active, 1-based, theo SA_POND_IDX)
 //    [12] ph_morn       (pH sáng ngày hôm đó của ao active — 0 nếu chưa có mẫu)
-//    [13] ph_aft        (pH chiều ngày hôm đó của ao active — 0 nếu chưa có
-//    mẫu) [14] last_day      (ngày ghi nhận dữ liệu, tính từ Unix epoch; ×86400
-//    = Unix timestamp)
+//    [13] ph_aft        (pH chiều ngày hôm đó của ao active — 0 nếu chưa có mẫu)
+//    [14] last_day      (ngày ghi nhận dữ liệu, tính từ Unix epoch; ×86400 = Unix timestamp)
+//    [8..14] LUÔN gửi (dữ liệu ao đã lưu, độc lập với pH có tín hiệu hay
+//    không — đổi 2026-09-09, xem _update_active_pond() trong AP_ShoesAgtech.cpp)
 //
 //   Module 3 — Dosing motor:
 //    [15] dos_sp        (gam — setpoint riêng của ao active, đồng bộ 2 chiều với SA_DOS_SP)
@@ -313,20 +314,25 @@ void GCS_MAVLINK_Rover::send_shoesagtech_debug_arrays() {
   data[4] = (float)sa.get_spray_mode();
 
   // ---- Module 2: pH sensor [5..14] ----
-  // pH mất tín hiệu/chưa kết nối -> giữ data = 0 (không gửi rác)
+  // [5..7] là số đọc SỐNG từ cảm biến -> mất tín hiệu/chưa kết nối thì
+  // giữ = 0 (không gửi rác). [8..14] là dữ liệu ao đã lưu (kiềm, pH
+  // sáng/chiều, số ao...) -> LUÔN gửi, không phụ thuộc pH có tín hiệu
+  // hay không (đổi 2026-09-09 — ao được chọn/tạo độc lập bởi
+  // _update_active_pond(), xem AP_ShoesAgtech.cpp), để app luôn hiển thị
+  // đúng ao + dữ liệu đã lưu của ao đó kể cả khi cảm biến pH mất kết nối.
   if (sa.ph_is_enabled() && sa.ph_has_data()) {
     data[5] = sa.get_ph();
     data[6] = sa.get_ph_mv();
     data[7] = sa.get_ph_temp();
-    data[8] = sa.get_active_alk_dkh();
-    data[9] = sa.get_active_alk_mgl();
-    data[10] = sa.get_active_delta_ph();
-    data[11] = (float)(sa.get_active_pond_idx() +
-                       1U); // hiển thị bắt đầu từ 1, cùng ao với [8..14]
-    data[12] = sa.get_active_ph_morn();
-    data[13] = sa.get_active_ph_aft();
-    data[14] = (float)sa.get_active_last_day();
   }
+  data[8] = sa.get_active_alk_dkh();
+  data[9] = sa.get_active_alk_mgl();
+  data[10] = sa.get_active_delta_ph();
+  data[11] = (float)(sa.get_active_pond_idx() +
+                     1U); // hiển thị bắt đầu từ 1, cùng ao với [8..14]
+  data[12] = sa.get_active_ph_morn();
+  data[13] = sa.get_active_ph_aft();
+  data[14] = (float)sa.get_active_last_day();
 
   // ---- Module 3: Dosing motor [15..18] ----
   data[15] = sa.get_active_dos_sp();  // dos_sp của ao đang active

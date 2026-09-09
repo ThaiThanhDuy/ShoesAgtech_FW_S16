@@ -379,14 +379,55 @@ void AP_ShoesAgtech::_ph_print_log(uint32_t now) {
 }
 
 // =============================================================
+// CHỌN/TẠO AO ĐANG ACTIVE — theo SA_POND_IDX
+//
+// Tách riêng khỏi _ph_update_daily_slots() (2026-09-09) — chạy ĐỘC LẬP
+// mỗi chu kỳ 10Hz, gọi từ update() TRƯỚC cả nhánh SIM/pH thật lẫn
+// _update_dosing_motor() (xem AP_ShoesAgtech.cpp), KHÔNG phụ thuộc pH có
+// dữ liệu hay không, không cần giờ UTC. Lý do: trước đây việc chọn/tạo ao
+// nằm trong _ph_update_daily_slots(), chỉ chạy khi pH có tín hiệu — nếu
+// cảm biến pH mất kết nối/chưa nối dây, Module 3 (cho ăn) không đọc được
+// dos_sp/dos_food đã lưu của ao dù bản thân motor cho ăn không cần pH để
+// hoạt động. Giờ chọn ao chạy trước, độc lập — cả 2 module luôn thấy
+// đúng ao ngay từ chu kỳ đầu tiên sau boot, bất kể trạng thái cảm biến pH.
+// =============================================================
+void AP_ShoesAgtech::_update_active_pond(void) {
+  const int8_t sel =
+      (int8_t)constrain_int16(_pond_select.get(), 1, (int16_t)MAX_PONDS);
+  const uint8_t pond_idx = (uint8_t)(sel - 1);
+
+  const bool pond_is_new = !_ponds[pond_idx].valid;
+  if (pond_is_new) {
+    memset(&_ponds[pond_idx], 0, sizeof(PondEntry));
+    _ponds[pond_idx].valid = true;
+    _ponds[pond_idx].dos_sp = _dos_params.dos_sp.get();
+    _ponds[pond_idx].dos_food =
+        _clamp_food((int8_t)_dos_params.dos_food.get());
+    // last_day để 0 (chưa chắc đã có giờ UTC lúc này) —
+    // _ph_update_daily_slots() sẽ tự phát hiện "ngày mới" và gán đúng
+    // ngay khi có giờ thật, không cần biết trước ở đây.
+    if (pond_idx >= _pond_count)
+      _pond_count = pond_idx + 1;
+    _ponds_dirty = true;
+  }
+
+  if (pond_idx != _active_pond_idx || !_pond_first_detect_done) {
+    _pond_first_detect_done = true;
+    const unsigned disp_idx = (unsigned)pond_idx + 1;
+    gcs().send_text(MAV_SEVERITY_INFO, "[SA] Switched to pond #%u%s", disp_idx,
+                    pond_is_new ? " (new pond)" : "");
+  }
+  _active_pond_idx = pond_idx;
+}
+
+// =============================================================
 // THEO DÕI SLOT ΔpH HÀNG NGÀY
 //
-// Chọn ao theo SA_POND_IDX (nhập thủ công, 1-100) — KHÔNG dùng GPS để
-// xác định/kiểm tra đúng ao nữa (bỏ 2026-09-09, xem ghi chú dưới). Tích
-// lũy mẫu pH last-write-wins trong slot sáng/chiều, tính kiềm khi ao đủ
-// cả hai slot. Dữ liệu ao không reset hàng ngày — chỉ xóa slot hôm nay
-// khi quay lại ao đó vào ngày mới. Hỗ trợ tối đa 100 ao, lưu trữ qua
-// reboot vào SD card.
+// Ao đang active đã được chọn/tạo sẵn bởi _update_active_pond() (chạy
+// trước, độc lập với pH — xem hàm trên). Tích lũy mẫu pH last-write-wins
+// trong slot sáng/chiều, tính kiềm khi ao đủ cả hai slot. Dữ liệu ao
+// không reset hàng ngày — chỉ xóa slot hôm nay khi quay lại ao đó vào
+// ngày mới. Hỗ trợ tối đa 100 ao, lưu trữ qua reboot vào SD card.
 // =============================================================
 void AP_ShoesAgtech::_ph_update_daily_slots(float ph_cal) {
   uint32_t now = AP_HAL::millis();
@@ -433,35 +474,10 @@ void AP_ShoesAgtech::_ph_update_daily_slots(float ph_cal) {
   const bool in_morn = (local_h >= ms && local_h <= me);
   const bool in_aft = (local_h >= as_ && local_h <= ae);
 
-  // ---- Chọn ao theo SA_POND_IDX (nhập thủ công, 1-based) ----
-  const int8_t sel =
-      (int8_t)constrain_int16(_pond_select.get(), 1, (int16_t)MAX_PONDS);
-  const uint8_t pond_idx = (uint8_t)(sel - 1);
-
-  const bool pond_is_new = !_ponds[pond_idx].valid;
-  if (pond_is_new) {
-    memset(&_ponds[pond_idx], 0, sizeof(PondEntry));
-    _ponds[pond_idx].valid = true;
-    _ponds[pond_idx].last_day = today;
-    _ponds[pond_idx].dos_sp = _dos_params.dos_sp.get();
-    _ponds[pond_idx].dos_food = _clamp_food((int8_t)_dos_params.dos_food.get());
-    if (pond_idx >= _pond_count)
-      _pond_count = pond_idx + 1;
-    _ponds_dirty = true;
-  }
-
-  PondEntry &pond = _ponds[pond_idx];
-  const unsigned disp_idx = (unsigned)pond_idx + 1;
-
-  // ---- Thông báo khi ao thay đổi (kể cả lần đầu boot) — in 1 lần ----
-  // (2026-09-09: bỏ hẳn phần xác thực GPS "GPS OK/off by Xm" — ao chọn
-  // thủ công qua SA_POND_IDX, không cần kiểm tra khoảng cách nữa)
-  if (pond_idx != _active_pond_idx || !_pond_first_detect_done) {
-    _pond_first_detect_done = true;
-    gcs().send_text(MAV_SEVERITY_INFO, "[SA] Switched to pond #%u%s", disp_idx,
-                    pond_is_new ? " (new pond)" : "");
-  }
-  _active_pond_idx = pond_idx;
+  // ---- Ao đang active: đã được _update_active_pond() chọn/tạo sẵn từ
+  // trước khi hàm này được gọi (xem AP_ShoesAgtech.cpp::update()) ----
+  PondEntry &pond = _ponds[_active_pond_idx];
+  const unsigned disp_idx = (unsigned)_active_pond_idx + 1;
 
   // ---- Ngày mới cho ao này: xóa slot hôm nay, giữ alk từ ngày trước ----
   if (pond.last_day != today) {
