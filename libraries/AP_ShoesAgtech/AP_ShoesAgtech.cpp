@@ -85,7 +85,8 @@ AP_ShoesAgtech::AP_ShoesAgtech()
       _mission_dist_m(0.0f), _mission_ncmds(0),
       _tank_empty_detected(false), _tank_empty_ms(0),
       _no_mission_warned(false), _flow_out_of_range(false),
-      _target_speed(0.0f), _seen_armed_once(false), _system_ready(false),
+      _flow_ready(false), _flow_check_ms(0),
+      _target_speed(0.0f),
       _sim_speed(0.0f), _ph_uart(nullptr),
       _ph_update_ms(0), _ph_req_sent_ms(0), _ph_req_pending(false),
       _ph_last_good_ms(0), _ph_nodata_warn_ms(0), _ph_last_log_ms(0),
@@ -97,7 +98,8 @@ AP_ShoesAgtech::AP_ShoesAgtech()
       _ponds_save_ms(0), _pond_save_fail_ms(0), _pond_first_detect_done(false),
       _ponds_dirty(false), _ponds_loaded(false), _dos_pwm(1500),
       _dos_config_ok(false), _dos_warn_ms(0), _dos_was_ok(false),
-      _dos_was_on(false), _dos_rc_seen_off(false), _dos_last_log_ms(0),
+      _dos_was_on(false), _dos_rc_seen_off(false), _dos_rc_check_ms(0),
+      _dos_last_log_ms(0),
       _dos_seq_ms(0), _disc_running(false), _disc_pwm(1500),
       _disc_config_ok(false), _disc_was_ok(false), _disc_warn_ms(0),
       _dos_sync_pond(0xFF),
@@ -164,8 +166,6 @@ void AP_ShoesAgtech::update(void) {
     return;
   }
 
-  _update_boot_handshake();
-
   _check_pump_config();
 
   if (_simulation.get() > 0) {
@@ -177,33 +177,6 @@ void AP_ShoesAgtech::update(void) {
   _update_dosing_motor();
 
   _update_flow();
-}
-
-// =============================================================
-// BẮT TAY AN TOÀN LÚC MỚI BOOT — mới 2026-09-08
-// Ngay sau boot/load param, RC receiver có thể chưa gửi đúng vị trí
-// THẬT của nấc/nút (dial chưa lăn về đúng chỗ, hoặc lỡ chạm nút) — nếu
-// tin ngay giá trị RC lúc đó, bơm (Module 1) hoặc motor cho ăn (Module
-// 3) có thể tự chạy ngoài ý muốn. Bắt buộc người vận hành phải ARM rồi
-// DISARM đúng 1 lần (xác nhận đã kiểm tra hệ thống) thì _system_ready
-// mới bật — trước đó case 1/2/3 của switch(_spray_mode) trong
-// _update_flow() và motor_on trong _update_dosing_motor() đều bị ép
-// tắt hoàn toàn, bất kể RC đang ở vị trí nào. Chỉ cần đúng 1 lần kể từ
-// lúc boot — không lặp lại ở các lần arm/disarm sau đó trong cùng phiên
-// làm việc.
-// =============================================================
-void AP_ShoesAgtech::_update_boot_handshake(void) {
-  if (_system_ready) {
-    return;
-  }
-  bool now_armed = hal.util->get_soft_armed();
-  if (now_armed) {
-    _seen_armed_once = true;
-  } else if (_seen_armed_once) {
-    _system_ready = true;
-    gcs().send_text(MAV_SEVERITY_INFO,
-                    "SA: System ready - pump/feeder can now run");
-  }
 }
 
 // =============================================================

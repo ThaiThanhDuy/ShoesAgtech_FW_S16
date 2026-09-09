@@ -56,7 +56,6 @@ public:
   AP_Float ph_me;         // SA_PH_ME
   AP_Float ph_as;         // SA_PH_AS
   AP_Float ph_ae;         // SA_PH_AE
-  AP_Float ph_pond_dist;  // SA_PH_POND_D
   AP_Int16 ph_cap_s;      // SA_PH_CAP_S
   AP_Int8  ph_cap_sam;    // SA_PH_CAP_SAM
   AP_Int8  ph_cap_m;      // SA_PH_CAP_M
@@ -107,9 +106,6 @@ public:
   float    get_flow_rate_lmin(void) const { return _flow_rate_filtered; }
   float    get_flow_rate_avg(void)  const { return _flow_rate_avg; }
   bool     is_enabled(void)         const { return _enable_flag.get() > 0; }
-  // true sau khi đã ARM rồi DISARM đúng 1 lần kể từ lúc boot — trước đó
-  // bơm (Module 1) và motor cho ăn (Module 3) đều bị ép tắt hoàn toàn.
-  bool     is_system_ready(void)    const { return _system_ready; }
 
   // Spray control getters (for logging)
   uint8_t  get_spray_mode(void)       const { return _spray_mode; }
@@ -252,22 +248,18 @@ private:
   // cuối log định kỳ; bơm vẫn tắt khi cờ này true nhưng _flow_target giữ
   // nguyên giá trị q1 thật để hiện trong log (không ép về 0 nữa).
   bool     _flow_out_of_range;
+  // ---- An toàn khởi động Module 1 (bơm), thay cho ARM/DISARM — mới
+  // 2026-09-09. Cứ mỗi 3 GIÂY (không phải mỗi chu kỳ 10Hz), kiểm tra CẢ 2
+  // kênh RC của bơm (SA_RC_CHAN và SA_RC_PUMP) đã về vị trí thấp/off chưa;
+  // nếu chưa → WARNING + hẹn kiểm tra lại sau 3s nữa; nếu đã đúng → set
+  // _flow_ready=true (chỉ cần 1 lần, không lặp lại) và cho phép chạy bình
+  // thường. Bơm bị ép tắt hoàn toàn (mọi nấc 0/1/2) trong lúc chưa ready.
+  bool     _flow_ready;
+  uint32_t _flow_check_ms;
   // Tốc độ ĐẶT cho mission (WP_SPEED), do Rover.cpp bơm vào qua
   // set_target_speed() mỗi chu kỳ trước update(). 0 nếu chưa từng được set
   // (vd chưa vào Auto lần nào) — dùng cho công thức FLOW_MODE=1.
   float    _target_speed;
-
-  // ---- "Bắt tay" an toàn lúc mới boot — DÙNG CHUNG Module 1 (bơm) và
-  // Module 3 (cho ăn) — mới 2026-09-08. Ngay sau khi boot/load param,
-  // RC receiver có thể chưa gửi đúng vị trí thật của nấc/nút (dial chưa
-  // lăn về đúng chỗ, hoặc lỡ chạm nút) — nếu tin ngay giá trị RC lúc đó
-  // thì bơm/motor cho ăn có thể tự chạy ngoài ý muốn. Bắt buộc người vận
-  // hành phải ARM rồi DISARM đúng 1 lần (xác nhận đã kiểm tra hệ thống)
-  // thì _system_ready mới bật — trước đó CẢ 2 module đều bị ép tắt hoàn
-  // toàn, bất kể RC đang ở vị trí nào. Chỉ cần 1 lần kể từ lúc boot,
-  // không lặp lại ở các lần arm/disarm sau đó.
-  bool     _seen_armed_once;
-  bool     _system_ready;
 
   // ---- SIMULATION state (sim_speed used in M1 spray calculations) ----
   float    _sim_speed;
@@ -295,8 +287,6 @@ private:
   static const uint8_t MAX_PONDS = 100;
 
   struct PondEntry {
-    float    center_lat;    // tâm ao GPS lat (degrees)
-    float    center_lng;    // tâm ao GPS lng (degrees)
     float    ph_morn;       // pH buổi sáng (mẫu cuối cùng)
     float    ph_aft;        // pH buổi chiều (mẫu cuối cùng)
     float    alk_dkh;       // kiềm dKH (giữ qua ngày)
@@ -307,9 +297,10 @@ private:
     uint32_t last_day;      // day_num lần đo gần nhất
     uint32_t morn_last_ms;  // millis mẫu sáng cuối (rate-limit)
     uint32_t aft_last_ms;   // millis mẫu chiều cuối (rate-limit)
-    int32_t  morn_lat;      // GPS lat mẫu sáng cuối (deg×1e7)
-    int32_t  morn_lng;      // GPS lng mẫu sáng cuối (deg×1e7)
-    uint16_t gps_count;     // số mẫu GPS cho rolling centroid
+    int32_t  morn_lat;      // GPS lat mẫu sáng cuối (deg×1e7) — best-effort,
+                            // =0 nếu không có GPS lúc lấy mẫu, KHÔNG chặn
+                            // lấy mẫu pH (đổi 2026-09-09, bỏ yêu cầu GPS)
+    int32_t  morn_lng;      // GPS lng mẫu sáng cuối (deg×1e7) — như trên
     uint8_t  morn_count;    // số mẫu sáng hôm nay
     uint8_t  aft_count;     // số mẫu chiều hôm nay
     uint8_t  status;        // bit0=có_sáng bit1=có_chiều (3=FULL)
@@ -350,12 +341,14 @@ private:
   uint32_t _dos_warn_ms;
   bool     _dos_was_ok;
   bool     _dos_was_on;
-  // false từ lúc boot cho tới khi thấy SA_DOS_RC ở vị trí OFF ít nhất 1
-  // lần - chặn motor tự chạy lại nếu FC reboot (mất điện chập chờn) trong
-  // lúc switch vẫn đang ở vị trí ON từ trước; buộc phải gạt OFF rồi ON
-  // lại sau mỗi lần boot mới cho chạy. Không reset khi disarm (chỉ liên
-  // quan tới reboot thật, không phải chu kỳ arm/disarm bình thường).
+  // An toàn khởi động Module 3 (cho ăn), thay cho ARM/DISARM — mới
+  // 2026-09-09. Cứ mỗi 3 GIÂY, kiểm tra SA_DOS_RC đã về vị trí OFF chưa;
+  // nếu chưa → WARNING + hẹn kiểm tra lại sau 3s nữa; nếu đã đúng → set
+  // _dos_rc_seen_off=true (chỉ cần 1 lần, không lặp lại). Motor cho ăn +
+  // đĩa rải bị ép tắt hoàn toàn trong lúc chưa seen_off. Không reset khi
+  // disarm (chỉ liên quan tới reboot thật).
   bool     _dos_rc_seen_off;
+  uint32_t _dos_rc_check_ms;
   uint32_t _dos_last_log_ms;
 
   // ---- Đĩa rải ly tâm — ESC riêng qua SA_DISC_CHAN, quay TRƯỚC khi trục
@@ -382,9 +375,6 @@ private:
   // ================================================================
   // PRIVATE METHODS
   // ================================================================
-
-  // ---- Dùng chung: bắt tay an toàn ARM+DISARM 1 lần lúc mới boot ----
-  void     _update_boot_handshake(void);
 
   // ---- MODULE 1: flow sensor + spray control ----
   void     _update_flow(void);

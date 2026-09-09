@@ -124,15 +124,11 @@ const AP_Param::GroupInfo AP_ShoesAgtech_PHParams::var_info[] = {
     // @User: Standard
     AP_GROUPINFO("PH_AE", 13, AP_ShoesAgtech_PHParams, ph_ae, 16.0f),
 
-    // @Param: PH_POND_D
-    // @DisplayName: Same-pond GPS distance threshold (m)
-    // @Description: Maximum distance between the robot and the pond centroid
-    //   to still consider it the same pond. Increase for large ponds.
-    // @Range: 10 5000
-    // @Units: m
-    // @User: Standard
-    AP_GROUPINFO("PH_POND_D", 14, AP_ShoesAgtech_PHParams, ph_pond_dist,
-                 300.0f),
+    // Slot 14 (SA_PH_POND_D) đã gỡ bỏ 2026-09-09 — bỏ hẳn cơ chế xác thực
+    // ao bằng khoảng cách GPS tới tâm ao (ao chọn thủ công qua SA_POND_IDX,
+    // không cần GPS để xác định đúng ao). Slot bỏ trống vĩnh viễn, KHÔNG
+    // tái sử dụng cho tham số khác (tránh nhầm giá trị cũ còn sót trong
+    // EEPROM của máy đã lên đời).
 
     // @Param: PH_CAP_S
     // @DisplayName: pH sample interval within a slot (s)
@@ -385,16 +381,18 @@ void AP_ShoesAgtech::_ph_print_log(uint32_t now) {
 // =============================================================
 // THEO DÕI SLOT ΔpH HÀNG NGÀY
 //
-// Chọn ao theo SA_POND_IDX (nhập thủ công, 1-100).
-// GPS chỉ dùng để validate vị trí (in 1 lần khi đổi ao). Tích lũy mẫu pH
-// last-write-wins trong slot sáng/chiều, tính kiềm khi ao đủ cả hai slot.
-// Dữ liệu ao không reset hàng ngày — chỉ xóa slot hôm nay khi quay lại
-// ao đó vào ngày mới. Hỗ trợ tối đa 100 ao, lưu trữ qua reboot vào SD card.
+// Chọn ao theo SA_POND_IDX (nhập thủ công, 1-100) — KHÔNG dùng GPS để
+// xác định/kiểm tra đúng ao nữa (bỏ 2026-09-09, xem ghi chú dưới). Tích
+// lũy mẫu pH last-write-wins trong slot sáng/chiều, tính kiềm khi ao đủ
+// cả hai slot. Dữ liệu ao không reset hàng ngày — chỉ xóa slot hôm nay
+// khi quay lại ao đó vào ngày mới. Hỗ trợ tối đa 100 ao, lưu trữ qua
+// reboot vào SD card.
 // =============================================================
 void AP_ShoesAgtech::_ph_update_daily_slots(float ph_cal) {
   uint32_t now = AP_HAL::millis();
 
-  // ---- Yêu cầu có giờ GPS ----
+  // ---- Yêu cầu có giờ (RTC/UTC) — vẫn cần để phân loại slot sáng/chiều
+  // theo đúng giờ địa phương (SA_PH_TZ). Không liên quan tới việc chọn ao. ----
   uint64_t utc_usec = 0;
   if (!AP::rtc().get_utc_usec(utc_usec)) {
     if (_ph_params.ph_log_enable.get() > 0 && now - _slot_warn_ms >= 60000) {
@@ -405,18 +403,17 @@ void AP_ShoesAgtech::_ph_update_daily_slots(float ph_cal) {
     return;
   }
 
-  // ---- Yêu cầu GPS có fix 3D ----
+  // ---- Vị trí GPS: best-effort, KHÔNG bắt buộc (đổi 2026-09-09) ----
+  // Trước đây bắt buộc GPS fix 3D mới cho lấy mẫu pH, đồng thời dùng vị
+  // trí để "xác thực đúng ao" qua khoảng cách tới tâm ao (SA_PH_POND_D,
+  // đã gỡ bỏ). Ao giờ chọn HOÀN TOÀN thủ công qua SA_POND_IDX nên không
+  // cần GPS để biết đang ở ao nào nữa — mất GPS không còn làm gián đoạn
+  // việc lấy mẫu pH/tính kiềm. Nếu có GPS fix 3D thì vẫn ghi lại tọa độ
+  // mẫu sáng (morn_lat/morn_lng) để hiển thị lên bản đồ app; không có GPS
+  // thì tọa độ này chỉ đơn giản = 0, không ảnh hưởng gì tới dữ liệu ao.
   int32_t cur_lat_i = 0, cur_lng_i = 0;
   const AP_GPS &gps_inst = AP::gps();
-  if (gps_inst.status(0) < AP_GPS::GPS_OK_FIX_3D) {
-    if (_ph_params.ph_log_enable.get() > 0 && now - _slot_warn_ms >= 60000) {
-      _slot_warn_ms = now;
-      gcs().send_text(MAV_SEVERITY_INFO,
-                      "[WM] No GPS - alkalinity waiting for GPS/time");
-    }
-    return;
-  }
-  {
+  if (gps_inst.status(0) >= AP_GPS::GPS_OK_FIX_3D) {
     const Location &loc = gps_inst.location(0);
     cur_lat_i = loc.lat;
     cur_lng_i = loc.lng;
@@ -427,8 +424,6 @@ void AP_ShoesAgtech::_ph_update_daily_slots(float ph_cal) {
   uint32_t local_sec = utc_sec + (uint32_t)((int32_t)tz * 3600);
   uint32_t today = local_sec / 86400U;
   float local_h = (float)(local_sec % 86400U) / 3600.0f;
-  float cur_lat_f = cur_lat_i * 1.0e-7f;
-  float cur_lng_f = cur_lng_i * 1.0e-7f;
 
   // ---- Khung giờ của slot ----
   float ms = constrain_float(_ph_params.ph_ms.get(), 0.0f, 23.99f);
@@ -446,9 +441,6 @@ void AP_ShoesAgtech::_ph_update_daily_slots(float ph_cal) {
   const bool pond_is_new = !_ponds[pond_idx].valid;
   if (pond_is_new) {
     memset(&_ponds[pond_idx], 0, sizeof(PondEntry));
-    _ponds[pond_idx].center_lat = cur_lat_f;
-    _ponds[pond_idx].center_lng = cur_lng_f;
-    _ponds[pond_idx].gps_count = 1;
     _ponds[pond_idx].valid = true;
     _ponds[pond_idx].last_day = today;
     _ponds[pond_idx].dos_sp = _dos_params.dos_sp.get();
@@ -462,36 +454,14 @@ void AP_ShoesAgtech::_ph_update_daily_slots(float ph_cal) {
   const unsigned disp_idx = (unsigned)pond_idx + 1;
 
   // ---- Thông báo khi ao thay đổi (kể cả lần đầu boot) — in 1 lần ----
+  // (2026-09-09: bỏ hẳn phần xác thực GPS "GPS OK/off by Xm" — ao chọn
+  // thủ công qua SA_POND_IDX, không cần kiểm tra khoảng cách nữa)
   if (pond_idx != _active_pond_idx || !_pond_first_detect_done) {
     _pond_first_detect_done = true;
     gcs().send_text(MAV_SEVERITY_INFO, "[SA] Switched to pond #%u%s", disp_idx,
                     pond_is_new ? " (new pond)" : "");
-    if (pond.gps_count > 5) {
-      const float DEG2M = 111320.0f;
-      const float coslat = cosf(cur_lat_f * DEG_TO_RAD);
-      float dlat_m = (cur_lat_f - pond.center_lat) * DEG2M;
-      float dlng_m = (cur_lng_f - pond.center_lng) * DEG2M * coslat;
-      float dist_m = sqrtf(dlat_m * dlat_m + dlng_m * dlng_m);
-      float pond_thr =
-          constrain_float(_ph_params.ph_pond_dist.get(), 10.0f, 5000.0f);
-      if (dist_m <= pond_thr) {
-        gcs().send_text(MAV_SEVERITY_INFO, "[SA] Pond#%u GPS OK (%.0fm)",
-                        disp_idx, (double)dist_m);
-      } else {
-        gcs().send_text(MAV_SEVERITY_INFO,
-                        "[SA] Pond#%u GPS off by %.0fm - check pond location",
-                        disp_idx, (double)dist_m);
-      }
-    }
   }
   _active_pond_idx = pond_idx;
-
-  // ---- Cập nhật centroid GPS (rolling average, cap 1000) ----
-  if (pond.gps_count < 1000)
-    pond.gps_count++;
-  float w = 1.0f / (float)pond.gps_count;
-  pond.center_lat = pond.center_lat * (1.0f - w) + cur_lat_f * w;
-  pond.center_lng = pond.center_lng * (1.0f - w) + cur_lng_f * w;
 
   // ---- Ngày mới cho ao này: xóa slot hôm nay, giữ alk từ ngày trước ----
   if (pond.last_day != today) {
@@ -708,7 +678,9 @@ void AP_ShoesAgtech::_io_update(void) {
 // =============================================================
 #define SA_PONDS_FILE "/APM/SA_PONDS.bin"
 #define SA_PONDS_MAGIC 0x504F4E44UL // 'POND'
-#define SA_PONDS_VER 3 // v3: thêm PondEntry::dos_food — file v2 cũ sẽ bị bỏ qua
+#define SA_PONDS_VER 4 // v4: bỏ PondEntry::center_lat/center_lng/gps_count
+                       // (2026-09-09, bỏ xác thực ao bằng GPS) — file v3 cũ
+                       // sẽ bị bỏ qua (v3: thêm PondEntry::dos_food)
 
 struct PondStateHdr {
   uint32_t magic;

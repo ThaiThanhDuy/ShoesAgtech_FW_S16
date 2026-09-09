@@ -37,12 +37,12 @@ Rover::update_custom_flow()   [main loop, ~10 Hz]
     │         │         └──► _ph_update_daily_slots(ph_cal)
     │         │                   │
     │         │                   ├──► AP::rtc().get_utc_usec() — bắt buộc, nếu chưa có → return
-    │         │                   ├──► AP::gps().status(0) >= GPS_OK_FIX_3D — bắt buộc, nếu chưa → return
+    │         │                   ├──► GPS fix 3D? → có: lấy lat/lng thật; không: lat/lng=0
+    │         │                   │       (KHÔNG bắt buộc nữa, 2026-09-09 — chỉ để hiển thị bản đồ)
     │         │                   ├──► Chọn ao theo SA_POND_IDX (1-100, nhập tay) → pond_idx
-    │         │                   ├──► Ao mới? → khởi tạo PondEntry, tâm GPS = vị trí hiện tại
-    │         │                   ├──► Đổi ao (khác _active_pond_idx)? → thông báo + so tâm GPS
-    │         │                   │       (chỉ cảnh báo, KHÔNG chặn đo/tính kiềm)
-    │         │                   ├──► Cập nhật centroid GPS ao (rolling average)
+    │         │                   ├──► Ao mới? → khởi tạo PondEntry (không còn lưu tâm GPS)
+    │         │                   ├──► Đổi ao (khác _active_pond_idx)? → thông báo "[SA] Switched to
+    │         │                   │       pond #n" (đã bỏ hẳn so khoảng cách GPS, 2026-09-09)
     │         │                   ├──► Ngày mới cho ao này? → reset slot hôm nay (giữ kiềm hôm qua)
     │         │                   ├──► Đang ARM + trong khung sáng/chiều + đủ SA_PH_CAP_S giây
     │         │                   │       kể từ mẫu trước → ghi đè slot (last-write-wins),
@@ -131,25 +131,24 @@ init() [1 lần boot]
 - **File:** `AP_ShoesAgtech.cpp : 1340`
 - **Được gọi bởi:** `_ph_update()` sau mỗi frame hợp lệ (và `_run_simulation()` khi SA_SIM=1)
 - **Xử lý:**
-    1. **Bắt buộc có giờ UTC** (`AP::rtc().get_utc_usec()`) và **GPS fix 3D** (`AP_GPS::GPS_OK_FIX_3D`) — thiếu 1 trong 2 → cảnh báo mỗi 60s (nếu SA_PH_LOG=1), return ngay, không làm gì thêm
-    2. `local_sec = utc_sec + SA_PH_TZ×3600`; `today = local_sec/86400`; `local_h` = giờ địa phương dạng thập phân
-    3. **Chọn ao:** `pond_idx = constrain(SA_POND_IDX, 1, 100) − 1` (nhập tay, không tự động theo GPS)
-    4. **Ao mới** (`!_ponds[pond_idx].valid`): khởi tạo `PondEntry`, `center_lat/lng` = GPS hiện tại, `dos_sp`/`dos_food` = giá trị `SA_DOS_SP`/`SA_DOS_FOOD` hiện tại, đánh dấu `_ponds_dirty=true`
-    5. **Đổi ao** (`pond_idx != _active_pond_idx` hoặc lần đầu sau boot): in `[SA] Chuyen sang ao #n`; nếu ao đã có > 5 mẫu GPS lịch sử, so khoảng cách tâm ao đã lưu với vị trí hiện tại — lệch quá `SA_PH_POND_D` mét thì in cảnh báo tham khảo (**không chặn** đo/tính kiềm)
+    1. **Bắt buộc có giờ UTC** (`AP::rtc().get_utc_usec()`) — thiếu → cảnh báo mỗi 60s (nếu SA_PH_LOG=1), return ngay, không làm gì thêm. **Không còn bắt buộc GPS fix 3D** (bỏ 2026-09-09) — xem mục 3.7
+    2. `local_sec = utc_sec + SA_PH_TZ×3600`; `today = local_sec/86400`; `local_h` = giờ địa phương dạng thập phân. Lấy vị trí GPS **best-effort**: có fix 3D → `cur_lat_i/cur_lng_i` = thật; không có → giữ 0
+    3. **Chọn ao:** `pond_idx = constrain(SA_POND_IDX, 1, 100) − 1` (nhập tay, hoàn toàn không liên quan tới GPS)
+    4. **Ao mới** (`!_ponds[pond_idx].valid`): khởi tạo `PondEntry` (không còn lưu tâm GPS — `center_lat/lng` đã bị gỡ bỏ khỏi struct), `dos_sp`/`dos_food` = giá trị `SA_DOS_SP`/`SA_DOS_FOOD` hiện tại, đánh dấu `_ponds_dirty=true`
+    5. **Đổi ao** (`pond_idx != _active_pond_idx` hoặc lần đầu sau boot): in `[SA] Switched to pond #n` — **đã bỏ hẳn** phần so khoảng cách GPS tới tâm ao (2026-09-09, xem mục 7)
     6. Cập nhật `_active_pond_idx = pond_idx`
-    7. **Centroid GPS** ao cập nhật kiểu rolling-average, trọng số `1/gps_count` (tăng dần đến trần 1000 mẫu)
-    8. **Ngày mới cho ao này** (`pond.last_day != today`): reset `ph_morn/ph_aft/status/delta_ph/alk_pending/gcs_alk_pending/alk_computed/...` về 0/false — **giữ nguyên** `alk_dkh/alk_mgl` (kiềm hôm qua) để dùng làm PREV
-    9. **Lấy mẫu** — chỉ khi `(in_morn || in_aft) && hal.util->get_soft_armed()`:
+    7. **Ngày mới cho ao này** (`pond.last_day != today`): reset `ph_morn/ph_aft/status/delta_ph/alk_pending/gcs_alk_pending/alk_computed/...` về 0/false — **giữ nguyên** `alk_dkh/alk_mgl` (kiềm hôm qua) để dùng làm PREV
+    8. **Lấy mẫu** — chỉ khi `(in_morn || in_aft) && hal.util->get_soft_armed()`:
        - Rate-limit `SA_PH_CAP_S` giây/mẫu theo từng slot (`morn_last_ms`/`aft_last_ms`)
        - Ghi đè giá trị mới nhất vào `ph_morn`/`ph_aft` (last-write-wins), tăng `morn_count`/`aft_count`, set bit `status` (bit0=sáng, bit1=chiều)
        - Khi vừa đạt đủ `SA_PH_CAP_SAM` mẫu và chưa từng báo → in 1 lần "Ao#n pH sang/chieu: X (N mau)"
-    10. **Tính kiềm** — khi `status == 3` (FULL) lần đầu trong ngày (`!alk_computed`):
+    9. **Tính kiềm** — khi `status == 3` (FULL) lần đầu trong ngày (`!alk_computed`):
         - `delta_ph = ph_aft − ph_morn`
         - `kh_scaled = SA_PH_KH × (1 + constrain(delta_ph×0.375, −0.5, 1.0))`
         - `alk_dkh = _ph_calc_alkalinity(ph_morn, kh_scaled, _ph_temp)`; `alk_mgl = alk_dkh × 17.85`
         - Set `alk_computed=true`, `alk_pending=true` (chờ ghi SD), `gcs_alk_pending=true` (chờ gửi MAVLink), `_ponds_dirty=true`
         - In 2 dòng INFO: `Ao#n S:x C:x dPH:x` và `Ao#n kiem:xdKH/xmgL`
-    11. Cập nhật `_alk_slot_status` hiển thị: `status==3`→0(FULL), `status==1`→1(MORN), `status==2`→2(AFT), else nếu `alk_dkh>0`→3(PREV, dùng dữ liệu ngày trước), else→4(NODATA)
+    10. Cập nhật `_alk_slot_status` hiển thị: `status==3`→0(FULL), `status==1`→1(MORN), `status==2`→2(AFT), else nếu `alk_dkh>0`→3(PREV, dùng dữ liệu ngày trước), else→4(NODATA)
 - **Đầu ra:** Cập nhật `_ponds[pond_idx]`, các mirror `_alk_dkh/_alk_mgl/_delta_ph/_alk_slot_status`, `_active_pond_idx`
 
 ---
@@ -222,28 +221,33 @@ init() [1 lần boot]
 
 | Tham số | Slot | Kiểu | Mặc định | Min | Max | Mô tả đầy đủ |
 |---|---|---|---|---|---|---|
-| `SA_PH_EN` | 14 | Int8 | 0 | 0 | 1 | Bật/tắt module pH. Tắt → không mở UART, không poll, không ghi SD. |
-| `SA_PH_PORT` | 15 | Int8 | 2 | 0 | 4 | Số SERIAL port RS485-TTL. Cần `SERIALx_BAUD=9`, `SERIALx_PROTOCOL=0`. |
-| `SA_PH_TOFF` | 16 | Float | -3.5 | -10 | 10 | Offset bù nhiệt độ (°C): `T = raw/10 + SA_PH_TOFF`. |
-| `SA_PH_OFF` | 17 | Float | 0.0 | -2.0 | 2.0 | Offset hiệu chuẩn pH: `pH = raw/100 + SA_PH_OFF`. |
-| `SA_PH_KH` | 18 | Float | 4.0 | 0 | 30 | Kiềm tham chiếu từ test kit (dKH). Cập nhật khi test ao. |
-| `SA_PH_LOG` | 20 | Int8 | 0 | 0 | 1 | Bật (1) console log pH/nhiệt độ/mV theo chu kỳ `SA_PH_LOG_MS`. |
-| `SA_PH_TZ` | 21 | Int8 | 7 | -12 | 14 | UTC offset (giờ). Việt Nam = 7. Dùng phân slot sáng/chiều + GPS thời gian. |
-| `SA_PH_LOG_MS` | 23 | Int16 | 2000 | 500 | 60000 | Chu kỳ console log pH (ms). |
-| `SA_PH_TIMEOUT` | 24 | Int16 | 2 | 1 | 300 | Ngưỡng mất kết nối (giây). Quá ngưỡng → `ph_has_data()=false`. |
-| `SA_PH_MS` | 55 | Float | 5.0 | 0 | 23.99 | Giờ **bắt đầu** cửa sổ sáng, thập phân (vd 5.5 = 5h30). |
-| `SA_PH_ME` | 56 | Float | 11.0 | 0 | 24 | Giờ **kết thúc** cửa sổ sáng (inclusive `<=`). 24.0 = đến hết ngày. |
-| `SA_PH_AS` | 57 | Float | 12.0 | 0 | 23.99 | Giờ **bắt đầu** cửa sổ chiều, thập phân. |
-| `SA_PH_AE` | 58 | Float | 16.0 | 0 | 24 | Giờ **kết thúc** cửa sổ chiều (inclusive `<=`). 24.0 = đến hết ngày. |
-| `SA_POND_IDX` | 59 | Int16 | 1 | 0 | 100 | Ao đang đo (1-based, nhập tay). Chung cho Module 2 (pH) và Module 3 (dosing setpoint/loại thức ăn theo ao). 0 = tắt chọn ao (không phân slot). |
-| `SA_PH_POND_D` | 60 | Float | 300.0 | 10 | 5000 | Ngưỡng khoảng cách GPS (m) so với tâm ao đã lưu để cảnh báo "lệch vị trí". Chỉ tham khảo — không chặn đo/tính kiềm. |
-| `SA_PH_CAP_S` | 61 | Int16 | 20 | 1 | 3600 | Khoảng thời gian tối thiểu (giây) giữa 2 mẫu tích lũy trong 1 slot. |
-| `SA_PH_CAP_SAM` | 62 | Int8 | 20 | 1 | 100 | Số mẫu cần đạt để slot được báo "hoàn thành" (giá trị dùng là mẫu cuối — last-write-wins). |
-| `SA_PH_CAP_M` | 12 | Int8 | 1 | 1 | 100 | Bán kính capture (m) — **chỉ dùng cho app đồng hành**, firmware khởi tạo giá trị nhưng không đọc lại. |
+| `SA_PH_EN` | 1 | Int8 | 0 | 0 | 1 | Bật/tắt module pH. Tắt → không mở UART, không poll, không ghi SD. |
+| `SA_PH_PORT` | 2 | Int8 | 2 | 0 | 4 | Số SERIAL port RS485-TTL. Cần `SERIALx_BAUD=9`, `SERIALx_PROTOCOL=0`. |
+| `SA_PH_TOFF` | 3 | Float | -3.5 | -10 | 10 | Offset bù nhiệt độ (°C): `T = raw/10 + SA_PH_TOFF`. |
+| `SA_PH_OFF` | 4 | Float | 0.0 | -2.0 | 2.0 | Offset hiệu chuẩn pH: `pH = raw/100 + SA_PH_OFF`. |
+| `SA_PH_KH` | 5 | Float | 4.0 | 0 | 30 | Kiềm tham chiếu từ test kit (dKH). Cập nhật khi test ao. |
+| `SA_PH_LOG` | 6 | Int8 | 0 | 0 | 1 | Bật (1) console log pH/nhiệt độ/mV theo chu kỳ `SA_PH_LOG_MS`. |
+| `SA_PH_TZ` | 7 | Int8 | 7 | -12 | 14 | UTC offset (giờ). Việt Nam = 7. Dùng phân slot sáng/chiều theo giờ UTC (RTC — không còn cần GPS fix, xem mục 3.7). |
+| `SA_PH_LOG_MS` | 8 | Int16 | 2000 | 500 | 60000 | Chu kỳ console log pH (ms). |
+| `SA_PH_TIMEOUT` | 9 | Int16 | 2 | 1 | 300 | Ngưỡng mất kết nối (giây). Quá ngưỡng → `ph_has_data()=false`. |
+| `SA_PH_MS` | 10 | Float | 5.0 | 0 | 23.99 | Giờ **bắt đầu** cửa sổ sáng, thập phân (vd 5.5 = 5h30). |
+| `SA_PH_ME` | 11 | Float | 11.0 | 0 | 24 | Giờ **kết thúc** cửa sổ sáng (inclusive `<=`). 24.0 = đến hết ngày. |
+| `SA_PH_AS` | 12 | Float | 12.0 | 0 | 23.99 | Giờ **bắt đầu** cửa sổ chiều, thập phân. |
+| `SA_PH_AE` | 13 | Float | 16.0 | 0 | 24 | Giờ **kết thúc** cửa sổ chiều (inclusive `<=`). 24.0 = đến hết ngày. |
+| `SA_POND_IDX` | 59 (top-level) | Int16 | 1 | 0 | 100 | Ao đang đo (1-based, nhập tay). Chung cho Module 2 (pH) và Module 3 (dosing setpoint/loại thức ăn theo ao). 0 = tắt chọn ao (không phân slot). **Không liên quan gì tới GPS** — chọn ao 100% thủ công. |
+| `SA_PH_CAP_S` | 15 | Int16 | 20 | 1 | 3600 | Khoảng thời gian tối thiểu (giây) giữa 2 mẫu tích lũy trong 1 slot. |
+| `SA_PH_CAP_SAM` | 16 | Int8 | 20 | 1 | 100 | Số mẫu cần đạt để slot được báo "hoàn thành" (giá trị dùng là mẫu cuối — last-write-wins). |
+| `SA_PH_CAP_M` | 17 | Int8 | 1 | 1 | 100 | Bán kính capture (m) — **chỉ dùng cho app đồng hành**, firmware khởi tạo giá trị nhưng không đọc lại. |
 
 > **Param chỉ có hiệu lực sau reboot:** `SA_PH_PORT`
 >
-> **Param đã bị gỡ bỏ (không còn tồn tại):** `SA_PH_EMA` (slot 19, cũ — làm mịn EMA cho pH đã bỏ, chỉ còn moving-average 10 mẫu), `SA_PH_SAMP_D` (điểm mẫu PHSP theo khoảng cách — tính năng đã bị loại bỏ hoàn toàn).
+> **Param đã bị gỡ bỏ (không còn tồn tại):** `SA_PH_EMA` (cũ — làm mịn EMA cho pH đã bỏ, chỉ còn moving-average 10 mẫu), `SA_PH_SAMP_D` (điểm mẫu PHSP theo khoảng cách — tính năng đã bị loại bỏ hoàn toàn), **`SA_PH_POND_D`** (slot 14, gỡ 2026-09-09 — bỏ hẳn cơ chế xác thực đúng ao bằng khoảng cách GPS tới tâm ao; ao giờ chọn 100% thủ công qua `SA_POND_IDX`, xem mục 3.7). Slot 14 bỏ trống vĩnh viễn, không tái sử dụng.
+>
+> **⚠️ Đổi hệ đánh số slot (2026-09-07):** Module 2 được tách thành class
+> `AP_ShoesAgtech_PHParams` riêng, có bảng 64 slot **riêng** thay vì dùng
+> chung 64 slot với toàn bộ thư viện như trước — cột "Slot" trong bảng
+> trên (trừ `SA_POND_IDX`, vẫn ở top-level `AP_ShoesAgtech`) là số MỚI
+> (1-17), không còn là 14-24/55-62 như tài liệu cũ.
 >
 > **Lưu ý cửa sổ thời gian:** `SA_PH_MS`/`SA_PH_AS` clamp 0–23.99 (giờ bắt đầu). `SA_PH_ME`/`SA_PH_AE` clamp 0–24 (24 = "đến hết giờ trong ngày"). Giờ là số thập phân (không còn Int8) nên có thể đặt phút lẻ.
 
@@ -300,24 +304,35 @@ _ph_temp  = raw_temp / 10.0 + SA_PH_TOFF
 
 **Moving Average (duy nhất — không còn EMA):** circular buffer 10 phần tử; `_ph_value_ma = sum / count`. `get_ph()` → MA; `get_ph_raw()` → mẫu calib mới nhất chưa lọc.
 
-**Chọn ao (thủ công, không tự động theo GPS):**
+**Chọn ao (100% thủ công — đã bỏ hẳn mọi liên quan tới GPS, 2026-09-09):**
 
 ```
 pond_idx = constrain(SA_POND_IDX, 1, 100) − 1     (0-based nội bộ)
 
 Ao chưa tồn tại (_ponds[pond_idx].valid == false):
-    → khởi tạo: center_lat/lng = GPS hiện tại, dos_sp = SA_DOS_SP,
-      dos_food = SA_DOS_FOOD, valid = true, last_day = today
+    → khởi tạo: dos_sp = SA_DOS_SP, dos_food = SA_DOS_FOOD,
+      valid = true, last_day = today
+      (KHÔNG còn lưu tâm GPS — center_lat/lng đã bị gỡ khỏi PondEntry)
 
 Ao vừa đổi (khác _active_pond_idx, hoặc lần đầu sau boot):
-    → in "[SA] Chuyen sang ao #n" (+ "(ao moi)" nếu vừa khởi tạo)
-    → nếu gps_count > 5: so khoảng cách GPS hiện tại với tâm ao đã lưu
-        <= SA_PH_POND_D  → "[SA] Ao#n GPS OK (Xm)"
-        >  SA_PH_POND_D  → "[SA] Ao#n GPS lech Xm - can check lai vi tri ao"
-      (CHỈ CẢNH BÁO — không chặn đo/tính kiềm dù lệch bao xa)
-
-Centroid GPS ao: rolling average, trọng số 1/gps_count, trần 1000 mẫu
+    → in "[SA] Switched to pond #n" (+ "(new pond)" nếu vừa khởi tạo)
+    → KHÔNG còn so khoảng cách GPS/cảnh báo "lệch vị trí" nữa
 ```
+
+> **⚠️ Đã gỡ bỏ hoàn toàn (2026-09-09):** cơ chế "xác thực đúng ao bằng
+> GPS" — so khoảng cách vị trí hiện tại với tâm ao đã lưu (`SA_PH_POND_D`,
+> `PondEntry::center_lat/center_lng/gps_count`, thông báo "[SA] Ao#n GPS
+> OK/lech Xm"). Lý do: ao đã chọn HOÀN TOÀN thủ công qua `SA_POND_IDX` từ
+> trước — cơ chế GPS này chỉ mang tính tham khảo (không chặn gì), nhưng
+> lại khiến việc lấy mẫu pH/tính kiềm phụ thuộc vào GPS fix 3D (bắt buộc
+> có fix mới chạy được cả hàm `_ph_update_daily_slots()`) — mất GPS tạm
+> thời (che khuất vệ tinh, nhiễu...) sẽ làm gián đoạn lấy mẫu dù ao vẫn
+> đúng 100% theo `SA_POND_IDX`. Từ nay GPS chỉ còn dùng best-effort để ghi
+> tọa độ hiển thị bản đồ (`morn_lat`/`morn_lng`), không còn là điều kiện
+> bắt buộc cho bất kỳ bước nào trong pipeline ao/slot/kiềm — xem mục 3.7.
+> File pond lưu SD nâng version `SA_PONDS_VER` 3→4 (struct đổi kích
+> thước) — **dữ liệu ao đã lưu trên máy cũ sẽ bị bỏ qua, cần nhập lại sau
+> khi cập nhật firmware này** (giống lần đổi version 2→3 trước đây).
 
 **Phân slot theo cửa sổ cài đặt (chỉ khi đang ARM):**
 
@@ -366,9 +381,9 @@ gcs_alk_pending = true    (chờ MAVLink gửi SA_PHK — độc lập với alk
 
 - **CRC lỗi:** bỏ frame, không cập nhật `_ph_last_good_ms`; STATUSTEXT mỗi lần
 - **Timeout response (> 500ms):** reset `_ph_req_pending`; warn mỗi 10s
-- **Không có GPS 3D fix hoặc chưa có giờ UTC:** vẫn đọc pH + ghi PHWD (với lat/lng=0); **không** chọn ao, **không** phân slot, **không** tính kiềm; warn mỗi 60s (nếu SA_PH_LOG=1)
+- **Chưa có giờ UTC (RTC):** vẫn đọc pH + ghi PHWD (với lat/lng=0); **không** chọn ao, **không** phân slot, **không** tính kiềm; warn mỗi 60s (nếu SA_PH_LOG=1)
+- **Không có GPS 3D fix (nhưng ĐÃ có giờ UTC) — đổi 2026-09-09:** KHÔNG còn chặn gì cả — vẫn chọn ao/phân slot/tính kiềm bình thường theo `SA_POND_IDX`, chỉ riêng tọa độ `morn_lat`/`morn_lng` của mẫu ghi = 0 (không hiển thị được vị trí trên bản đồ app cho mẫu đó)
 - **Đang DISARM:** vẫn đọc/ghi PHWD bình thường, nhưng KHÔNG tích lũy mẫu vào slot sáng/chiều (chỉ lấy mẫu khi ARM)
-- **Lệch vị trí GPS so với tâm ao:** chỉ cảnh báo tham khảo, không chặn — người vận hành tự quyết định có đúng ao hay không
 - **`SA_POND_IDX = 0`:** vô hiệu hoá việc chọn ao — `_ph_update_daily_slots()` vẫn chạy nhưng `constrain(0,1,100)=1` nên thực chất luôn dùng ao #1; đặt về 0 không "tắt" theo nghĩa dừng lấy mẫu
 
 ---
@@ -463,7 +478,7 @@ Tần suất: Tối đa 1 record/ngày/ao — nhưng có thể nhiều record/v�
 | 4 | `dPH` | float (f) | — | ΔpH = pHAft − pHMorn |
 | 5 | `AlkDKH` | float (f) | dKH | Kiềm tính từ ΔpH + `_ph_calc_alkalinity()` |
 | 6 | `AlkMGL` | float (f) | mg/L | AlkDKH × 17.85 |
-| 7 | `Lat` | int32 (L) | deg×1e7 | GPS latitude mẫu sáng cuối (định danh ao) |
+| 7 | `Lat` | int32 (L) | deg×1e7 | GPS latitude mẫu sáng cuối — chỉ để hiển thị bản đồ, best-effort (=0 nếu không có GPS lúc lấy mẫu), KHÔNG dùng để xác định ao (dùng `PondIdx` bên dưới) |
 | 8 | `Lng` | int32 (L) | deg×1e7 | GPS longitude mẫu sáng cuối |
 | 9 | `PondIdx` | uint8 (B) | — | Số thứ tự ao, 1-based (khớp `SA_POND_IDX`, tối đa 100) |
 
@@ -509,10 +524,8 @@ SA_SIM=1: tiền tố [SIM][WM] thay vì [WM]
 | `SA: pH sensor chưa có dữ liệu - kiểm tra dây RS485` | WARNING | Chưa nhận frame nào | Mỗi 10s |
 | `SA: pH sensor mất kết nối (<x>s) - kiểm tra dây RS485` | WARNING | Mất kết nối > SA_PH_TIMEOUT | Mỗi 10s |
 | `SA: pH CRC fail (noise on RS485?)` | WARNING | CRC16 không khớp | Mỗi lần lỗi |
-| `[WM] Chưa GPS - kiềm đợi GPS/giờ` | INFO | Chưa có giờ UTC hoặc chưa GPS fix 3D (chỉ khi SA_PH_LOG=1) | Mỗi 60s |
-| `[SA] Chuyen sang ao #<n>` (+ `(ao moi)` nếu vừa tạo) | INFO | Đổi `SA_POND_IDX` hoặc lần đầu sau boot | 1 lần/lần đổi |
-| `[SA] Ao#<n> GPS OK (<x>m)` | INFO | Vừa đổi ao, ao có > 5 mẫu lịch sử, lệch ≤ SA_PH_POND_D | 1 lần/lần đổi |
-| `[SA] Ao#<n> GPS lech <x>m - can check lai vi tri ao` | INFO | Vừa đổi ao, lệch > SA_PH_POND_D | 1 lần/lần đổi |
+| `[WM] No GPS - alkalinity waiting for GPS/time` | INFO | Chưa có giờ UTC (RTC) — **không còn liên quan tới GPS fix 3D** kể từ 2026-09-09 dù tên message chưa đổi (chỉ khi SA_PH_LOG=1) | Mỗi 60s |
+| `[SA] Switched to pond #<n>` (+ `(new pond)` nếu vừa tạo) | INFO | Đổi `SA_POND_IDX` hoặc lần đầu sau boot — **đã bỏ hẳn** 2 dòng "GPS OK/lech" phía sau (2026-09-09) | 1 lần/lần đổi |
 | `[SA] Ao#<n> pH sang: <x> (<N> mau)` | INFO | Slot sáng vừa đủ SA_PH_CAP_SAM mẫu | 1 lần/ngày/ao |
 | `[SA] Ao#<n> pH chieu: <x> (<N> mau)` | INFO | Slot chiều vừa đủ SA_PH_CAP_SAM mẫu | 1 lần/ngày/ao |
 | `[SA] Ao#<n> S:<x> C:<x> dPH:<x>` | INFO | Ao vừa đạt FULL — dòng 1 | 1 lần/ngày/ao |
@@ -532,10 +545,15 @@ SERIALx_BAUD     = 9     (= 9600 baud)    ← x = SA_PH_PORT   → sai: không n
 SERIALx_PROTOCOL = 0     (= None)         ←                   → sai: ArduPilot chiếm port
 SA_PH_PORT       → chỉ đọc khi boot, cần reboot nếu đổi
 SA_PH_KH cần cập nhật định kỳ bằng test kit khi độ kiềm ao thay đổi
-GPS fix 3D + giờ UTC bắt buộc để chọn ao và phân slot sáng/chiều
+Giờ UTC (RTC) bắt buộc để chọn ao và phân slot sáng/chiều — GPS fix 3D
+                         KHÔNG còn bắt buộc (bỏ 2026-09-09), chỉ ảnh hưởng tọa độ
+                         hiển thị bản đồ (morn_lat/morn_lng), không chặn lấy mẫu/tính kiềm
 Phải đang ARM để mẫu pH được tích lũy vào slot (đứng yên/disarm vẫn đọc/log PHWD nhưng không tính kiềm)
 SA_PH_MS < SA_PH_ME  và  SA_PH_AS < SA_PH_AE  (cửa sổ không rỗng)
-Tối đa 100 ao (SA_POND_IDX 1-100); dữ liệu ao lưu trên thẻ SD, còn nguyên qua reboot
+Tối đa 100 ao (SA_POND_IDX 1-100), chọn HOÀN TOÀN thủ công — không dùng
+                         GPS để xác định/kiểm tra ao dưới bất kỳ hình thức nào
+Dữ liệu ao lưu trên thẻ SD (SA_PONDS_VER=4), còn nguyên qua reboot — đổi
+                         version cấu trúc sẽ làm mất dữ liệu ao cũ (xem mục 3.3)
 ```
 
 **Ràng buộc phần cứng:** Chỉ 1 thiết bị Modbus slave trên bus (address 0x01 hardcoded)
@@ -568,7 +586,7 @@ FC config (x = SA_PH_PORT):
 |---|---|---|---|
 | Công thức alkalinity | Đơn giản: `SA_PH_KH + 16×(pH−7)` | Heuristic 3-vùng với temperature factor | Kinh nghiệm thực địa: cần bổ chỉnh nhiệt độ và đặc tính pH 7–8 |
 | Slot thời gian | Sáng 00:00–11:59, Chiều 12:00–23:59 | Cửa sổ cài được, dạng giờ thập phân (SA_PH_MS/ME/AS/AE) | Linh hoạt theo lịch đo thực tế từng trang trại, kể cả phút lẻ |
-| Chọn ao | Tự động theo khoảng cách GPS sáng↔chiều (≤300m) | **Chọn tay bằng `SA_POND_IDX`** (1-100); GPS chỉ cảnh báo lệch vị trí, không chặn | Thực địa: robot có thể chưa đủ fix GPS chính xác lúc mới đến ao; chọn tay chắc chắn hơn |
+| Chọn ao | Tự động theo khoảng cách GPS sáng↔chiều (≤300m) | **Chọn tay bằng `SA_POND_IDX`** (1-100), **hoàn toàn không dùng GPS** (bỏ luôn cảnh báo lệch vị trí, 2026-09-09) | Thực địa: robot có thể chưa đủ fix GPS chính xác lúc mới đến ao, hoặc mất fix tạm thời; chọn tay chắc chắn hơn và không phụ thuộc GPS |
 | Số lượng ao | Không giới hạn rõ ràng | Tối đa **100 ao**, mỗi ao lưu riêng pH/kiềm/ngày/dos_sp/dos_food | Đáp ứng trang trại nhiều ao, luân phiên đo trong ngày |
 | Lưu trữ ao qua reboot | Không đề cập | Lưu toàn bộ `_ponds[]` vào `/APM/SA_PONDS.bin`, load lại khi boot | Không mất lịch sử đo khi FC mất điện/reset |
 | Làm mịn pH | EMA + moving average song song | Chỉ còn **moving average** (10 mẫu) | Đơn giản hoá, EMA không mang lại lợi ích thêm cho tần suất đo 2s |

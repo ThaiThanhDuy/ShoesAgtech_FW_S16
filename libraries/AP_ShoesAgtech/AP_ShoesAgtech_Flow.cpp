@@ -258,11 +258,37 @@ void AP_ShoesAgtech::_update_flow(void) {
     }
   }
 
-  // Bắt tay an toàn lúc mới boot (mới 2026-09-08, xem
-  // _update_boot_handshake()): chưa ARM+DISARM đủ 1 lần kể từ boot thì
-  // ép bơm tắt hoàn toàn, bất kể _spray_mode/RC đang ở vị trí nào —
-  // tránh RC chưa lăn về đúng chỗ hoặc lỡ chạm nút làm bơm tự chạy.
-  if (!_system_ready) {
+  // An toàn khởi động Module 1, thay cho ARM/DISARM (mới 2026-09-09): cứ
+  // mỗi 3 GIÂY (không phải mỗi chu kỳ 10Hz), kiểm tra CẢ 2 kênh RC của
+  // bơm (SA_RC_CHAN và SA_RC_PUMP) đã về vị trí thấp/off chưa. Chưa đúng
+  // -> WARNING + hẹn kiểm tra lại sau 3s nữa; đã đúng ngay từ lần kiểm
+  // tra đầu tiên (3s sau boot) -> tự động cho chạy luôn, không cần thao
+  // tác gì thêm. _flow_ready chỉ cần đúng 1 lần, không lặp lại về sau.
+  if (!_flow_ready) {
+    if (now - _flow_check_ms >= 3000) {
+      _flow_check_ms = now;
+      uint8_t chan_idx =
+          (uint8_t)constrain_int16(_flow_params.rc_chan.get() - 1, 0, 15);
+      uint8_t pump_idx =
+          (uint8_t)constrain_int16(_flow_params.rc_pump.get() - 1, 0, 15);
+      uint16_t chan_pwm = RC_Channels::get_radio_in(chan_idx);
+      uint16_t pump_pwm = RC_Channels::get_radio_in(pump_idx);
+      // SA_RC_CHAN "thấp" = vùng mode 0 (<1300, cùng ngưỡng chọn mode ở
+      // _update_spray_mode()). SA_RC_PUMP "thấp/off" = nửa dưới dải PWM
+      // (≤1500), cùng quy ước với SA_DOS_RC (_dos_rc_seen_off, Module 3).
+      bool chan_ok = (chan_pwm > 0 && chan_pwm < 1300);
+      bool pump_ok = (pump_pwm > 0 && pump_pwm <= 1500);
+      if (chan_ok && pump_ok) {
+        _flow_ready = true;
+        gcs().send_text(MAV_SEVERITY_INFO,
+                        "SA: Pump RC ready - pump can start");
+      } else {
+        gcs().send_text(
+            MAV_SEVERITY_WARNING,
+            "SA: Move SA_RC_CHAN/SA_RC_PUMP to low/off to start pump");
+      }
+    }
+
     SRV_Channel *ch_ready =
         SRV_Channels::srv_channel((uint8_t)(_flow_params.pump_chan.get() - 1));
     if (ch_ready != nullptr) {
@@ -283,6 +309,7 @@ void AP_ShoesAgtech::_update_flow(void) {
     uint8_t rc_pump_idx =
         (uint8_t)constrain_int16(_flow_params.rc_pump.get() - 1, 0, 15);
     uint16_t rc_pwm = RC_Channels::get_radio_in(rc_pump_idx);
+
     _flow_target = 0.0f;
     _flow_ramp_val = 0.0f;
     _flow_out_of_range = false;

@@ -482,24 +482,24 @@ void AP_ShoesAgtech::_update_dosing_motor(void) {
   uint16_t rc_pwm = RC_Channels::get_radio_in(rc_idx);
   bool motor_on = (rc_pwm > 1500);
 
-  // Chặn motor tự chạy lại nếu FC vừa reboot (vd mất điện chập chờn) trong
-  // lúc switch SA_DOS_RC vẫn đang ở vị trí ON từ trước - _dos_rc_seen_off
-  // reset về false mỗi lần boot, chỉ thành true khi thấy switch thực sự
-  // ở OFF ít nhất 1 lần. Trước khi đó, ép motor_on=false dù rc_pwm>1500.
+  // An toàn khởi động Module 3, thay cho ARM/DISARM (mới 2026-09-09): cứ
+  // mỗi 3 GIÂY (không phải mỗi chu kỳ 10Hz), kiểm tra SA_DOS_RC đã về vị
+  // trí OFF (≤1500) chưa. Chưa đúng -> WARNING + hẹn kiểm tra lại sau 3s
+  // nữa; đã đúng ngay từ lần kiểm tra đầu tiên (3s sau boot) -> tự động
+  // cho chạy luôn. _dos_rc_seen_off chỉ cần đúng 1 lần, không lặp lại về
+  // sau (kể cả các lần disarm/arm sau đó trong cùng phiên nguồn).
   if (!_dos_rc_seen_off) {
-    if (rc_pwm > 0 && rc_pwm <= 1500) {
-      _dos_rc_seen_off = true;
-    } else {
-      motor_on = false;
+    if (now - _dos_rc_check_ms >= 3000) {
+      _dos_rc_check_ms = now;
+      if (rc_pwm > 0 && rc_pwm <= 1500) {
+        _dos_rc_seen_off = true;
+        gcs().send_text(MAV_SEVERITY_INFO,
+                        "SA: Feeder RC ready - feeder can start");
+      } else {
+        gcs().send_text(MAV_SEVERITY_WARNING,
+                        "SA: Move SA_DOS_RC to OFF to start feeder");
+      }
     }
-  }
-
-  // Bắt tay an toàn lúc mới boot (mới 2026-09-08, xem
-  // _update_boot_handshake()): chưa ARM+DISARM đủ 1 lần kể từ boot thì
-  // ép cả trục vít lẫn đĩa rải tắt hoàn toàn, bất kể SA_DOS_RC đang ở vị
-  // trí nào — tránh RC chưa lăn về đúng chỗ hoặc lỡ chạm nút làm motor
-  // tự chạy. Đặt SAU _dos_rc_seen_off để không tính lẫn vào cờ đó.
-  if (!_system_ready) {
     motor_on = false;
   }
 
@@ -527,11 +527,12 @@ void AP_ShoesAgtech::_update_dosing_motor(void) {
   // motor_on=false, chưa đủ delay -> đĩa VẪN quay (đang chờ tắt), trục vít tắt
   // motor_on=false, đã đủ delay   -> đĩa tắt, trục vít tắt
   const bool auger_allowed = motor_on && (elapsed_ms >= disc_delay_ms);
-  // _system_ready=false ép hẳn _disc_running=false, KHÔNG dùng công thức
-  // grace-period bên dưới — nếu không, ngay lúc mới boot _dos_seq_ms vẫn
-  // = 0 nên elapsed_ms nhỏ có thể bị hiểu nhầm thành "vừa mới tắt, còn
-  // trong thời gian chờ", khiến đĩa quay vài giây dù chưa qua bắt tay.
-  _disc_running = _system_ready && disc_enabled &&
+  // _dos_rc_seen_off=false ép hẳn _disc_running=false, KHÔNG dùng công
+  // thức grace-period bên dưới — nếu không, ngay lúc mới boot _dos_seq_ms
+  // vẫn = 0 nên elapsed_ms nhỏ có thể bị hiểu nhầm thành "vừa mới tắt,
+  // còn trong thời gian chờ", khiến đĩa quay vài giây dù chưa qua kiểm
+  // tra RC (đổi từ _system_ready sang _dos_rc_seen_off, 2026-09-09).
+  _disc_running = _dos_rc_seen_off && disc_enabled &&
                   (motor_on || (elapsed_ms < disc_delay_ms));
 
   float dos_rate_gpm = 0.0f; // tốc độ cấp tức thời (g/phút) — dùng để in log

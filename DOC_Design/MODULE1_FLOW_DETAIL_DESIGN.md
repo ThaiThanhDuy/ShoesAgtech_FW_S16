@@ -33,6 +33,14 @@ update() [10 Hz — ArduPilot scheduler]
     │         đọc _pulse_count, tính EMA → _flow_rate_filtered
     │         cập nhật moving-average buffer → _flow_rate_avg
     │
+    ├──► [An toàn khởi động — thay ARM/DISARM, mới 2026-09-09]
+    │         chưa _flow_ready → mỗi 3 GIÂY kiểm tra CẢ 2 kênh SA_RC_CHAN
+    │         (<1300) VÀ SA_RC_PUMP (≤1500) cùng lúc; chưa đạt → WARNING
+    │         "Move SA_RC_CHAN/SA_RC_PUMP to low/off...", ép bơm về MIN,
+    │         return NGAY (bỏ qua toàn bộ switch bên dưới, cả 3 mode);
+    │         đạt cả 2 → _flow_ready=true (chỉ 1 lần), gửi INFO "Pump RC
+    │         ready", từ đây switch chạy bình thường không kiểm tra lại nữa
+    │
     ├──► _update_spray_mode()
     │         └──► cập nhật _spray_mode (0/1/2)
     │
@@ -121,28 +129,39 @@ update() [10 Hz — ArduPilot scheduler]
 - **Đầu vào:** không có
 - **Xử lý:**
   1. Nếu `!is_enabled()` → zero flow, return
-  2. Gọi `_update_boot_handshake()` (mới 2026-09-08 — xem mục riêng bên dưới)
-  3. Gọi `_check_pump_config()`
-  4. Nếu SA_SIM=1 → `_run_simulation()`, ngược lại → `_ph_update()`
-  5. Gọi `_update_dosing_motor()`
-  6. Gọi `_update_flow()` — chứa toàn bộ phần còn lại (tính flow rate, PID,
-     switch theo `_spray_mode`, ARM/tank-empty detection, log) — đã tách ra
-     `AP_ShoesAgtech_Flow.cpp` khi chia module (xem mục 7)
+  2. Gọi `_check_pump_config()`
+  3. Nếu SA_SIM=1 → `_run_simulation()`, ngược lại → `_ph_update()`
+  4. Gọi `_update_dosing_motor()`
+  5. Gọi `_update_flow()` — chứa toàn bộ phần còn lại (gate an toàn khởi
+     động, tính flow rate, PID, switch theo `_spray_mode`, ARM/tank-empty
+     detection, log) — đã tách ra `AP_ShoesAgtech_Flow.cpp` khi chia module
+     (xem mục 7)
 - **Đầu ra / Return:** `void` — side effects: `_flow_rate_filtered`, `_flow_rate_avg`, `_pump_pwm`, `_flow_target`
 
 ---
 
-**`_update_boot_handshake()`** — mới, 2026-09-08
-- **File:** `AP_ShoesAgtech.cpp : 195`
-- **Được gọi bởi:** `update()`, ngay sau kiểm tra `is_enabled()`, TRƯỚC `_check_pump_config()`
-- **Đầu vào:** không có
+> **⚠️ Đổi cơ chế an toàn khởi động (2026-09-09):** cơ chế **ARM rồi
+> DISARM 1 lần** (`_update_boot_handshake()`, `_system_ready`,
+> `is_system_ready()`, thêm ngày 2026-09-08) đã bị **gỡ bỏ hoàn toàn** —
+> lý do: ARM/DISARM chỉ là tín hiệu GIÁN TIẾP (xe có thể ARM/DISARM vì lý
+> do không liên quan gì tới vị trí RC bơm/cho ăn), không thực sự đảm bảo
+> đúng thứ cần đảm bảo. Thay bằng cơ chế **kiểm tra thẳng vị trí RC** —
+> xem mô tả gate mới ngay đầu `_update_flow()` bên dưới. Không còn hàm
+> `_update_boot_handshake()`, không còn `_system_ready`/`_seen_armed_once`/
+> `is_system_ready()` trong code.
+
+**Gate an toàn khởi động Module 1** (đầu `_update_flow()`, thay cho ARM/DISARM) — mới, 2026-09-09
+- **File:** `AP_ShoesAgtech_Flow.cpp` (đầu hàm `_update_flow()`, ngay trước `switch(_spray_mode)`)
+- **Được gọi bởi:** `_update_flow()` mỗi chu kỳ 10Hz, nhưng bản thân điều kiện chỉ thực sự kiểm tra lại mỗi 3 giây
+- **Đầu vào:** không có (đọc `SA_RC_CHAN`, `SA_RC_PUMP` trực tiếp từ RC)
 - **Xử lý:**
-  1. Nếu `_system_ready` đã `true` → return ngay (chỉ chạy logic 1 lần duy nhất mỗi phiên boot)
-  2. Đọc `hal.util->get_soft_armed()`
-  3. Đang ARM → gán `_seen_armed_once = true`
-  4. Đang DISARM **và** đã từng thấy ARM (`_seen_armed_once == true`) → gán `_system_ready = true`, gửi STATUSTEXT INFO `"SA: System ready - pump/feeder can now run"`
-- **Đầu ra / Return:** `void` — cập nhật `_seen_armed_once`, `_system_ready`
-- **Ghi chú:** Bắt buộc người vận hành phải **ARM rồi DISARM đúng 1 lần** kể từ lúc boot/nạp param thì `_system_ready` mới bật — tránh trường hợp RC dial/nút bấm chưa về đúng vị trí ngay sau khi cấp nguồn khiến bơm (Module 1) hoặc motor cho ăn (Module 3) tự chạy ngoài ý muốn. Chỉ cần đúng 1 lần trong cả phiên làm việc (không lặp lại ở các lần arm/disarm sau đó). Getter công khai: `is_system_ready()`. Trong lúc `_system_ready == false`: `_update_flow()` (Module 1) ép PWM bơm về SERVO_MIN và return sớm trước `switch(_spray_mode)` — xem mục 3.2; `_update_dosing_motor()` (Module 3) ép `motor_on = false` — xem MODULE3_DOS_DETAIL_DESIGN.md.
+  1. Nếu `_flow_ready` đã `true` → bỏ qua toàn bộ gate này, chạy `switch(_spray_mode)` bình thường (không kiểm tra lại nữa trong suốt phiên nguồn)
+  2. Ngược lại, nếu `now - _flow_check_ms < 3000` → chưa tới lượt kiểm tra tiếp theo, giữ nguyên trạng thái ép an toàn (bước 5) và return
+  3. Đủ 3 giây → `_flow_check_ms = now`, đọc PWM của **CẢ 2 kênh**: `SA_RC_CHAN` (`chan_ok = pwm>0 && pwm<1300` — vùng mode 0) và `SA_RC_PUMP` (`pump_ok = pwm>0 && pwm<=1500` — nửa dưới dải PWM, cùng quy ước `SA_DOS_RC` của Module 3)
+  4. `chan_ok && pump_ok` → `_flow_ready = true`, gửi STATUSTEXT INFO `"SA: Pump RC ready - pump can start"`; ngược lại → gửi STATUSTEXT WARNING `"SA: Move SA_RC_CHAN/SA_RC_PUMP to low/off to start pump"`
+  5. Trong lúc `_flow_ready == false` (bất kể vừa mới hết hạn 3s hay đang chờ): ép PWM bơm về `SERVOx_MIN`, zero `_flow_target`/`_flow_ramp_val`/`_pid_integral`/`_pid_output_lpf`, `_flow_out_of_range=false`, rồi **return** — bỏ qua toàn bộ `switch(_spray_mode)` (cả 3 nấc)
+- **Đầu ra / Return:** `void` — cập nhật `_flow_ready`, `_flow_check_ms`
+- **Ghi chú:** Nếu bật nguồn mà `SA_RC_CHAN`/`SA_RC_PUMP` **đã sẵn ở vị trí thấp** ngay từ đầu → lần kiểm tra đầu tiên (đúng 3 giây sau boot) sẽ tự động đạt điều kiện, hệ thống tự khởi động luôn, KHÔNG cần thao tác gì thêm (không cần ARM/DISARM). Nếu chưa đúng → WARNING lặp lại mỗi 3 giây cho tới khi gạt đúng. Kiểm tra **CẢ 2 kênh cùng lúc** (không phải riêng lẻ) vì `SA_RC_CHAN` quyết định mode nào đang chạy, còn `SA_RC_PUMP` là kênh truyền thẳng PWM ra bơm ở mode 0 — chỉ 1 trong 2 kênh an toàn thì kênh còn lại vẫn có thể gây nguy hiểm. Chỉ cần đạt 1 lần, không kiểm tra lại về sau (kể cả các lần arm/disarm trong cùng phiên nguồn).
 
 ---
 
@@ -647,7 +666,8 @@ Ví dụ:
 |---|---|---|---|
 | `ShoesAgtech: IRQ attach failed` | CRITICAL | GPIO attach thất bại | 1 lần init |
 | `ShoesAgtech: Flow sensor ready` | INFO | GPIO attach thành công | 1 lần init |
-| `SA: System ready - pump/feeder can now run` | INFO | Vừa DISARM sau khi đã từng ARM ít nhất 1 lần kể từ boot (`_update_boot_handshake()`, mới 2026-09-08) | 1 lần duy nhất mỗi phiên boot |
+| `SA: Pump RC ready - pump can start` | INFO | **Gate an toàn khởi động (mới 2026-09-09, thay ARM/DISARM):** `SA_RC_CHAN` VÀ `SA_RC_PUMP` cùng đã về vị trí thấp/off | 1 lần duy nhất mỗi phiên boot |
+| `SA: Move SA_RC_CHAN/SA_RC_PUMP to low/off to start pump` | WARNING | Cùng gate trên: 1 trong 2 (hoặc cả 2) kênh chưa về vị trí thấp/off | Mỗi 3s, lặp lại cho tới khi đạt |
 | `SA FM1: no mission - pump stopped` | WARNING | FLOW_MODE=1, dist ≤ 1m, đang chạy | **1 lần/phiên ARM** (cờ `_no_mission_warned`, đổi từ mỗi 5s, 2026-09-04) |
 
 > **⚠️ 2 dòng WARNING đã gỡ bỏ (2026-09-04):** `SA FM1: q1=...L/min < 0.8 (pump range) - shorten mission or increase speed` và `... > 1.3 (pump range) - lengthen mission or reduce speed` — không còn in ra nữa. Thay vào đó, log định kỳ `[FLOW]` (mục 4.3) tự thêm hậu tố `" - out range"` vào cuối dòng khi q1 ngoài dải, đồng thời vẫn hiện đúng q1 thật thay vì `Q: 0.00` như trước.
@@ -669,10 +689,13 @@ SA_FLOW_MODE=1 yêu cầu: SA_TANK_VOL > 0 + mission đã upload + speed ≥ 0.1
                          (0.8/1.3 = dải lưu lượng THẬT bơm đạt được, hardcode theo phần cứng, 2026-08-20, chỉnh lại 2026-09-04)
                          thiếu 1 trong các điều kiện trên → flow_target = 0 (bơm dừng)
 Tank-empty: chỉ cảnh báo, bơm vẫn tiếp tục — người lái tự quyết định
-Bắt tay an toàn lúc boot (mới 2026-09-08): phải ARM rồi DISARM đúng 1 lần
-                         kể từ lúc cấp nguồn/nạp param thì bơm mới được phép chạy —
-                         xem _update_boot_handshake() ở mục 1.2. DÙNG CHUNG với
-                         Module 3 (is_system_ready()), chỉ cần 1 lần cho cả 2 module.
+An toàn khởi động (thay ARM/DISARM, 2026-09-09): SA_RC_CHAN (<1300) VÀ
+                         SA_RC_PUMP (≤1500) phải cùng ở vị trí thấp/off — kiểm tra
+                         mỗi 3 giây kể từ boot cho tới khi đạt (_flow_ready). Chưa
+                         đạt → WARNING mỗi 3s + bơm ép SERVOx_MIN, CHẶN CẢ 3 nấc
+                         (0/1/2), không riêng mode 0. Đã sẵn đúng vị trí lúc bật
+                         nguồn → tự khởi động sau đúng 3 giây, không cần thao tác
+                         gì. Chỉ cần đạt 1 lần/phiên nguồn — không lặp lại về sau.
 ```
 
 **Ràng buộc phần cứng:** GPIO pin phải 3.3V tolerant hoặc dùng voltage divider (YF-S402B output = 5V)
