@@ -489,21 +489,13 @@ if (!hal.util->get_soft_armed()) {
     _tank_empty_ms       = 0
     _no_mission_warned   = false
     _flow_ramp_val       = 0.0    // reset ramp — lần ARM sau lại bắt đầu từ 0
-
-    if (SA_SIM <= 0) {            // 2026-09-07 — CHỈ reset khi dùng cảm biến thật
-        // + reset toàn bộ trạng thái đọc cảm biến lưu lượng (xem mục 8)
-    }
 }
+// KHÔNG còn ép _flow_rate_filtered/_flow_rate_avg về 0 khi disarm nữa —
+// xem ghi chú bên dưới (đổi 2026-09-17).
 ```
-**⚠️ Không reset khi SA_SIM=1 (2026-09-07):** trước đây khối reset lưu
-lượng (pulse/`_flow_rate_filtered`/`_flow_rate_avg`/buffer) chạy vô điều
-kiện mỗi khi disarm — kể cả đang ở `SA_SIM=1`. Vì bench-test mô phỏng
-thường KHÔNG cần ARM, `_run_simulation()` vừa ghi dữ liệu giả vào
-`_flow_rate_filtered` đầu mỗi chu kỳ thì khối reset này lại ép về 0 ngay
-sau đó trong cùng chu kỳ → GCS/app luôn thấy `0.00 L/min` dù đang bật
-SIM. Lý do reset ban đầu (dòng chảy dư do trọng lực tạo xung ảo lúc
-disarm) chỉ đúng với cảm biến thật, không áp dụng cho dữ liệu giả lập —
-nên từ nay chỉ reset khối này khi `SA_SIM<=0`.
+
+**⚠️ Lịch sử — đã bỏ hẳn việc ép lưu lượng về 0 khi disarm (2026-09-17):**
+Trước đây (từ 2026-09-07) có thêm khối `if (SA_SIM<=0) { ép _flow_rate_filtered/_flow_rate_avg/buffer về 0 }` bên trong nhánh disarm, với lý do: dòng chảy dư do trọng lực trong lúc disarm có thể tạo xung ảo, nếu không reset `_last_pulse_snapshot` thì lần ARM kế tiếp sẽ cộng dồn hết số xung tích lũy trong lúc disarm thành 1 cú lưu lượng ảo tăng vọt. Rà lại thấy lý do này **không đúng với kiến trúc thật của hàm** — khối "TÍNH LƯU LƯỢNG" ở đầu `_update_flow()` chạy **mỗi 100ms, không phân biệt arm/disarm**, và `_last_pulse_snapshot` cũng được cập nhật liên tục mỗi 100ms đó (xem mục 1.2, bảng call-flow) — nên không hề có chuyện xung dồn cục qua cả thời gian disarm rồi bung ra 1 cục lúc ARM; cửa sổ tính luôn chỉ 100ms bất kể trạng thái ARM. Hệ quả phụ không mong muốn của khối ép-về-0 này: **muốn xem lưu lượng thật phải ARM trước**, dù cảm biến vẫn đang đếm xung bình thường lúc disarm. Đã bỏ hẳn khối này — lưu lượng giờ hiển thị đúng số đo thật liên tục, không cần ARM. Các trạng thái khác (mission cache, tank-empty, ramp, cảnh báo no-mission) **vẫn giữ nguyên reset khi disarm như cũ**, không đổi.
 
 **Bật bơm thật chỉ sau khi đạt đủ % tốc độ ĐẶT — `_speed_min_start()`
 (2026-09-04, thay cho gate WP1 cũ cùng ngày):**

@@ -226,11 +226,8 @@ void AP_ShoesAgtech::_update_flow(void) {
   bool now_armed = hal.util->get_soft_armed();
 
   // Khi disarm: reset cảnh báo + cache mission + bộ phát hiện hết thùng +
-  // toàn bộ trạng thái đọc lưu lượng (tránh "treo" giá trị cũ từ phiên
-  // trước sang phiên chạy mới — vd dòng chảy dư do trọng lực trong lúc
-  // disarm vẫn có thể tạo xung, nếu không reset _last_pulse_snapshot thì
-  // lần arm kế tiếp sẽ cộng dồn hết số xung tích luỹ trong lúc disarm
-  // thành 1 cú lưu lượng ảo tăng vọt ở chu kỳ đầu tiên).
+  // ramp. KHÔNG còn ép lưu lượng đọc được về 0 nữa (đổi 2026-09-17) —
+  // xem ghi chú bên dưới.
   if (!now_armed) {
     _mission_ncmds = 0;
     _mission_dist_m = 0.0f;
@@ -238,25 +235,18 @@ void AP_ShoesAgtech::_update_flow(void) {
     _tank_empty_ms = 0;
     _no_mission_warned = false;
     _flow_ramp_val = 0.0f;
-
-    // Chỉ reset trạng thái đọc CẢM BIẾN THẬT (pulse/lưu lượng) khi KHÔNG
-    // ở SA_SIM=1 (2026-09-07) — lý do reset (dòng chảy dư do trọng lực
-    // tạo xung ảo lúc disarm) chỉ xảy ra với cảm biến thật; ở SIM,
-    // _run_simulation() đã ghi thẳng dữ liệu giả vào _flow_rate_filtered
-    // ngay đầu update() mỗi chu kỳ, nếu vẫn ép về 0 ở đây thì SA_DATA/GCS
-    // luôn thấy 0.00 dù đang mô phỏng và không cần ARM để xem thử.
-    if (_simulation.get() <= 0) {
-      _last_pulse_snapshot = _pulse_count;
-      _flow_rate_filtered = 0.0f;
-      _flow_rate_avg = 0.0f;
-      _buffer_sum = 0.0f;
-      _buffer_index = 0;
-      _samples_count = 0;
-      for (uint8_t i = 0; i < WINDOW_SIZE; i++) {
-        _sample_buffer[i] = 0.0f;
-      }
-    }
   }
+
+  // ⚠️ Đã bỏ khối ép _flow_rate_filtered/_flow_rate_avg về 0 khi disarm
+  // (2026-09-17, yêu cầu: "khi disarm thì lưu lượng vẫn đọc như bình
+  // thường"). Lý do ban đầu (dòng chảy dư do trọng lực tạo xung ảo lúc
+  // disarm, sợ cộng dồn thành 1 cú tăng vọt lúc ARM) thực ra KHÔNG áp
+  // dụng được với cách tính hiện tại: block "TÍNH LƯU LƯỢNG" ở đầu hàm
+  // này chạy MỖI 100ms, KHÔNG PHÂN BIỆT arm/disarm, và _last_pulse_snapshot
+  // cũng được cập nhật liên tục mỗi 100ms đó — nên không có chuyện xung
+  // tích lũy dồn cục trong lúc disarm rồi bung ra 1 cục lúc ARM. Do đó bỏ
+  // hẳn phần ép về 0 là an toàn — lưu lượng giờ phản ánh đúng số đo thật
+  // liên tục, kể cả lúc disarm.
 
   // An toàn khởi động Module 1, thay cho ARM/DISARM (mới 2026-09-09): cứ
   // mỗi 3 GIÂY (không phải mỗi chu kỳ 10Hz), kiểm tra CẢ 2 kênh RC của
