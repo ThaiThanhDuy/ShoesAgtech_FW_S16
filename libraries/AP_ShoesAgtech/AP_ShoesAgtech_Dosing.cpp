@@ -81,142 +81,19 @@ const AP_Param::GroupInfo AP_ShoesAgtech_DosingParams::var_info[] = {
 
     // @Param: DOS_FOOD
     // @DisplayName: Active food type selector (1-7) for the active pond
-    // @Description: Selects SA_DOS_Fx (fill factor) and SA_DOS_Dx (bulk
-    //   density) used with SA_DOS_V to compute the PWM offset. Each pond
-    //   keeps its own value: switching ponds (POND_IDX) loads that pond's
-    //   stored food type here; editing this saves back to the active pond.
+    // @Description: Selects which SA_DOS_Ax/Bx pair is used to compute the
+    //   PWM offset. Each pond keeps its own value: switching ponds
+    //   (POND_IDX) loads that pond's stored food type here; editing this
+    //   saves back to the active pond.
     // @Range: 1 7
     // @User: Standard
     AP_GROUPINFO("DOS_FOOD", 8, AP_ShoesAgtech_DosingParams, dos_food, 1),
 
-    // @Param: DOS_V
-    // @DisplayName: Auger volumetric constant (shared, mL/50us at 100% fill)
-    // @Description: Theoretical volumetric output of the auger screw per 50us
-    //   PWM offset at full (100%) fill — pure geometry (screw diameter/pitch)
-    //   plus the PWM-offset-to-speed mapping. Shared across ALL food types:
-    //   it depends only on the physical screw, not on what is flowing
-    //   through it. Change this ONLY when the physical auger is replaced
-    //   with a different size. Effective volumetric rate used in the dosing
-    //   formula = SA_DOS_V x SA_DOS_Fx (fill factor of the active food type).
-    // @Range: 0.1 10000
-    // @User: Standard
-    AP_GROUPINFO("DOS_V", 9, AP_ShoesAgtech_DosingParams, dos_v, 100.0f),
-
-    // Fill-factor calibration. Effective volumetric rate used in the dosing
-    // formula = SA_DOS_V x SA_DOS_Fx. Default 1.0 keeps a freshly-flashed/
-    // uncalibrated unit numerically identical to the old single-number
-    // SA_DOS_Fx default (100.0 = SA_DOS_V default x 1.0).
-
-    // @Param: DOS_F1
-    // @DisplayName: Auger fill factor for food type 1 (relative to SA_DOS_V)
-    // @Description: Packing/fill-factor coefficient for food type 1, relative
-    //   to the auger's physical volumetric constant SA_DOS_V (effective rate
-    //   = SA_DOS_V x SA_DOS_F1). Typically 0.3-1.0: smaller/rounder grains
-    //   pack tighter (closer to 1.0), larger/irregular grains leave more air
-    //   gap (lower). Calibrate by running the motor, weighing actual output,
-    //   and solving SA_DOS_F1 = measured_effective_rate / SA_DOS_V.
-    // @Range: 0.05 2.0
-    // @Increment: 0.01
-    // @User: Standard
-    AP_GROUPINFO("DOS_F1", 10, AP_ShoesAgtech_DosingParams, dos_fr[0], 1.0f),
-
-    // @Param: DOS_F2
-    // @DisplayName: Auger fill factor for food type 2 (relative to SA_DOS_V)
-    // @Range: 0.05 2.0
-    // @Increment: 0.01
-    // @User: Standard
-    AP_GROUPINFO("DOS_F2", 11, AP_ShoesAgtech_DosingParams, dos_fr[1], 1.0f),
-
-    // @Param: DOS_F3
-    // @DisplayName: Auger fill factor for food type 3 (relative to SA_DOS_V)
-    // @Range: 0.05 2.0
-    // @Increment: 0.01
-    // @User: Standard
-    AP_GROUPINFO("DOS_F3", 12, AP_ShoesAgtech_DosingParams, dos_fr[2], 1.0f),
-
-    // @Param: DOS_F4
-    // @DisplayName: Auger fill factor for food type 4 (relative to SA_DOS_V)
-    // @Range: 0.05 2.0
-    // @Increment: 0.01
-    // @User: Standard
-    AP_GROUPINFO("DOS_F4", 13, AP_ShoesAgtech_DosingParams, dos_fr[3], 1.0f),
-
-    // @Param: DOS_F5
-    // @DisplayName: Auger fill factor for food type 5 (relative to SA_DOS_V)
-    // @Range: 0.05 2.0
-    // @Increment: 0.01
-    // @User: Standard
-    AP_GROUPINFO("DOS_F5", 14, AP_ShoesAgtech_DosingParams, dos_fr[4], 1.0f),
-
-    // @Param: DOS_F6
-    // @DisplayName: Auger fill factor for food type 6 (relative to SA_DOS_V)
-    // @Range: 0.05 2.0
-    // @Increment: 0.01
-    // @User: Standard
-    AP_GROUPINFO("DOS_F6", 15, AP_ShoesAgtech_DosingParams, dos_fr[5], 1.0f),
-
-    // @Param: DOS_F7
-    // @DisplayName: Auger fill factor for food type 7 (relative to SA_DOS_V)
-    // @Range: 0.05 2.0
-    // @Increment: 0.01
-    // @User: Standard
-    AP_GROUPINFO("DOS_F7", 16, AP_ShoesAgtech_DosingParams, dos_fr[6], 1.0f),
-
-    // Bulk density per food type.
-    // offset(us) = SP(g) * 50 / (SA_DOS_V(mL/50us) x fill_factor(-) x
-    // density(g/mL)). Default 1.0 g/mL is backward-compatible with the old
-    // g/50us formula.
-
-    // @Param: DOS_D1
-    // @DisplayName: Bulk density food type 1 (g/mL)
-    // @Description: Bulk density of food type 1. Measure: weigh 1L of food,
-    //   divide by 1000 to get g/mL.
-    // @Range: 0.1 5.0
-    // @Increment: 0.01
-    // @User: Standard
-    AP_GROUPINFO("DOS_D1", 17, AP_ShoesAgtech_DosingParams, dos_dr[0], 1.0f),
-
-    // @Param: DOS_D2
-    // @DisplayName: Bulk density food type 2 (g/mL)
-    // @Range: 0.1 5.0
-    // @Increment: 0.01
-    // @User: Standard
-    AP_GROUPINFO("DOS_D2", 18, AP_ShoesAgtech_DosingParams, dos_dr[1], 1.0f),
-
-    // @Param: DOS_D3
-    // @DisplayName: Bulk density food type 3 (g/mL)
-    // @Range: 0.1 5.0
-    // @Increment: 0.01
-    // @User: Standard
-    AP_GROUPINFO("DOS_D3", 19, AP_ShoesAgtech_DosingParams, dos_dr[2], 1.0f),
-
-    // @Param: DOS_D4
-    // @DisplayName: Bulk density food type 4 (g/mL)
-    // @Range: 0.1 5.0
-    // @Increment: 0.01
-    // @User: Standard
-    AP_GROUPINFO("DOS_D4", 20, AP_ShoesAgtech_DosingParams, dos_dr[3], 1.0f),
-
-    // @Param: DOS_D5
-    // @DisplayName: Bulk density food type 5 (g/mL)
-    // @Range: 0.1 5.0
-    // @Increment: 0.01
-    // @User: Standard
-    AP_GROUPINFO("DOS_D5", 21, AP_ShoesAgtech_DosingParams, dos_dr[4], 1.0f),
-
-    // @Param: DOS_D6
-    // @DisplayName: Bulk density food type 6 (g/mL)
-    // @Range: 0.1 5.0
-    // @Increment: 0.01
-    // @User: Standard
-    AP_GROUPINFO("DOS_D6", 22, AP_ShoesAgtech_DosingParams, dos_dr[5], 1.0f),
-
-    // @Param: DOS_D7
-    // @DisplayName: Bulk density food type 7 (g/mL)
-    // @Range: 0.1 5.0
-    // @Increment: 0.01
-    // @User: Standard
-    AP_GROUPINFO("DOS_D7", 23, AP_ShoesAgtech_DosingParams, dos_dr[6], 1.0f),
+    // Slot 9-23 (SA_DOS_V, SA_DOS_F1-7, SA_DOS_D1-7) đã gỡ bỏ 2026-10-06 —
+    // bỏ hẳn công thức gián tiếp V x Fx x Dx, thay bằng hệ số góc/chặn đo
+    // trực tiếp SA_DOS_A1-7/B1-7 (xem bên dưới). Slot bỏ trống vĩnh viễn,
+    // KHÔNG tái sử dụng (tránh nhầm giá trị cũ còn sót trong EEPROM của
+    // máy đã lên đời).
 
     // ---- Đĩa rải ly tâm (ESC riêng, quay liên tục 1 chiều) — mới
     // 2026-09-08. Slot 24-26 — còn thừa rất nhiều chỗ trống (bảng này
@@ -252,6 +129,116 @@ const AP_Param::GroupInfo AP_ShoesAgtech_DosingParams::var_info[] = {
     // @Units: s
     // @User: Standard
     AP_GROUPINFO("DISC_DLY", 26, AP_ShoesAgtech_DosingParams, disc_delay, 2.0f),
+
+    // ---- Hiệu chuẩn trực tiếp bằng cân thực tế (hồi quy tuyến tính
+    // Q = a*PWM + b, RIÊNG theo loại thức ăn) — mới 2026-10-05, DUY NHẤT
+    // công thức dùng (bỏ hẳn công thức cũ V x Fx x Dx, 2026-10-06). Mặc
+    // định SA_DOS_Ax=0 (chưa hiệu chuẩn) -> motor DỪNG AN TOÀN (1500) cho
+    // loại đó, KHÔNG còn fallback nào khác -> bắt buộc hiệu chuẩn trước
+    // khi dùng. Xem _dos_rate_to_pwm().
+
+    // @Param: DOS_A1
+    // @DisplayName: Direct-calibration slope for food type 1 (g/min per us)
+    // @Description: Hệ số góc 'a' từ hồi quy tuyến tính Q=a*PWM+b, đo bằng
+    //   cách chạy motor ở nhiều mức PWM cố định, cân khối lượng ra trong 1
+    //   phút ở mỗi mức, rồi hồi quy tuyến tính (vd Excel/Google Sheets
+    //   SLOPE()). BẮT BUỘC phải khác 0 thì loại thức ăn này mới chạy được
+    //   — để =0 (mặc định) thì motor sẽ dừng an toàn, không cấp ăn.
+    // @Range: -50 50
+    // @User: Standard
+    AP_GROUPINFO("DOS_A1", 27, AP_ShoesAgtech_DosingParams, dos_ar[0], 0.0f),
+
+    // @Param: DOS_A2
+    // @DisplayName: Direct-calibration slope for food type 2 (g/min per us)
+    // @Range: -50 50
+    // @User: Standard
+    AP_GROUPINFO("DOS_A2", 28, AP_ShoesAgtech_DosingParams, dos_ar[1], 0.0f),
+
+    // @Param: DOS_A3
+    // @DisplayName: Direct-calibration slope for food type 3 (g/min per us)
+    // @Range: -50 50
+    // @User: Standard
+    AP_GROUPINFO("DOS_A3", 29, AP_ShoesAgtech_DosingParams, dos_ar[2], 0.0f),
+
+    // @Param: DOS_A4
+    // @DisplayName: Direct-calibration slope for food type 4 (g/min per us)
+    // @Range: -50 50
+    // @User: Standard
+    AP_GROUPINFO("DOS_A4", 30, AP_ShoesAgtech_DosingParams, dos_ar[3], 0.0f),
+
+    // @Param: DOS_A5
+    // @DisplayName: Direct-calibration slope for food type 5 (g/min per us)
+    // @Range: -50 50
+    // @User: Standard
+    AP_GROUPINFO("DOS_A5", 31, AP_ShoesAgtech_DosingParams, dos_ar[4], 0.0f),
+
+    // @Param: DOS_A6
+    // @DisplayName: Direct-calibration slope for food type 6 (g/min per us)
+    // @Range: -50 50
+    // @User: Standard
+    AP_GROUPINFO("DOS_A6", 32, AP_ShoesAgtech_DosingParams, dos_ar[5], 0.0f),
+
+    // @Param: DOS_A7
+    // @DisplayName: Direct-calibration slope for food type 7 (g/min per us)
+    // @Range: -50 50
+    // @User: Standard
+    AP_GROUPINFO("DOS_A7", 33, AP_ShoesAgtech_DosingParams, dos_ar[6], 0.0f),
+
+    // @Param: DOS_B1
+    // @DisplayName: Direct-calibration intercept for food type 1 (g/min)
+    // @Description: Hệ số chặn 'b' từ cùng hồi quy tuyến tính với SA_DOS_A1
+    //   (vd Excel/Google Sheets INTERCEPT()). Chỉ có ý nghĩa khi SA_DOS_A1
+    //   != 0 — công thức: pwm = (rate_gpm - SA_DOS_B1) / SA_DOS_A1, rồi lấy
+    //   đối xứng qua 1500 nếu SA_DOS_REV=0.
+    // @Range: -5000 5000
+    // @User: Standard
+    AP_GROUPINFO("DOS_B1", 34, AP_ShoesAgtech_DosingParams, dos_br[0], 0.0f),
+
+    // @Param: DOS_B2
+    // @DisplayName: Direct-calibration intercept for food type 2 (g/min)
+    // @Range: -5000 5000
+    // @User: Standard
+    AP_GROUPINFO("DOS_B2", 35, AP_ShoesAgtech_DosingParams, dos_br[1], 0.0f),
+
+    // @Param: DOS_B3
+    // @DisplayName: Direct-calibration intercept for food type 3 (g/min)
+    // @Range: -5000 5000
+    // @User: Standard
+    AP_GROUPINFO("DOS_B3", 36, AP_ShoesAgtech_DosingParams, dos_br[2], 0.0f),
+
+    // @Param: DOS_B4
+    // @DisplayName: Direct-calibration intercept for food type 4 (g/min)
+    // @Range: -5000 5000
+    // @User: Standard
+    AP_GROUPINFO("DOS_B4", 37, AP_ShoesAgtech_DosingParams, dos_br[3], 0.0f),
+
+    // @Param: DOS_B5
+    // @DisplayName: Direct-calibration intercept for food type 5 (g/min)
+    // @Range: -5000 5000
+    // @User: Standard
+    AP_GROUPINFO("DOS_B5", 38, AP_ShoesAgtech_DosingParams, dos_br[4], 0.0f),
+
+    // @Param: DOS_B6
+    // @DisplayName: Direct-calibration intercept for food type 6 (g/min)
+    // @Range: -5000 5000
+    // @User: Standard
+    AP_GROUPINFO("DOS_B6", 39, AP_ShoesAgtech_DosingParams, dos_br[5], 0.0f),
+
+    // @Param: DOS_B7
+    // @DisplayName: Direct-calibration intercept for food type 7 (g/min)
+    // @Range: -5000 5000
+    // @User: Standard
+    AP_GROUPINFO("DOS_B7", 40, AP_ShoesAgtech_DosingParams, dos_br[6], 0.0f),
+
+    // @Param: DISC_REV
+    // @DisplayName: Spreader disc direction
+    // @Description: Đĩa rải dừng ở TRIM=1500 (0%, đổi 2026-10-06 — trước
+    //   đây 0%=MIN). 0=thuận: 100% → MAX (2200). 1=ngược: 100% → MIN
+    //   (800). Đổi chiều quay thật sự cần đảo dây động cơ; tham số này chỉ
+    //   đổi chiều PWM để khớp đúng hướng quay đã đấu.
+    // @Values: 0:Normal,1:Reversed
+    // @User: Standard
+    AP_GROUPINFO("DISC_REV", 41, AP_ShoesAgtech_DosingParams, disc_rev, 0),
 
     AP_GROUPEND};
 
@@ -343,10 +330,12 @@ void AP_ShoesAgtech::_check_dosing_config(void) {
 
 // =============================================================
 // KIỂM TRA CẤU HÌNH KÊNH ĐĨA RẢI LY TÂM — mới 2026-09-08
-// Giống mẫu _check_dosing_config() ở trên (trục vít), nhưng KHÔNG yêu
-// cầu TRIM (đĩa chỉ quay 1 chiều liên tục, không có điểm giữa cần canh
-// như trục vít 360° đảo chiều). Yêu cầu: FUNCTION=0(None), MIN=1000,
-// MAX=2200. Bỏ qua hoàn toàn nếu SA_DISC_CHAN=0 (tính năng đang tắt).
+// Đổi 2026-10-06: KHÔNG kiểm tra TRIM nữa (bỏ lại, sau khi vừa thêm) —
+// chỉ bắt buộc FUNCTION=0(None), MIN=800, MAX=2200. Công thức PWM
+// (_update_dosing_motor()) vẫn đọc thẳng TRIM thật đang cấu hình trên
+// servo làm điểm 0% — không ép phải đúng 1500, chỉ không còn chặn/cảnh
+// báo nếu khác 1500. Bỏ qua hoàn toàn nếu SA_DISC_CHAN=0 (tính năng
+// đang tắt).
 // =============================================================
 void AP_ShoesAgtech::_check_disc_config(void) {
   if (_dos_params.disc_chan.get() <= 0) {
@@ -363,7 +352,7 @@ void AP_ShoesAgtech::_check_disc_config(void) {
 
   bool have_chan = (ch != nullptr);
   bool func_ok = have_chan && (func_val == (int32_t)SRV_Channel::k_none);
-  bool min_ok = have_chan && (ch->get_output_min() == 1050);
+  bool min_ok = have_chan && (ch->get_output_min() == 800);
   bool max_ok = have_chan && (ch->get_output_max() == 2200);
 
   _disc_config_ok = func_ok && min_ok && max_ok;
@@ -395,7 +384,7 @@ void AP_ShoesAgtech::_check_disc_config(void) {
                     (int)func_val);
   }
   if (!min_ok) {
-    gcs().send_text(MAV_SEVERITY_WARNING, "SA: SERVO%d MIN=%u, must set =1050",
+    gcs().send_text(MAV_SEVERITY_WARNING, "SA: SERVO%d MIN=%u, must set =800",
                     (int)chan, (unsigned)ch->get_output_min());
   }
   if (!max_ok) {
@@ -409,13 +398,47 @@ int8_t AP_ShoesAgtech::_clamp_food(int8_t food) {
   return (int8_t)constrain_int16(food, 1, 7);
 }
 
-// Chuyển offset PWM (us, luôn dương, xem công thức đầu Module 3) thành PWM
-// xuất ra theo chiều quay SA_DOS_REV, constrain đúng nửa dải servo.
-uint16_t AP_ShoesAgtech::_offset_to_dos_pwm(float offset) const {
-  if (_dos_params.dos_rev.get() == 0) {
-    return (uint16_t)constrain_float(1500.0f - offset, 800.0f, 1500.0f);
+// =============================================================
+// CHUYỂN TỐC ĐỘ CẤP (g/phút) SANG PWM — mới 2026-10-05, công thức cũ
+// (SA_DOS_V x Fx x Dx) đã bị gỡ bỏ hoàn toàn 2026-10-06 — đây là DUY
+// NHẤT công thức còn lại.
+//
+//   - SA_DOS_Ax != 0 (đã đo trực tiếp bằng cân, hồi quy Q=a*PWM+b):
+//     pwm_calib = (rate_gpm - SA_DOS_Bx) / SA_DOS_Ax  -- PWM TUYỆT ĐỐI,
+//     không phải offset cộng/trừ vào 1500 như công thức cũ. Chính xác
+//     hơn công thức cũ vì không ép buộc đường thẳng phải đi qua gốc tọa
+//     độ (thực tế có offset/deadband cơ khí, xem log trao đổi hiệu
+//     chuẩn).
+//   - SA_DOS_Ax == 0 (mặc định, CHƯA hiệu chuẩn): motor DỪNG AN TOÀN
+//     (1500), STATUSTEXT cảnh báo mỗi 5s — không còn fallback nào khác,
+//     bắt buộc phải đo SA_DOS_Ax/Bx trước khi dùng loại thức ăn đó.
+//
+// SA_DOS_REV áp dụng khi đã hiệu chuẩn. Vì pwm_calib là giá trị tuyệt
+// đối (không phải offset), REV=0 (thuận) lấy ĐỐI XỨNG qua 1500
+// (3000 - pwm_calib) thay vì đảo dấu offset như công thức cũ — dữ liệu
+// hiệu chuẩn thực tế đo theo đúng chiều REV=1 (PWM tăng → lưu lượng
+// tăng), nên REV=0 cần phản chiếu qua điểm giữa 1500 để ra đúng PWM cho
+// chiều đấu dây ngược lại.
+// =============================================================
+uint16_t AP_ShoesAgtech::_dos_rate_to_pwm(float rate_gpm, uint8_t food_idx) {
+  float a = _dos_params.dos_ar[food_idx].get();
+  if (fabsf(a) < 0.0001f) {
+    uint32_t now = AP_HAL::millis();
+    if (now - _dos_warn_ms >= 5000U) {
+      _dos_warn_ms = now;
+      gcs().send_text(MAV_SEVERITY_WARNING,
+                      "SA: SA_DOS_A%d not calibrated - feeder stopped",
+                      (int)(food_idx + 1));
+    }
+    return 1500;
   }
-  return (uint16_t)constrain_float(1500.0f + offset, 1500.0f, 2200.0f);
+
+  float b = _dos_params.dos_br[food_idx].get();
+  float pwm_calib = (rate_gpm - b) / a;
+  if (_dos_params.dos_rev.get() == 0) {
+    pwm_calib = 3000.0f - pwm_calib;
+  }
+  return (uint16_t)constrain_float(pwm_calib, 800.0f, 2200.0f);
 }
 
 // =============================================================
@@ -562,47 +585,15 @@ void AP_ShoesAgtech::_update_dosing_motor(void) {
       }
       dos_rate_gpm = 0.0f; // không có khái niệm tốc độ g/phút ở mode này
     } else {
-      // Lưu lượng thể tích hiệu dụng của vít tải = SA_DOS_V (hằng số hình
-      // học, DÙNG CHUNG mọi loại thức ăn — chỉ đổi khi thay trục vít khác)
-      // x SA_DOS_Fx (hệ số điền đầy hạt, RIÊNG theo loại thức ăn đang
-      // active — bù cho khoảng trống không khí giữa các hạt trong vít).
-      // Mật độ SA_DOS_Dx cũng lấy theo loại thức ăn đang active, dùng
-      // chung cho cả mode 1 và 2.
+      // Loại thức ăn đang active (dùng chung cho mode 1 và 2) — quyết
+      // định dùng cặp SA_DOS_Ax/Bx nào trong _dos_rate_to_pwm().
       uint8_t food_idx = (uint8_t)_clamp_food(dos_food_active) - 1;
-      float fill_k = _dos_params.dos_fr[food_idx].get();
-      if (fill_k < 0.01f) {
-        fill_k = 0.01f;
-      }
-      // SA_DOS_Fx trước đây (trước khi tách ra SA_DOS_V x SA_DOS_Fx) là một
-      // số ở thang mL/50us, thường cỡ ~100 — nếu máy đã hiệu chuẩn từ trước
-      // và chưa đo lại theo công thức mới, SA_DOS_Fx sẽ vẫn còn giá trị lớn
-      // kiểu này, bị hiểu nhầm thành hệ số điền đầy => cho ăn sai (thường là
-      // quá ít). Cảnh báo rate-limit 5s để kỹ thuật viên biết cần hiệu
-      // chuẩn lại SA_DOS_Fx sau khi cập nhật firmware.
-      if (fill_k > 5.0f && now - _dos_warn_ms >= 5000U) {
-        _dos_warn_ms = now;
-        gcs().send_text(MAV_SEVERITY_WARNING,
-                        "SA: SA_DOS_F%d=%.1f looks uncalibrated for new V x "
-                        "fill-factor formula (expected ~0.05-2.0)",
-                        (int)(food_idx + 1), (double)fill_k);
-      }
-      float v_const = _dos_params.dos_v.get();
-      if (v_const < 0.1f) {
-        v_const = 0.1f;
-      }
-      float vol_rate = v_const * fill_k;
-      float density = _dos_params.dos_dr[food_idx].get();
-      if (density < 0.01f) {
-        density = 0.01f;
-      }
-      float effective = vol_rate * density;
 
       if (_dos_params.dos_mode.get() == 1) {
         // ---- DOS_MODE 1 (đổi số từ mode 0 cũ, 2026-08-20): tốc độ cố
         // định — SA_DOS_SP CHÍNH LÀ tốc độ (g/phút) ----
         dos_rate_gpm = dos_sp_active;
-        float offset = dos_rate_gpm * 50.0f / effective;
-        pwm_f = (float)_offset_to_dos_pwm(offset);
+        pwm_f = (float)_dos_rate_to_pwm(dos_rate_gpm, food_idx);
       } else {
         // ---- DOS_MODE 2 (đổi số từ mode 1 cũ, 2026-08-20): phân bố đều
         // theo mission — SA_DOS_SP là TỔNG gam, dos_rate_gpm là tốc độ
@@ -624,8 +615,7 @@ void AP_ShoesAgtech::_update_dosing_motor(void) {
         float speed_min_start = _speed_min_start(); // dùng chung với Module 1
         if (mission_dist > 1.0f && speed_ms >= speed_min_start) {
           dos_rate_gpm = (dos_sp_active * speed_ms * 60.0f) / mission_dist;
-          float offset = dos_rate_gpm * 50.0f / effective;
-          pwm_f = (float)_offset_to_dos_pwm(offset);
+          pwm_f = (float)_dos_rate_to_pwm(dos_rate_gpm, food_idx);
         } else {
           pwm_f = 1500.0f;
           dos_rate_gpm = 0.0f;
@@ -656,20 +646,29 @@ void AP_ShoesAgtech::_update_dosing_motor(void) {
   SRV_Channels::set_output_pwm_chan(chan_idx, _dos_pwm);
 
   // ---- ĐĨA RẢI LY TÂM: ghi PWM theo _disc_running tính ở trên ----
+  // Đổi 2026-10-06: điểm dừng THẬT là TRIM (1500, giống trục vít), không
+  // còn dừng ở MIN như trước. % tốc độ lệch dần khỏi TRIM về 1 trong 2
+  // đầu dải tùy SA_DISC_REV (0=thuận→MAX/2200, 1=ngược→MIN/800).
   if (disc_enabled) {
     uint8_t disc_idx =
         (uint8_t)constrain_int16(_dos_params.disc_chan.get() - 1, 0, 15);
     SRV_Channel *ch_disc = SRV_Channels::srv_channel(disc_idx);
     if (ch_disc != nullptr) {
       uint16_t disc_min = ch_disc->get_output_min();
+      uint16_t disc_trim = ch_disc->get_trim();
       uint16_t disc_max = ch_disc->get_output_max();
       if (_disc_running && _disc_config_ok) {
         float pct =
             constrain_float(_dos_params.disc_pct.get(), 0.0f, 100.0f) * 0.01f;
-        _disc_pwm =
-            (uint16_t)((float)disc_min + pct * (float)(disc_max - disc_min));
+        if (_dos_params.disc_rev.get() == 0) {
+          _disc_pwm = (uint16_t)((float)disc_trim +
+                                 pct * (float)(disc_max - disc_trim));
+        } else {
+          _disc_pwm = (uint16_t)((float)disc_trim -
+                                 pct * (float)(disc_trim - disc_min));
+        }
       } else {
-        _disc_pwm = disc_min;
+        _disc_pwm = disc_trim;
       }
       SRV_Channels::set_output_pwm_chan(disc_idx, _disc_pwm);
     }

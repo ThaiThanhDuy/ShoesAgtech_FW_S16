@@ -73,15 +73,23 @@ public:
   AP_Int16 dos_log_ms;    // SA_DOS_LOG_MS
   AP_Int8  dos_mode;      // SA_DOS_MODE
   AP_Int8  dos_food;      // SA_DOS_FOOD
-  AP_Float dos_v;         // SA_DOS_V
-  AP_Float dos_fr[7];     // SA_DOS_F1..F7
-  AP_Float dos_dr[7];     // SA_DOS_D1..D7
+
+  // ---- Hiệu chuẩn trực tiếp (hồi quy tuyến tính thật đo bằng cân) — mới
+  // 2026-10-05, xem _dos_rate_to_pwm(). DUY NHẤT công thức này — đã bỏ
+  // hẳn công thức cũ SA_DOS_V x Fx x Dx (2026-10-06). Loại thức ăn nào
+  // chưa có SA_DOS_Ax (=0, mặc định) -> motor dừng an toàn (1500), không
+  // còn fallback nào khác -> BẮT BUỘC hiệu chuẩn Ax/Bx trước khi dùng.
+  AP_Float dos_ar[7];     // SA_DOS_A1..A7  hệ số góc (g/phút trên mỗi µs)
+  AP_Float dos_br[7];     // SA_DOS_B1..B7  hệ số chặn (g/phút)
 
   // ---- Đĩa rải ly tâm (ESC riêng, quay liên tục 1 chiều — KHÁC hẳn
-  // trục vít 360° đảo chiều được) — mới 2026-09-08 ----
+  // trục vít 360° đảo chiều được) — mới 2026-09-08. Từ 2026-10-06: điểm
+  // dừng THẬT ở giữa dải (TRIM=1500, giống trục vít), 0%=1500, 100% lệch
+  // về 1 trong 2 đầu dải tùy SA_DISC_REV — xem _update_dosing_motor().
   AP_Int8  disc_chan;     // SA_DISC_CHAN  kênh servo/ESC đĩa rải, 0=tắt tính năng
-  AP_Int8  disc_pct;      // SA_DISC_PCT   % tốc độ đĩa khi chạy (0-100, 100=full PWM max)
+  AP_Int8  disc_pct;      // SA_DISC_PCT   % tốc độ đĩa khi chạy (0-100, 0=TRIM, 100=MAX hoặc MIN tùy REV)
   AP_Float disc_delay;    // SA_DISC_DLY   độ trễ (giây) giữa đĩa và trục vít khi bật/tắt
+  AP_Int8  disc_rev;      // SA_DISC_REV   0=thuận (100%→MAX/2200), 1=ngược (100%→MIN/800)
 };
 
 class AP_ShoesAgtech {
@@ -168,11 +176,13 @@ public:
   // Đĩa rải ly tâm — mới 2026-09-08
   uint16_t get_disc_pwm(void)       const { return _disc_pwm; }
   bool     get_disc_running(void)   const { return _disc_running; }
-  // Tốc độ vít tải (mL/50us) của loại thức ăn đang dùng cho ao active (SA_DOS_Fx).
+  // Hệ số góc hiệu chuẩn (SA_DOS_Ax, g/phút trên mỗi µs) của loại thức ăn
+  // đang dùng cho ao active — đổi ý nghĩa 2026-10-06 (trước đây trả về
+  // SA_DOS_Fx đã bị gỡ bỏ cùng công thức cũ).
   float    get_active_dos_rate(void) const {
     const int8_t food = _ponds[_active_pond_idx].valid ? _ponds[_active_pond_idx].dos_food
                                                         : (int8_t)_dos_params.dos_food.get();
-    return _dos_params.dos_fr[_clamp_food(food) - 1].get();
+    return _dos_params.dos_ar[_clamp_food(food) - 1].get();
   }
 
   static const AP_Param::GroupInfo var_info[];
@@ -359,9 +369,10 @@ private:
   uint32_t _dos_seq_ms;
   bool     _disc_running;
   uint16_t _disc_pwm;
-  // Kiểm tra cấu hình kênh đĩa rải — yêu cầu FUNCTION=0(None), MIN=1000,
-  // MAX=2200 (giống mẫu _check_dosing_config() của trục vít, KHÔNG yêu
-  // cầu TRIM vì đĩa chỉ quay 1 chiều, không có điểm giữa cần canh).
+  // Kiểm tra cấu hình kênh đĩa rải — yêu cầu FUNCTION=0(None), MIN=800,
+  // MAX=2200 (đổi từ 1000→1500→800, 2026-10-06 — xem _check_disc_config()).
+  // KHÔNG yêu cầu TRIM — formula vẫn tự đọc TRIM thật đang cấu hình làm
+  // điểm 0%, không bắt buộc đúng 1500.
   bool     _disc_config_ok;
   bool     _disc_was_ok;
   uint32_t _disc_warn_ms;
@@ -410,9 +421,11 @@ private:
   void     _check_disc_config(void);
   void     _sync_dosing_setpoint(void);
   void     _update_dosing_motor(void);
-  // Chuyển offset PWM (us, luôn dương) thành giá trị PWM xuất ra theo chiều
-  // quay SA_DOS_REV, đã constrain đúng nửa dải (800-1500 hoặc 1500-2200).
-  uint16_t _offset_to_dos_pwm(float offset) const;
+  // Chuyển tốc độ cấp (g/phút) sang PWM bằng SA_DOS_Ax/Bx (hồi quy tuyến
+  // tính đo trực tiếp bằng cân — DUY NHẤT công thức, từ 2026-10-06). Nếu
+  // loại thức ăn chưa có SA_DOS_Ax (=0, chưa hiệu chuẩn) -> trả về 1500
+  // (dừng an toàn) + cảnh báo.
+  uint16_t _dos_rate_to_pwm(float rate_gpm, uint8_t food_idx);
   // Kẹp giá trị loại thức ăn (SA_DOS_FOOD/dos_food) về dải hợp lệ 1-7.
   static int8_t _clamp_food(int8_t food);
 
