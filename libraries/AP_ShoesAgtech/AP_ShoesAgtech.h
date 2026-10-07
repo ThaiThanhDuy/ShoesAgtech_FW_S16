@@ -82,14 +82,18 @@ public:
   AP_Float dos_ar[7];     // SA_DOS_A1..A7  hệ số góc (g/phút trên mỗi µs)
   AP_Float dos_br[7];     // SA_DOS_B1..B7  hệ số chặn (g/phút)
 
-  // ---- Đĩa rải ly tâm (ESC riêng, quay liên tục 1 chiều — KHÁC hẳn
-  // trục vít 360° đảo chiều được) — mới 2026-09-08. Từ 2026-10-06: điểm
-  // dừng THẬT ở giữa dải (TRIM=1500, giống trục vít), 0%=1500, 100% lệch
-  // về 1 trong 2 đầu dải tùy SA_DISC_REV — xem _update_dosing_motor().
+  // ---- Đĩa rải ly tâm (ESC riêng với SA_DOS_CHAN) — mới 2026-09-08.
+  // SA_DISC_REV (đổi 2026-10-07) quyết định kiểu ESC: 0=StandardESC (ESC
+  // 1 chiều bình thường, 0%=SA_DISC_MIN (tham số riêng, KHÔNG dùng
+  // SERVOx_MIN thật), 100%=SERVOx_MAX, KHÔNG cần TRIM — hỗ trợ ESC có dải
+  // khác 800-2200, vd 1100-2200); 1/2=Bidir (ESC 2 chiều, dừng ở TRIM=1500
+  // giữa dải, bắt buộc MIN=800/TRIM=1500/MAX=2200, 1=lệch về MAX,
+  // 2=lệch về MIN, dùng SERVOx_MIN thật) — xem _update_dosing_motor().
   AP_Int8  disc_chan;     // SA_DISC_CHAN  kênh servo/ESC đĩa rải, 0=tắt tính năng
-  AP_Int8  disc_pct;      // SA_DISC_PCT   % tốc độ đĩa khi chạy (0-100, 0=TRIM, 100=MAX hoặc MIN tùy REV)
+  AP_Int8  disc_pct;      // SA_DISC_PCT   % tốc độ đĩa khi chạy (0-100, 0=điểm dừng, 100=đầu dải còn lại tùy REV)
   AP_Float disc_delay;    // SA_DISC_DLY   độ trễ (giây) giữa đĩa và trục vít khi bật/tắt
-  AP_Int8  disc_rev;      // SA_DISC_REV   0=thuận (100%→MAX/2200), 1=ngược (100%→MIN/800)
+  AP_Int8  disc_rev;      // SA_DISC_REV   0=StandardESC(1 chiều), 1=BidirForward, 2=BidirReverse
+  AP_Int16 disc_min;      // SA_DISC_MIN   PWM 0% khi REV=0 (StandardESC), mặc định 1100, thay cho SERVOx_MIN thật
 };
 
 class AP_ShoesAgtech {
@@ -369,10 +373,10 @@ private:
   uint32_t _dos_seq_ms;
   bool     _disc_running;
   uint16_t _disc_pwm;
-  // Kiểm tra cấu hình kênh đĩa rải — yêu cầu FUNCTION=0(None), MIN=800,
-  // MAX=2200 (đổi từ 1000→1500→800, 2026-10-06 — xem _check_disc_config()).
-  // KHÔNG yêu cầu TRIM — formula vẫn tự đọc TRIM thật đang cấu hình làm
-  // điểm 0%, không bắt buộc đúng 1500.
+  // Kiểm tra cấu hình kênh đĩa rải — luôn yêu cầu FUNCTION=0(None) và
+  // MAX=2200; MIN=800/TRIM=1500 CHỈ bắt buộc khi SA_DISC_REV=1/2
+  // (Bidirectional) — SA_DISC_REV=0 (StandardESC) chấp nhận MIN/TRIM bất
+  // kỳ, đổi 2026-10-07 — xem _check_disc_config().
   bool     _disc_config_ok;
   bool     _disc_was_ok;
   uint32_t _disc_warn_ms;

@@ -231,14 +231,33 @@ const AP_Param::GroupInfo AP_ShoesAgtech_DosingParams::var_info[] = {
     AP_GROUPINFO("DOS_B7", 40, AP_ShoesAgtech_DosingParams, dos_br[6], 0.0f),
 
     // @Param: DISC_REV
-    // @DisplayName: Spreader disc direction
-    // @Description: Đĩa rải dừng ở TRIM=1500 (0%, đổi 2026-10-06 — trước
-    //   đây 0%=MIN). 0=thuận: 100% → MAX (2200). 1=ngược: 100% → MIN
-    //   (800). Đổi chiều quay thật sự cần đảo dây động cơ; tham số này chỉ
-    //   đổi chiều PWM để khớp đúng hướng quay đã đấu.
-    // @Values: 0:Normal,1:Reversed
+    // @DisplayName: Spreader disc ESC type / direction
+    // @Description: Đổi 2026-10-07 — thêm lựa chọn ESC thường (1 chiều,
+    //   không cần TRIM, dùng đúng MIN/MAX thật đang cấu hình, vd 1100-2200
+    //   cho ESC thường không phải 800-2200). 0=StandardESC: ESC 1 chiều
+    //   bình thường, 0%=SERVOx_MIN, 100%=SERVOx_MAX, KHÔNG kiểm tra TRIM.
+    //   1=BidirForward: ESC 2 chiều dừng ở TRIM (1500), 100%→MAX (2200),
+    //   bắt buộc MIN=800/TRIM=1500/MAX=2200. 2=BidirReverse: như
+    //   BidirForward nhưng 100%→MIN (800) thay vì MAX. Đổi chiều quay
+    //   thật sự cần đảo dây động cơ; 2 lựa chọn Bidir chỉ đổi chiều PWM
+    //   để khớp đúng hướng quay đã đấu.
+    // @Values: 0:StandardESC,1:BidirForward,2:BidirReverse
+    // @Range: 0 2
     // @User: Standard
     AP_GROUPINFO("DISC_REV", 41, AP_ShoesAgtech_DosingParams, disc_rev, 0),
+
+    // @Param: DISC_MIN
+    // @DisplayName: Spreader disc StandardESC min PWM
+    // @Description: Mới 2026-10-07. Ngưỡng PWM ứng với 0% tốc độ đĩa rải
+    //   khi SA_DISC_REV=0 (StandardESC) — THAY CHO SERVOx_MIN thật của
+    //   channel, để dùng được ESC thường có dải khác 800-2200 (vd
+    //   1100-2200) mà không cần sửa SERVOx_MIN thật (SERVOx_MIN thật không
+    //   bị _check_disc_config() kiểm tra khi REV=0). Không có tác dụng khi
+    //   SA_DISC_REV=1/2 (Bidir dùng SERVOx_MIN thật=800, bắt buộc).
+    // @Range: 800 2200
+    // @Units: PWM
+    // @User: Standard
+    AP_GROUPINFO("DISC_MIN", 42, AP_ShoesAgtech_DosingParams, disc_min, 1100),
 
     AP_GROUPEND};
 
@@ -330,12 +349,12 @@ void AP_ShoesAgtech::_check_dosing_config(void) {
 
 // =============================================================
 // KIỂM TRA CẤU HÌNH KÊNH ĐĨA RẢI LY TÂM — mới 2026-09-08
-// Đổi 2026-10-06: KHÔNG kiểm tra TRIM nữa (bỏ lại, sau khi vừa thêm) —
-// chỉ bắt buộc FUNCTION=0(None), MIN=800, MAX=2200. Công thức PWM
-// (_update_dosing_motor()) vẫn đọc thẳng TRIM thật đang cấu hình trên
-// servo làm điểm 0% — không ép phải đúng 1500, chỉ không còn chặn/cảnh
-// báo nếu khác 1500. Bỏ qua hoàn toàn nếu SA_DISC_CHAN=0 (tính năng
-// đang tắt).
+// Đổi 2026-10-07: SA_DISC_REV giờ có 3 giá trị — 0=StandardESC (ESC 1
+// chiều bình thường, KHÔNG kiểm tra MIN/TRIM cụ thể, dùng đúng MIN/MAX
+// thật đang cấu hình trên servo, vd 1100-2200), 1/2=Bidirectional (ESC 2
+// chiều dừng giữa dải, bắt buộc đúng MIN=800/TRIM=1500/MAX=2200 — giống
+// hệt trục vít). Luôn bắt buộc FUNCTION=0(None) và MAX=2200 ở cả 2 kiểu.
+// Bỏ qua hoàn toàn nếu SA_DISC_CHAN=0 (tính năng đang tắt).
 // =============================================================
 void AP_ShoesAgtech::_check_disc_config(void) {
   if (_dos_params.disc_chan.get() <= 0) {
@@ -349,13 +368,17 @@ void AP_ShoesAgtech::_check_disc_config(void) {
   SRV_Channel *ch = SRV_Channels::srv_channel(chan_idx);
   int32_t func_val = (int32_t)SRV_Channels::channel_function(chan_idx);
   int32_t chan = (int32_t)_dos_params.disc_chan.get();
+  bool bidir = (_dos_params.disc_rev.get() != 0);
 
   bool have_chan = (ch != nullptr);
   bool func_ok = have_chan && (func_val == (int32_t)SRV_Channel::k_none);
-  bool min_ok = have_chan && (ch->get_output_min() == 800);
   bool max_ok = have_chan && (ch->get_output_max() == 2200);
+  // ESC thường (StandardESC): chấp nhận MIN/TRIM bất kỳ, không kiểm tra
+  // cụ thể — dùng thẳng giá trị thật đang cấu hình (xem _update_dosing_motor()).
+  bool min_ok = !bidir || (have_chan && (ch->get_output_min() == 800));
+  bool trim_ok = !bidir || (have_chan && (ch->get_trim() == 1500));
 
-  _disc_config_ok = func_ok && min_ok && max_ok;
+  _disc_config_ok = func_ok && min_ok && trim_ok && max_ok;
 
   if (_disc_config_ok) {
     if (!_disc_was_ok) {
@@ -386,6 +409,10 @@ void AP_ShoesAgtech::_check_disc_config(void) {
   if (!min_ok) {
     gcs().send_text(MAV_SEVERITY_WARNING, "SA: SERVO%d MIN=%u, must set =800",
                     (int)chan, (unsigned)ch->get_output_min());
+  }
+  if (!trim_ok) {
+    gcs().send_text(MAV_SEVERITY_WARNING, "SA: SERVO%d TRIM=%u, must set =1500",
+                    (int)chan, (unsigned)ch->get_trim());
   }
   if (!max_ok) {
     gcs().send_text(MAV_SEVERITY_WARNING, "SA: SERVO%d MAX=%u, must set =2200",
@@ -646,21 +673,34 @@ void AP_ShoesAgtech::_update_dosing_motor(void) {
   SRV_Channels::set_output_pwm_chan(chan_idx, _dos_pwm);
 
   // ---- ĐĨA RẢI LY TÂM: ghi PWM theo _disc_running tính ở trên ----
-  // Đổi 2026-10-06: điểm dừng THẬT là TRIM (1500, giống trục vít), không
-  // còn dừng ở MIN như trước. % tốc độ lệch dần khỏi TRIM về 1 trong 2
-  // đầu dải tùy SA_DISC_REV (0=thuận→MAX/2200, 1=ngược→MIN/800).
+  // Đổi 2026-10-07: SA_DISC_REV có 3 giá trị —
+  //   0 (StandardESC, ESC 1 chiều bình thường): 0%=SA_DISC_MIN (tham số
+  //     riêng, mặc định 1100 — đổi 2026-10-07, KHÔNG còn dùng SERVOx_MIN
+  //     thật của channel), 100%=MAX (SERVOx_MAX thật, phải =2200), KHÔNG
+  //     cần TRIM. Lúc dừng = SA_DISC_MIN.
+  //   1 (BidirForward, ESC 2 chiều): 0%=TRIM(1500), 100%=MAX(2200).
+  //   2 (BidirReverse, ESC 2 chiều): 0%=TRIM(1500), 100%=MIN(800, SERVOx_MIN
+  //     thật — Bidir vẫn dùng MIN thật của channel, chỉ StandardESC mới
+  //     dùng SA_DISC_MIN).
+  //   Lúc dừng (1/2) = TRIM.
   if (disc_enabled) {
     uint8_t disc_idx =
         (uint8_t)constrain_int16(_dos_params.disc_chan.get() - 1, 0, 15);
     SRV_Channel *ch_disc = SRV_Channels::srv_channel(disc_idx);
     if (ch_disc != nullptr) {
-      uint16_t disc_min = ch_disc->get_output_min();
       uint16_t disc_trim = ch_disc->get_trim();
       uint16_t disc_max = ch_disc->get_output_max();
+      int8_t rev_mode = _dos_params.disc_rev.get();
+      uint16_t disc_min = (rev_mode == 0)
+                               ? (uint16_t)_dos_params.disc_min.get()
+                               : ch_disc->get_output_min();
       if (_disc_running && _disc_config_ok) {
         float pct =
             constrain_float(_dos_params.disc_pct.get(), 0.0f, 100.0f) * 0.01f;
-        if (_dos_params.disc_rev.get() == 0) {
+        if (rev_mode == 0) {
+          _disc_pwm =
+              (uint16_t)((float)disc_min + pct * (float)(disc_max - disc_min));
+        } else if (rev_mode == 1) {
           _disc_pwm = (uint16_t)((float)disc_trim +
                                  pct * (float)(disc_max - disc_trim));
         } else {
@@ -668,7 +708,7 @@ void AP_ShoesAgtech::_update_dosing_motor(void) {
                                  pct * (float)(disc_trim - disc_min));
         }
       } else {
-        _disc_pwm = disc_trim;
+        _disc_pwm = (rev_mode == 0) ? disc_min : disc_trim;
       }
       SRV_Channels::set_output_pwm_chan(disc_idx, _disc_pwm);
     }

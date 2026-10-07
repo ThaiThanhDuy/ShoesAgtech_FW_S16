@@ -94,17 +94,17 @@ update() [Module 1, 10 Hz]
 
 ---
 
-**`_check_disc_config()`** — mới, 2026-09-08, đổi điều kiện 2026-10-06
+**`_check_disc_config()`** — mới, 2026-09-08, đổi điều kiện 2026-10-06/07
 - **File:** `AP_ShoesAgtech_Dosing.cpp`
 - **Được gọi bởi:** `_update_dosing_motor()` mỗi chu kỳ 10 Hz
-- **Đầu vào:** không có (đọc `_dos_params.disc_chan` từ param)
+- **Đầu vào:** không có (đọc `_dos_params.disc_chan`/`disc_rev` từ param)
 - **Xử lý:**
   1. `SA_DISC_CHAN ≤ 0` → tính năng đang tắt, `_disc_config_ok=false`, return ngay (không cảnh báo)
-  2. Lấy `chan_idx = SA_DISC_CHAN − 1`
-  3. Kiểm tra 3 điều kiện trên `SRV_Channel` (**KHÔNG kiểm tra TRIM**, khác `_check_dosing_config()` của trục vít — formula vẫn đọc thẳng TRIM thật đang cấu hình làm điểm 0%, chỉ không bắt buộc đúng 1500):
-     - `FUNCTION = k_none (0)`
-     - `MIN = 800` (đổi từ 1500, 2026-10-06)
-     - `MAX = 2200`
+  2. Lấy `chan_idx = SA_DISC_CHAN − 1`; `bidir = (SA_DISC_REV != 0)`
+  3. Kiểm tra trên `SRV_Channel` — **điều kiện tùy `SA_DISC_REV`** (mới 2026-10-07):
+     - `FUNCTION = k_none (0)` — **luôn bắt buộc**
+     - `MAX = 2200` — **luôn bắt buộc**
+     - `MIN = 800` và `TRIM = 1500` — **CHỈ bắt buộc nếu `bidir` (SA_DISC_REV=1 hoặc 2)**; nếu `SA_DISC_REV=0` (StandardESC) thì MIN/TRIM được chấp nhận ở bất kỳ giá trị nào đang cấu hình thật (vd MIN=1100 cho ESC thường không phải loại 800-2200)
   4. Nếu tất cả đúng: nếu vừa chuyển từ sai → OK, in "setup thành công" 1 lần
   5. Nếu sai bất kỳ: in từng điều kiện sai mỗi 5s (dùng `_disc_warn_ms` riêng, không tranh chấp `_dos_warn_ms` của trục vít)
 - **Đầu ra / Return:** `void` — cập nhật `_disc_config_ok` và `_disc_was_ok`
@@ -178,11 +178,15 @@ update() [Module 1, 10 Hz]
       - Không đủ: `dos_rate_gpm = 0`, `_dos_pwm = 1500` + STATUSTEXT mỗi 5s
   12. `_dos_pwm = _dos_rate_to_pwm(dos_rate_gpm, food_idx)` — DUY NHẤT công thức (2026-10-06), xem function-doc riêng bên dưới (SA_DOS_Ax=0 chưa hiệu chuẩn → dừng an toàn, không có fallback)
   14. `SRV_Channels::set_output_pwm_chan(SA_DOS_CHAN − 1, _dos_pwm)`
-  14b. **Đĩa rải ly tâm (mới 2026-09-08, đổi công thức 2026-10-06):** gọi `_check_disc_config()` đầu hàm (yêu cầu FUNCTION=0/MIN=800/MAX=2200 trên `SA_DISC_CHAN` — KHÔNG kiểm tra TRIM, xem mục 1.2). Nếu `disc_enabled && _disc_running && _disc_config_ok`: `pct = SA_DISC_PCT/100`; `SA_DISC_REV=0` (thuận) → `_disc_pwm = TRIM + pct×(MAX−TRIM)`; `SA_DISC_REV=1` (ngược) → `_disc_pwm = TRIM − pct×(TRIM−MIN)`. Không chạy/cấu hình sai → `_disc_pwm = TRIM` (1500, **đổi từ dừng ở MIN trước đây**). Ghi qua `SRV_Channels::set_output_pwm_chan()`. Cấu hình sai → PWM luôn ở TRIM (không quay) dù `_disc_running=true`, đồng thời in cảnh báo (xem `_check_disc_config()`). Độc lập với `_dos_pwm`/`SA_DOS_REV` (của trục vít) — đĩa có `SA_DISC_REV` riêng, không dùng chung với trục vít.
+  14b. **Đĩa rải ly tâm (mới 2026-09-08, đổi công thức 2026-10-06/07):** gọi `_check_disc_config()` đầu hàm — điều kiện tùy `SA_DISC_REV` (xem mục 1.2 và function-doc). `MIN` dùng trong công thức dưới đây **KHÔNG phải SERVOx_MIN thật** khi REV=0 — xem ghi chú ngay sau. Nếu `disc_enabled && _disc_running && _disc_config_ok`: `pct = SA_DISC_PCT/100`;
+      - `SA_DISC_REV=0` (**StandardESC**, 1 chiều, không cần TRIM) → `MIN = SA_DISC_MIN` (tham số riêng, **mới 2026-10-07**, mặc định 1100, KHÔNG dùng SERVOx_MIN thật) → `_disc_pwm = SA_DISC_MIN + pct×(MAX−SA_DISC_MIN)`, với `MAX = SERVOx_MAX` thật (phải =2200)
+      - `SA_DISC_REV=1` (**BidirForward**) → `_disc_pwm = TRIM + pct×(MAX−TRIM)` (TRIM/MAX là SERVOx_TRIM/MAX thật)
+      - `SA_DISC_REV=2` (**BidirReverse**) → `_disc_pwm = TRIM − pct×(TRIM−MIN)`, với `MIN = SERVOx_MIN` thật (phải =800, Bidir vẫn dùng MIN thật của channel, khác StandardESC)
+      Không chạy/cấu hình sai → `_disc_pwm = SA_DISC_MIN` (nếu `SA_DISC_REV=0`) hoặc `TRIM`=1500 (nếu Bidir). Ghi qua `SRV_Channels::set_output_pwm_chan()`. Cấu hình sai → PWM giữ ở điểm dừng (không quay) dù `_disc_running=true`, đồng thời in cảnh báo (xem `_check_disc_config()`). Độc lập với `_dos_pwm`/`SA_DOS_REV` (của trục vít) — đĩa có `SA_DISC_REV` riêng, không dùng chung với trục vít.
   - `dos_rate_gpm` (biến cục bộ, khởi tạo 0.0f đầu hàm, luôn =0 ở mode 0) được giữ lại đến bước in log (15) để hiển thị tốc độ tức thời — không có getter public, chỉ dùng nội bộ cho console log
   15. Console log nếu SA_DOS_LOG=1 — **không đổi**, vẫn chỉ hiện `FM<x> Q:<y>` của trục vít, không có thông tin đĩa rải trong dòng log này (xem `get_disc_pwm()`/`get_disc_running()` nếu cần đọc qua code khác)
 - **Đầu ra / Return:** `void` — side effects: `_dos_pwm`, `_disc_pwm`, 2 servo output riêng biệt
-- **Ghi chú:** `DOS_MODE=1` và `DOS_MODE=2` dùng chung một nguồn thông số (`SA_DOS_V` dùng chung + `SA_DOS_Fx`/`SA_DOS_Dx` theo loại thức ăn) — không còn tham số `SA_DOS_RATE` riêng. `DOS_MODE=0` (PWM trực tiếp) không dùng bất kỳ thông số nào trong nhóm này. `SA_DOS_Fx` đổi ý nghĩa 2026-08-19 (xem mục 2 và 3.5); số thứ tự 3 mode đổi 2026-08-20 (xem mục 1.1).
+- **Ghi chú:** `DOS_MODE=1` và `DOS_MODE=2` dùng chung một nguồn thông số (`SA_DOS_Ax`/`SA_DOS_Bx` theo loại thức ăn, hệ số hồi quy tuyến tính đo thực tế — đổi 2026-10-06, xem mục 3.5/3.6) — không còn tham số `SA_DOS_RATE`/`SA_DOS_V`/`SA_DOS_Fx`/`SA_DOS_Dx` riêng. `DOS_MODE=0` (PWM trực tiếp) không dùng bất kỳ thông số nào trong nhóm này. Số thứ tự 3 mode đổi 2026-08-20 (xem mục 1.1).
 
 ---
 
@@ -203,9 +207,10 @@ update() [Module 1, 10 Hz]
 Slot 9-23 (`SA_DOS_V`, `SA_DOS_F1-7`, `SA_DOS_D1-7`) **đã gỡ bỏ 2026-10-06** — xem ghi chú bên dưới bảng.
 
 | `SA_DISC_CHAN` | 24 | Int8 | 0 | 0 | 16 | **Mới 2026-09-08.** Kênh servo/ESC đĩa rải ly tâm (1-indexed) — ESC RIÊNG với `SA_DOS_CHAN` (trục vít). `0` = tắt hẳn tính năng đĩa rải, không ghi PWM ra bất kỳ kênh nào. |
-| `SA_DISC_PCT` | 25 | Int8 | 100 | 0 | 100 | **Đổi ý nghĩa 2026-10-06.** % tốc độ đĩa khi đang chạy, tính từ **TRIM (1500, điểm dừng)**: `0` = TRIM (dừng), `100` = lệch hết cỡ về phía `SA_DISC_REV` quy định (MAX/2200 nếu REV=0, MIN/800 nếu REV=1). Lúc không chạy/cấu hình sai luôn là TRIM (trước đây là MIN). |
+| `SA_DISC_PCT` | 25 | Int8 | 100 | 0 | 100 | **Đổi ý nghĩa 2026-10-06/07.** % tốc độ đĩa khi đang chạy. Nếu `SA_DISC_REV=0` (StandardESC): tính từ **`SA_DISC_MIN`** (tham số riêng, KHÔNG phải SERVOx_MIN thật) đến `MAX` thật (`0`=SA_DISC_MIN, `100`=MAX). Nếu `SA_DISC_REV=1/2` (Bidir): tính từ **TRIM (1500, điểm dừng)** (`0`=TRIM, `100`=lệch hết cỡ về MAX nếu REV=1, về MIN thật nếu REV=2). Lúc không chạy/cấu hình sai: PWM giữ ở điểm dừng tương ứng (`SA_DISC_MIN` nếu StandardESC, TRIM nếu Bidir). |
 | `SA_DISC_DLY` | 26 | Float | 2.0 | 0 | 10 | **Mới 2026-09-08.** Độ trễ (giây) giữa đĩa và trục vít lúc bật/tắt `SA_DOS_RC`: bật → đĩa quay ngay, trục vít chờ đủ `SA_DISC_DLY` giây mới chạy; tắt → trục vít dừng ngay, đĩa quay thêm `SA_DISC_DLY` giây rồi mới dừng. Chỉ có tác dụng khi `SA_DISC_CHAN > 0`. |
-| `SA_DISC_REV` | 41 | Int8 | 0 | 0 | 1 | **Mới 2026-10-06.** Chiều lệch khỏi TRIM khi tăng `SA_DISC_PCT`: `0`=thuận (lệch về MAX/2200), `1`=ngược (lệch về MIN/800). Đổi chiều quay thật cần đảo dây động cơ/ESC; tham số này chỉ chỉnh hướng PWM cho khớp đúng chiều đã đấu. |
+| `SA_DISC_REV` | 41 | Int8 | 0 | 0 | 2 | **Mới 2026-10-06, đổi thành 3 lựa chọn 2026-10-07** (để hỗ trợ ESC thường 1 chiều với dải khác 800-2200, vd 1100-2200). `0`=**StandardESC**: ESC 1 chiều bình thường, không có điểm dừng giữa, dùng `SA_DISC_MIN`→MAX thật, không kiểm tra MIN/TRIM thật. `1`=**BidirForward**: ESC 2 chiều dừng ở TRIM=1500, tăng PCT lệch về MAX (2200). `2`=**BidirReverse**: như BidirForward nhưng lệch về MIN thật (800). Đổi chiều quay thật cần đảo dây động cơ/ESC; tham số này chỉ chỉnh hướng/kiểu PWM cho khớp đúng loại ESC và chiều đã đấu. |
+| `SA_DISC_MIN` | 42 | Int16 | 1100 | 800 | 2200 | **Mới 2026-10-07.** Ngưỡng PWM ứng với 0% tốc độ đĩa khi `SA_DISC_REV=0` (StandardESC) — THAY CHO `SERVOx_MIN` thật của channel (không bị `_check_disc_config()` kiểm tra khi REV=0), để dùng ESC thường có dải khác 800-2200 (vd 1100-2200) mà không cần đổi SERVOx_MIN thật. Không có tác dụng khi `SA_DISC_REV=1/2` (Bidir dùng SERVOx_MIN thật=800, bắt buộc qua `_check_disc_config()`). |
 | `SA_DOS_A1..A7` | 27–33 | Float | 0.0 | -50 | 50 | **Mới 2026-10-05, DUY NHẤT công thức từ 2026-10-06.** Hệ số góc `a` (g/phút trên mỗi µs) từ hồi quy tuyến tính `Q=a×PWM+b` đo trực tiếp bằng cân — RIÊNG theo loại thức ăn. `=0` (mặc định) → loại đó **motor dừng an toàn (1500), không chạy** — bắt buộc phải hiệu chuẩn trước khi dùng, không còn fallback nào khác. Xem mục 3.6 quy trình đo. |
 | `SA_DOS_B1..B7` | 34–40 | Float | 0.0 | -5000 | 5000 | **Mới 2026-10-05.** Hệ số chặn `b` (g/phút) từ cùng hồi quy với `SA_DOS_Ax` — chỉ có ý nghĩa khi `SA_DOS_Ax≠0` tương ứng. |
 
@@ -492,11 +497,12 @@ Ví dụ:
 | `SA: SERVO<m> MIN=<x>, must set =800` | WARNING | MIN sai | Mỗi 5s |
 | `SA: SERVO<m> TRIM=<x>, must set =1500` | WARNING | TRIM sai | Mỗi 5s |
 | `SA: SERVO<m> MAX=<x>, must set =2200` | WARNING | MAX sai | Mỗi 5s |
-| `SA: SERVO<m> setup OK - spreader disc ready` | INFO | **Đĩa rải (mới 2026-09-08):** FUNCTION/MIN/MAX OK (edge rising, KHÔNG kiểm tra TRIM), chỉ khi `SA_DISC_CHAN>0` | 1 lần/lần vừa đúng |
+| `SA: SERVO<m> setup OK - spreader disc ready` | INFO | **Đĩa rải (mới 2026-09-08, điều kiện tùy `SA_DISC_REV` từ 2026-10-07):** FUNCTION/MAX OK **luôn**, MIN/TRIM OK **chỉ khi SA_DISC_REV≠0 (Bidir)** (edge rising), chỉ khi `SA_DISC_CHAN>0` | 1 lần/lần vừa đúng |
 | `SA: SERVO<m> does not exist` | WARNING | **Đĩa rải:** không tìm thấy kênh servo — dùng chung câu chữ với trục vít, phân biệt qua số kênh `<m>` (`SA_DISC_CHAN` khác `SA_DOS_CHAN`) | Mỗi 5s |
-| `SA: SERVO<m> FUNCTION=<x>, must set =0 (None)` | WARNING | **Đĩa rải:** FUNCTION sai | Mỗi 5s |
-| `SA: SERVO<m> MIN=<x>, must set =800` | WARNING | **Đĩa rải:** MIN sai (đổi từ 1500→800, 2026-10-06 — đĩa giờ dùng đủ dải 800-2200, điểm dừng là TRIM THẬT đang cấu hình, không bắt buộc đúng 1500) | Mỗi 5s |
-| `SA: SERVO<m> MAX=<x>, must set =2200` | WARNING | **Đĩa rải:** MAX sai | Mỗi 5s |
+| `SA: SERVO<m> FUNCTION=<x>, must set =0 (None)` | WARNING | **Đĩa rải:** FUNCTION sai — kiểm tra bất kể `SA_DISC_REV` | Mỗi 5s |
+| `SA: SERVO<m> MIN=<x>, must set =800` | WARNING | **Đĩa rải:** MIN sai — **chỉ cảnh báo khi `SA_DISC_REV=1` hoặc `2` (Bidir)**; `SA_DISC_REV=0` (StandardESC) không kiểm tra MIN, chấp nhận giá trị thật (vd 1100) | Mỗi 5s |
+| `SA: SERVO<m> TRIM=<x>, must set =1500` | WARNING | **Đĩa rải:** TRIM sai — **chỉ cảnh báo khi `SA_DISC_REV=1` hoặc `2` (Bidir)**; `SA_DISC_REV=0` không kiểm tra TRIM | Mỗi 5s |
+| `SA: SERVO<m> MAX=<x>, must set =2200` | WARNING | **Đĩa rải:** MAX sai — kiểm tra bất kể `SA_DISC_REV` | Mỗi 5s |
 | `SA: Dosing motor ON` | INFO | RC bật (edge rising) | 1 lần/lần bật |
 | `SA: Dosing motor OFF` | INFO | RC tắt (edge falling) | 1 lần/lần tắt |
 | `SA DOS2: no mission (dist=<x>m) - motor stopped` | WARNING | DOS_MODE=2, dist ≤ 1m (đổi tên từ "SA DOS1" 2026-08-20, khớp số mode mới) | Mỗi 5s |
@@ -523,14 +529,18 @@ SA_DOS_Ax (của loại thức ăn active) PHẢI ≠ 0 mới chạy được mo
                2026-10-06, bắt buộc, không còn clamp/fallback như V/Fx/Dx
                cũ đã gỡ bỏ) =0 → motor dừng hẳn (1500) + warn 5s, xem mục 3.6
 
-Đĩa rải ly tâm (nếu SA_DISC_CHAN > 0, đổi 2026-10-06):
-SERVOx_FUNCTION = 0     (x = SA_DISC_CHAN) ┐  Sai bất kỳ 1 → đĩa không quay
-SERVOx_MIN      = 800                      │  (PWM giữ nguyên TRIM thật đang
-SERVOx_MAX      = 2200                     ┘  cấu hình) + warn 5s. KHÔNG kiểm
-                                               tra TRIM (khác trục vít) —
-                                               formula vẫn tự đọc TRIM thật
-                                               làm điểm 0%, không bắt buộc 1500.
-                                               (KHÔNG chặn trục vít chạy)
+Đĩa rải ly tâm (nếu SA_DISC_CHAN > 0, đổi 2026-10-06/07, điều kiện tùy SA_DISC_REV):
+SERVOx_FUNCTION = 0     (x = SA_DISC_CHAN) ┐  LUÔN bắt buộc
+SERVOx_MAX      = 2200                     ┘
+
+SA_DISC_REV=0 (StandardESC, 1 chiều):            SA_DISC_REV=1/2 (Bidir, 2 chiều):
+  không kiểm tra SERVOx_MIN/TRIM thật                SERVOx_MIN  = 800   ┐ bắt buộc
+  0% = SA_DISC_MIN (tham số riêng,                   SERVOx_TRIM = 1500  ┘
+       mặc định 1100, đổi 2026-10-07 —
+       KHÔNG dùng SERVOx_MIN thật)
+
+Sai bất kỳ điều kiện bắt buộc → đĩa không quay (PWM giữ ở điểm dừng:
+SA_DISC_MIN nếu REV=0, TRIM nếu REV=1/2) + warn 5s (KHÔNG chặn trục vít chạy)
 
 SA_DOS_MODE=0: SA_DOS_SP là PWM tuyệt đối, tự constrain về đúng dải SERVOx_MIN..MAX
                SA_DOS_SP ≤ 0 → 1500 (an toàn), không kẹp về pwm_min
