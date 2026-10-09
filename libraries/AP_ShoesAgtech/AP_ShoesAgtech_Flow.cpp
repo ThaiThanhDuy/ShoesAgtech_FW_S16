@@ -96,7 +96,8 @@ const AP_Param::GroupInfo AP_ShoesAgtech_FlowParams::var_info[] = {
     // @Range: 100 60000
     // @Units: ms
     // @User: Advanced
-    AP_GROUPINFO("FLOW_LOG_MS", 11, AP_ShoesAgtech_FlowParams, flow_log_ms, 2000),
+    AP_GROUPINFO("FLOW_LOG_MS", 11, AP_ShoesAgtech_FlowParams, flow_log_ms,
+                 2000),
 
     // @Param: FLOW_PIN
     // @DisplayName: Flow sensor GPIO pin number
