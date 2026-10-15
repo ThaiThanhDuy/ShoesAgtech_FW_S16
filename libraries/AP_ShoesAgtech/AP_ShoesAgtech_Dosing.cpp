@@ -585,7 +585,30 @@ void AP_ShoesAgtech::_update_dosing_motor(void) {
   _disc_running = _dos_rc_seen_off && disc_enabled &&
                   (motor_on || (elapsed_ms < disc_delay_ms));
 
-  float dos_rate_gpm = 0.0f; // tốc độ cấp tức thời (g/phút) — dùng để in log
+  // dos_rate_gpm giờ được tính SẴN cho mode 1/2 dù Dosing motor đang OFF
+  // (preview) — đổi 2026-10-15, theo yêu cầu log hiển thị được lưu lượng
+  // (sẽ áp dụng nếu bật) ngay cả khi chưa bật, thay vì luôn =0 lúc off.
+  // Mode 1: chỉ là SA_DOS_SP, không phụ thuộc on/off nên tính vô điều kiện.
+  // Mode 2: mission_dist/speed không phụ thuộc SA_DOS_RC nên cũng tính
+  // được — dos2_ready lưu lại kết quả kiểm tra đủ điều kiện để dùng lại
+  // bên dưới (tránh gọi lại _get_mission_dist()/_get_spray_speed() 2 lần).
+  float dos_rate_gpm = 0.0f; // tốc độ cấp tức thời/preview (g/phút) — dùng để in log
+  uint8_t food_idx = (uint8_t)_clamp_food(dos_food_active) - 1;
+  float dos2_mission_dist = 0.0f, dos2_speed_ms = 0.0f, dos2_speed_min = 0.0f;
+  bool dos2_ready = false;
+
+  if (_dos_params.dos_mode.get() == 1) {
+    dos_rate_gpm = dos_sp_active;
+  } else if (_dos_params.dos_mode.get() == 2) {
+    dos2_mission_dist = _get_mission_dist();
+    dos2_speed_ms = _get_spray_speed();
+    dos2_speed_min = _speed_min_start();
+    dos2_ready = (dos2_mission_dist > 1.0f && dos2_speed_ms >= dos2_speed_min);
+    if (dos2_ready) {
+      dos_rate_gpm = (dos_sp_active * dos2_speed_ms * 60.0f) / dos2_mission_dist;
+    }
+  }
+  // Mode 0: dos_rate_gpm giữ 0.0f — không có khái niệm tốc độ g/phút
 
   if (auger_allowed) {
     float pwm_f = 1500.0f;
@@ -611,54 +634,33 @@ void AP_ShoesAgtech::_update_dosing_motor(void) {
         pwm_f = constrain_float(dos_sp_active, (float)pwm_min, (float)pwm_max);
       }
       dos_rate_gpm = 0.0f; // không có khái niệm tốc độ g/phút ở mode này
+    } else if (_dos_params.dos_mode.get() == 1) {
+      // ---- DOS_MODE 1 (đổi số từ mode 0 cũ, 2026-08-20): tốc độ cố
+      // định — SA_DOS_SP CHÍNH LÀ tốc độ (g/phút). dos_rate_gpm/food_idx
+      // đã được tính sẵn ở trên (preview, kể cả lúc off) nên dùng lại luôn.
+      pwm_f = (float)_dos_rate_to_pwm(dos_rate_gpm, food_idx);
     } else {
-      // Loại thức ăn đang active (dùng chung cho mode 1 và 2) — quyết
-      // định dùng cặp SA_DOS_Ax/Bx nào trong _dos_rate_to_pwm().
-      uint8_t food_idx = (uint8_t)_clamp_food(dos_food_active) - 1;
-
-      if (_dos_params.dos_mode.get() == 1) {
-        // ---- DOS_MODE 1 (đổi số từ mode 0 cũ, 2026-08-20): tốc độ cố
-        // định — SA_DOS_SP CHÍNH LÀ tốc độ (g/phút) ----
-        dos_rate_gpm = dos_sp_active;
+      // ---- DOS_MODE 2 (đổi số từ mode 1 cũ, 2026-08-20): phân bố đều
+      // theo mission — dos_rate_gpm/dos2_ready/dos2_mission_dist/
+      // dos2_speed_ms/dos2_speed_min đã tính sẵn ở trên (preview, kể cả
+      // lúc off), dùng lại thay vì gọi lại _get_mission_dist()/
+      // _get_spray_speed() lần nữa.
+      if (dos2_ready) {
         pwm_f = (float)_dos_rate_to_pwm(dos_rate_gpm, food_idx);
       } else {
-        // ---- DOS_MODE 2 (đổi số từ mode 1 cũ, 2026-08-20): phân bố đều
-        // theo mission — SA_DOS_SP là TỔNG gam, dos_rate_gpm là tốc độ
-        // tức thời suy ra từ speed/mission_dist ----
-        float mission_dist = _get_mission_dist();
-        float speed_ms = _get_spray_speed(); // đồng bộ nguồn tốc độ với
-                                             // Module 1 (SIM > SA_FLOW_VEL
-                                             // > AHRS)
-        // Chỉ bắt đầu rải khi xe đã đạt ĐỦ tốc độ — không phải cứ nhích
-        // bánh là rải. Ngưỡng = SA_SPD_START % tốc độ ĐẶT cho mission
-        // (_target_speed = WP_SPEED, do Rover.cpp bơm vào — xem
-        // set_target_speed()), tránh rải ngay lúc xe còn đang tăng tốc từ
-        // lúc dừng/qua khúc cua (rải dồn vào đoạn xe đi chậm). Vẫn giữ
-        // sàn tuyệt đối 0.05 m/s cho trường hợp chưa có _target_speed (vd
-        // chưa từng vào Auto). SA_SPD_START=0 tắt hẳn kiểm tra %, quay
-        // về hành vi cũ (chỉ cần vượt sàn 0.05 m/s là rải). Từ 2026-09-04,
-        // `_speed_min_start()` DÙNG CHUNG với gate bật bơm FLOW_MODE=1 ở
-        // Module 1 — đổi SA_SPD_START ảnh hưởng cả 2 module.
-        float speed_min_start = _speed_min_start(); // dùng chung với Module 1
-        if (mission_dist > 1.0f && speed_ms >= speed_min_start) {
-          dos_rate_gpm = (dos_sp_active * speed_ms * 60.0f) / mission_dist;
-          pwm_f = (float)_dos_rate_to_pwm(dos_rate_gpm, food_idx);
-        } else {
-          pwm_f = 1500.0f;
-          dos_rate_gpm = 0.0f;
-          if (now - _dos_warn_ms >= 5000U) {
-            _dos_warn_ms = now;
-            if (mission_dist <= 1.0f) {
-              gcs().send_text(
-                  MAV_SEVERITY_WARNING,
-                  "SA DOS2: no mission (dist=%.1fm) - motor stopped",
-                  (double)mission_dist);
-            } else {
-              gcs().send_text(MAV_SEVERITY_WARNING,
-                              "SA DOS2: speed too low (%.2fm/s < %.2fm/s min) "
-                              "- motor stopped",
-                              (double)speed_ms, (double)speed_min_start);
-            }
+        pwm_f = 1500.0f;
+        if (now - _dos_warn_ms >= 5000U) {
+          _dos_warn_ms = now;
+          if (dos2_mission_dist <= 1.0f) {
+            gcs().send_text(
+                MAV_SEVERITY_WARNING,
+                "SA DOS2: no mission (dist=%.1fm) - motor stopped",
+                (double)dos2_mission_dist);
+          } else {
+            gcs().send_text(MAV_SEVERITY_WARNING,
+                            "SA DOS2: speed too low (%.2fm/s < %.2fm/s min) "
+                            "- motor stopped",
+                            (double)dos2_speed_ms, (double)dos2_speed_min);
           }
         }
       }
@@ -716,15 +718,22 @@ void AP_ShoesAgtech::_update_dosing_motor(void) {
 
   // ---- IN LOG MOTOR CHO ĂN RA CONSOLE (SA_DOS_LOG) ----
   // Rút gọn (2026-09-04), giống hệt kiểu Module 1: đúng 1 dòng
-  // "[DOS] FM<x> Q:<y>" — FM<x> = SA_DOS_MODE (0/1/2), Q = dos_rate_gpm
-  // (lưu lượng g/phút; = 0 ở mode 0 vì không có khái niệm tốc độ, giống
-  // cách Q=0 ở nấc manual bên Module 1). Bỏ SERVO/ON-OFF/PWM/mật độ khỏi
-  // log định kỳ để đồng nhất với Module 1 — xem SA_DATA nếu cần chi tiết.
+  // "[DOS] FM<x> Q:<y> - running/not running" — FM<x> = SA_DOS_MODE (0/1/2),
+  // Q = dos_rate_gpm (lưu lượng g/phút; = 0 ở mode 0 vì không có khái niệm
+  // tốc độ, giống cách Q=0 ở nấc manual bên Module 1). Đổi 2026-10-15: Q ở
+  // mode 1/2 giờ là PREVIEW — tính sẵn theo SA_DOS_SP/mission/speed hiện tại
+  // dù Dosing motor đang off (xem khối tính dos_rate_gpm phía trên), nên
+  // thêm tag "running"/"not running" (dựa theo auger_allowed — true khi PWM
+  // thật sự được áp ra servo, không chỉ theo SA_DOS_RC) để phân biệt đây là
+  // số sẽ áp dụng nếu bật hay số đang thực sự chạy, thay vì tưởng nhầm 0.0
+  // là "không có gì để hiển thị". Bỏ SERVO/ON-OFF/PWM/mật độ khỏi log định
+  // kỳ để đồng nhất với Module 1 — xem SA_DATA nếu cần chi tiết.
   if (_dos_params.dos_log_enable.get() > 0) {
     if (now - _dos_last_log_ms >= (uint32_t)_dos_params.dos_log_ms.get()) {
       _dos_last_log_ms = now;
-      gcs().send_text(MAV_SEVERITY_INFO, "[DOS] FM%d Q:%.2f",
-                      (int)_dos_params.dos_mode.get(), (double)dos_rate_gpm);
+      gcs().send_text(MAV_SEVERITY_INFO, "[DOS] FM%d Q:%.2f - %s",
+                      (int)_dos_params.dos_mode.get(), (double)dos_rate_gpm,
+                      auger_allowed ? "running" : "not running");
     }
   }
 }
