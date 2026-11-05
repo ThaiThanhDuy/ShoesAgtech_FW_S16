@@ -572,11 +572,13 @@ void AP_ShoesAgtech::_update_dosing_motor(void) {
                                                 0.0f, 60.0f) *
                                 1000.0f)
                    : 0U;
-  // motor_on=true, chưa đủ delay  -> đĩa quay, trục vít CHƯA được chạy
-  // motor_on=true, đã đủ delay    -> đĩa quay, trục vít được chạy
+  // motor_on=true, chưa đủ delay  -> đĩa quay, trục vít chạy theo 3 PHA
+  //                                  khởi động (xem khối tính _dos_pwm bên
+  //                                  dưới) thay vì đứng im hoàn toàn như cũ
+  // motor_on=true, đã đủ delay    -> đĩa quay, trục vít chạy bình thường ở
+  //                                  PWM mục tiêu (target_pwm)
   // motor_on=false, chưa đủ delay -> đĩa VẪN quay (đang chờ tắt), trục vít tắt
   // motor_on=false, đã đủ delay   -> đĩa tắt, trục vít tắt
-  const bool auger_allowed = motor_on && (elapsed_ms >= disc_delay_ms);
   // _dos_rc_seen_off=false ép hẳn _disc_running=false, KHÔNG dùng công
   // thức grace-period bên dưới — nếu không, ngay lúc mới boot _dos_seq_ms
   // vẫn = 0 nên elapsed_ms nhỏ có thể bị hiểu nhầm thành "vừa mới tắt,
@@ -610,65 +612,112 @@ void AP_ShoesAgtech::_update_dosing_motor(void) {
   }
   // Mode 0: dos_rate_gpm giữ 0.0f — không có khái niệm tốc độ g/phút
 
-  if (auger_allowed) {
-    float pwm_f = 1500.0f;
+  // ---- Tính target_pwm (PWM mục tiêu khi trục vít chạy bình thường,
+  // ngoài cửa sổ khởi động) — tính VÔ ĐIỀU KIỆN (không còn gate bằng
+  // auger_allowed như trước), vì giờ cần giá trị này làm đích đến của pha
+  // 3 (ramp) ngay cả khi chưa qua hết SA_DISC_DLY. ----
+  float target_pwm = 1500.0f;
 
-    if (_dos_params.dos_mode.get() == 0) {
-      // ---- DOS_MODE 0: PWM trực tiếp — SA_DOS_SP LÀ xung PWM (µs), xuất
-      // thẳng ra servo. Bỏ qua hoàn toàn công thức SA_DOS_V/Fx/Dx và
-      // SA_DOS_REV (không phải offset, là giá trị tuyệt đối) — dùng để
-      // hiệu chuẩn tại bàn (đo RPM/sản lượng ở 1 mức PWM biết trước) mà
-      // không cần công cụ test servo riêng của GCS.
-      // An toàn: SA_DOS_SP=0 (giá trị mặc định, chưa từng chỉnh) -> dừng
-      // (1500), KHÔNG kẹp về pwm_min (có thể là tốc độ tối đa) — tránh
-      // trường hợp mới bật RC dosing mà quên set SA_DOS_SP thì motor chạy
-      // full tốc ngoài ý muốn.
-      if (dos_sp_active <= 0.0f) {
-        pwm_f = 1500.0f;
-      } else {
-        SRV_Channel *ch_dos = SRV_Channels::srv_channel(
-            (uint8_t)(_dos_params.dos_chan.get() - 1));
-        uint16_t pwm_min = (ch_dos != nullptr) ? ch_dos->get_output_min() : 800;
-        uint16_t pwm_max =
-            (ch_dos != nullptr) ? ch_dos->get_output_max() : 2200;
-        pwm_f = constrain_float(dos_sp_active, (float)pwm_min, (float)pwm_max);
-      }
-      dos_rate_gpm = 0.0f; // không có khái niệm tốc độ g/phút ở mode này
-    } else if (_dos_params.dos_mode.get() == 1) {
-      // ---- DOS_MODE 1 (đổi số từ mode 0 cũ, 2026-08-20): tốc độ cố
-      // định — SA_DOS_SP CHÍNH LÀ tốc độ (g/phút). dos_rate_gpm/food_idx
-      // đã được tính sẵn ở trên (preview, kể cả lúc off) nên dùng lại luôn.
-      pwm_f = (float)_dos_rate_to_pwm(dos_rate_gpm, food_idx);
+  if (_dos_params.dos_mode.get() == 0) {
+    // ---- DOS_MODE 0: PWM trực tiếp — SA_DOS_SP LÀ xung PWM (µs), xuất
+    // thẳng ra servo. Bỏ qua hoàn toàn công thức SA_DOS_V/Fx/Dx và
+    // SA_DOS_REV (không phải offset, là giá trị tuyệt đối) — dùng để
+    // hiệu chuẩn tại bàn (đo RPM/sản lượng ở 1 mức PWM biết trước) mà
+    // không cần công cụ test servo riêng của GCS.
+    // An toàn: SA_DOS_SP=0 (giá trị mặc định, chưa từng chỉnh) -> dừng
+    // (1500), KHÔNG kẹp về pwm_min (có thể là tốc độ tối đa) — tránh
+    // trường hợp mới bật RC dosing mà quên set SA_DOS_SP thì motor chạy
+    // full tốc ngoài ý muốn.
+    if (dos_sp_active <= 0.0f) {
+      target_pwm = 1500.0f;
     } else {
-      // ---- DOS_MODE 2 (đổi số từ mode 1 cũ, 2026-08-20): phân bố đều
-      // theo mission — dos_rate_gpm/dos2_ready/dos2_mission_dist/
-      // dos2_speed_ms/dos2_speed_min đã tính sẵn ở trên (preview, kể cả
-      // lúc off), dùng lại thay vì gọi lại _get_mission_dist()/
-      // _get_spray_speed() lần nữa.
-      if (dos2_ready) {
-        pwm_f = (float)_dos_rate_to_pwm(dos_rate_gpm, food_idx);
-      } else {
-        pwm_f = 1500.0f;
-        if (now - _dos_warn_ms >= 5000U) {
-          _dos_warn_ms = now;
-          if (dos2_mission_dist <= 1.0f) {
-            gcs().send_text(
-                MAV_SEVERITY_WARNING,
-                "SA DOS2: no mission (dist=%.1fm) - motor stopped",
-                (double)dos2_mission_dist);
-          } else {
-            gcs().send_text(MAV_SEVERITY_WARNING,
-                            "SA DOS2: speed too low (%.2fm/s < %.2fm/s min) "
-                            "- motor stopped",
-                            (double)dos2_speed_ms, (double)dos2_speed_min);
-          }
+      SRV_Channel *ch_dos = SRV_Channels::srv_channel(
+          (uint8_t)(_dos_params.dos_chan.get() - 1));
+      uint16_t pwm_min = (ch_dos != nullptr) ? ch_dos->get_output_min() : 800;
+      uint16_t pwm_max =
+          (ch_dos != nullptr) ? ch_dos->get_output_max() : 2200;
+      target_pwm = constrain_float(dos_sp_active, (float)pwm_min, (float)pwm_max);
+    }
+    dos_rate_gpm = 0.0f; // không có khái niệm tốc độ g/phút ở mode này
+  } else if (_dos_params.dos_mode.get() == 1) {
+    // ---- DOS_MODE 1 (đổi số từ mode 0 cũ, 2026-08-20): tốc độ cố
+    // định — SA_DOS_SP CHÍNH LÀ tốc độ (g/phút). dos_rate_gpm/food_idx
+    // đã được tính sẵn ở trên (preview, kể cả lúc off) nên dùng lại luôn.
+    target_pwm = (float)_dos_rate_to_pwm(dos_rate_gpm, food_idx);
+  } else {
+    // ---- DOS_MODE 2 (đổi số từ mode 1 cũ, 2026-08-20): phân bố đều
+    // theo mission — dos_rate_gpm/dos2_ready/dos2_mission_dist/
+    // dos2_speed_ms/dos2_speed_min đã tính sẵn ở trên (preview, kể cả
+    // lúc off), dùng lại thay vì gọi lại _get_mission_dist()/
+    // _get_spray_speed() lần nữa.
+    if (dos2_ready) {
+      target_pwm = (float)_dos_rate_to_pwm(dos_rate_gpm, food_idx);
+    } else {
+      target_pwm = 1500.0f;
+      // Cảnh báo ngay khi motor_on (không còn đợi hết SA_DISC_DLY như
+      // trước, vì giờ không có lý do để chờ — không đủ điều kiện thì
+      // không chạy pha nào cả, kể cả pha khởi động).
+      if (motor_on && now - _dos_warn_ms >= 5000U) {
+        _dos_warn_ms = now;
+        if (dos2_mission_dist <= 1.0f) {
+          gcs().send_text(
+              MAV_SEVERITY_WARNING,
+              "SA DOS2: no mission (dist=%.1fm) - motor stopped",
+              (double)dos2_mission_dist);
+        } else {
+          gcs().send_text(MAV_SEVERITY_WARNING,
+                          "SA DOS2: speed too low (%.2fm/s < %.2fm/s min) "
+                          "- motor stopped",
+                          (double)dos2_speed_ms, (double)dos2_speed_min);
         }
       }
     }
-    _dos_pwm = (uint16_t)pwm_f;
-  } else {
-    _dos_pwm = 1500;
   }
+
+  // ---- Ghi PWM thực tế ra trục vít — đổi 2026-11-05: thay vì chờ hết
+  // SA_DISC_DLY rồi mới nhảy thẳng lên target_pwm, giờ chia cửa sổ khởi
+  // động (trong lúc đĩa đã quay nhưng trục vít chưa "chính thức" chạy)
+  // thành 3 PHA theo %SA_DISC_DLY, áp dụng cho MỌI SA_DOS_MODE:
+  //   0-40%:  đứng yên (1500)
+  //   40-70%: full "kick" ở đầu dải theo SA_DOS_REV (800 nếu thuận,
+  //           2200 nếu ngược — đúng 2 đầu dải trục vít, luôn hợp lệ vì
+  //           _check_dosing_config() đã bắt buộc MIN=800/MAX=2200)
+  //   70-100%: giảm/tăng dần tuyến tính từ PWM kick về target_pwm
+  // Mục đích: "bung" trục vít ra khỏi lực ì/kẹt hạt ban đầu bằng 1 cú full
+  // lực trước khi về đúng tốc độ cấp liệu mong muốn, thay vì giật từ đứng
+  // yên thẳng lên target_pwm. target_pwm KHÔNG đổi gì khác — vẫn là PWM
+  // suy ra từ SA_DOS_Ax/Bx (mode 1/2) hay SA_DOS_SP trực tiếp (mode 0).
+  // disc_enabled=false (không có đĩa rải) -> không có mốc SA_DISC_DLY nào
+  // để chia pha -> giữ hành vi cũ: chạy thẳng target_pwm ngay khi bật.
+  if (!motor_on) {
+    _dos_pwm = 1500;
+  } else if (!disc_enabled || elapsed_ms >= disc_delay_ms) {
+    _dos_pwm = (uint16_t)constrain_float(target_pwm, 800.0f, 2200.0f);
+  } else {
+    int8_t dos_rev_mode = _dos_params.dos_rev.get();
+    const float kick_pwm = (dos_rev_mode == 0) ? 800.0f : 2200.0f;
+    const uint32_t phase1_end_ms = (uint32_t)(disc_delay_ms * 0.40f);
+    const uint32_t phase2_end_ms = (uint32_t)(disc_delay_ms * 0.70f);
+    float pwm_f;
+    if (elapsed_ms < phase1_end_ms) {
+      pwm_f = 1500.0f; // Pha 1 (0-40%): đứng yên
+    } else if (elapsed_ms < phase2_end_ms) {
+      pwm_f = kick_pwm; // Pha 2 (40-70%): full kick
+    } else {
+      // Pha 3 (70-100%): ramp tuyến tính kick_pwm -> target_pwm
+      uint32_t ramp_dur_ms = disc_delay_ms - phase2_end_ms;
+      float frac = (ramp_dur_ms > 0)
+                       ? (float)(elapsed_ms - phase2_end_ms) / (float)ramp_dur_ms
+                       : 1.0f;
+      frac = constrain_float(frac, 0.0f, 1.0f);
+      pwm_f = kick_pwm + frac * (target_pwm - kick_pwm);
+    }
+    _dos_pwm = (uint16_t)constrain_float(pwm_f, 800.0f, 2200.0f);
+  }
+  // "Đang chạy" cho mục đích log/trạng thái = PWM thực tế khác điểm dừng
+  // 1500 — đúng cho cả pha khởi động (pha 1 vẫn coi là "not running" vì
+  // trục vít thật sự đứng yên, pha 2/3 trở đi coi là "running").
+  const bool auger_allowed = (_dos_pwm != 1500);
 
   uint8_t chan_idx =
       (uint8_t)constrain_int16(_dos_params.dos_chan.get() - 1, 0, 15);

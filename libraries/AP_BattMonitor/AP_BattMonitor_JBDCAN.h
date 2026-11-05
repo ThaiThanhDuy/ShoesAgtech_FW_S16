@@ -25,10 +25,21 @@ public:
     bool has_current() const override { return true; }
     // Always reports consumed energy capability
     bool has_consumed_energy() const override { return true; }
+
+    // Exposes BATTn_CAN_IDX — xem ghi chú đầy đủ tại định nghĩa var_info[]
+    // trong .cpp (đổi 2026-10-23, hỗ trợ 2 BMS trên 2 bus CAN riêng).
+    static const struct AP_Param::GroupInfo var_info[];
 private:
     // Pointer to the active CAN interface
     AP_HAL::CANIface* _iface = nullptr;
-    uint8_t _can_interface_index;
+    // Chọn interface vật lý (0=CAN1, 1=CAN2) cho INSTANCE NÀY — tham số
+    // BATTn_CAN_IDX, mặc định=1 (CAN2) để giữ nguyên hành vi hardcode cũ
+    // (_iface = hal.can[1]) cho instance đầu, không phá cấu hình đang chạy.
+    // Đổi 2026-10-23: trước đây hardcode cứng hal.can[1], không đọc được 2
+    // BMS cùng lúc vì 2 instance sẽ cùng trỏ vào 1 bus — mỗi BMS phải nằm
+    // trên 1 bus CAN riêng (protocol không có địa chỉ/station ID phân biệt
+    // nhiều BMS trên cùng 1 bus).
+    AP_Int8 _can_iface_idx;
     // Timestamp of last update (us)
     uint64_t _last_update_us;
     // Timestamp of last successfully received & parsed frame (us) — used to

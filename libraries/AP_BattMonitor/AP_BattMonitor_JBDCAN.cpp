@@ -5,19 +5,46 @@
 
 extern const AP_HAL::HAL &hal;
 
+// Tham số riêng của backend JBDCAN (đăng ký dưới tiền tố BATTn_, giống
+// cách AP_BattMonitor_Analog expose VOLT_PIN/CURR_PIN) — mới 2026-10-23,
+// để hỗ trợ 2 BMS trên 2 bus CAN riêng (mỗi instance battery monitor chọn
+// 1 cổng CAN khác nhau). Mặc định=1 (CAN2) để giữ nguyên hành vi hardcode
+// cũ cho instance đầu, không phá cấu hình đang chạy của người dùng hiện
+// tại khi lên firmware mới.
+const AP_Param::GroupInfo AP_BattMonitor_JBDCAN::var_info[] = {
+    // @Param: CAN_IDX
+    // @DisplayName: JBD BMS CAN interface index
+    // @Description: Which physical CAN interface this JBD BMS is wired to.
+    //   Each BMS MUST be on its own dedicated CAN bus — the protocol has no
+    //   per-unit address, so two BMS on the same bus would both answer the
+    //   same request ID and collide. Default (1=CAN2) matches the previous
+    //   hardcoded behaviour for the first instance; set BATT2_CAN_IDX=0 for
+    //   a second BMS wired to CAN1.
+    // @Values: 0:CAN1,1:CAN2
+    // @User: Standard
+    AP_GROUPINFO("CAN_IDX", 1, AP_BattMonitor_JBDCAN, _can_iface_idx, 1),
+
+    AP_GROUPEND
+};
+
 // Constructor: store pointer to state and params
 AP_BattMonitor_JBDCAN::AP_BattMonitor_JBDCAN(
     AP_BattMonitor &mon, AP_BattMonitor::BattMonitor_State &mon_state,
     AP_BattMonitor_Params &params)
-    : AP_BattMonitor_Backend(mon, mon_state, params),
-      _can_interface_index(0) // Default to CAN1 (index 0)
-{}
+    : AP_BattMonitor_Backend(mon, mon_state, params)
+{
+  AP_Param::setup_object_defaults(this, var_info);
+  _state.var_info = var_info;
+}
 
-// Initialize CAN interface (default CAN2 = hal.can[1])
+// Initialize CAN interface — cổng chọn qua tham số BATTn_CAN_IDX (0=CAN1,
+// 1=CAN2, mặc định 1 = hành vi hardcode cũ). Xem ghi chú ở var_info[].
 void AP_BattMonitor_JBDCAN::init() {
-  _iface = hal.can[1];
+  uint8_t idx = (uint8_t)constrain_int16(_can_iface_idx.get(), 0, 1);
+  _iface = hal.can[idx];
   if (_iface == nullptr) {
-    GCS_SEND_TEXT(MAV_SEVERITY_ERROR, "JBDCAN: CAN interface not available");
+    GCS_SEND_TEXT(MAV_SEVERITY_ERROR,
+                  "JBDCAN: CAN%u interface not available", unsigned(idx + 1));
     return;
   }
 
