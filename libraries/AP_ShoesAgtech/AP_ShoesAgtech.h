@@ -105,6 +105,11 @@ public:
 
   void init(void);
   void update(void);
+  // Ghi ngay PWM DỪNG cho đĩa rải (REV=0 -> SA_DISC_MIN, REV=1/2 -> TRIM)
+  // ra phần cứng — gọi ngay sau enable_aux_servos() trong init_ardupilot()
+  // để ESC không nhận SERVOx_TRIM trong lúc boot (trước khi init()/update()
+  // của module kịp chạy, vốn nằm sau startup_INS() mất vài giây).
+  void init_disc_output(void);
 
   // Tốc độ ĐẶT cho mission (WP_SPEED, đã cập nhật qua DO_CHANGE_SPEED/GCS
   // SET_SPEED) — Rover.cpp gọi mỗi chu kỳ TRƯỚC update() (từ
@@ -425,6 +430,7 @@ private:
   void     _check_disc_config(void);
   void     _sync_dosing_setpoint(void);
   void     _update_dosing_motor(void);
+  void     _write_disc_output(void);
   // Chuyển tốc độ cấp (g/phút) sang PWM bằng SA_DOS_Ax/Bx (hồi quy tuyến
   // tính đo trực tiếp bằng cân — DUY NHẤT công thức, từ 2026-10-06). Nếu
   // loại thức ăn chưa có SA_DOS_Ax (=0, chưa hiệu chuẩn) -> trả về 1500

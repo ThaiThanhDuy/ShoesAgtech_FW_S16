@@ -63,6 +63,10 @@ void Rover::init_ardupilot() {
   g2.motors.init(get_frame_type()); // init motors including setting servo out
                                     // channels ranges
   AP::srv().enable_aux_servos();
+  // [AP_ShoesAgtech] đĩa rải về PWM dừng ngay khi bật kênh servo, không
+  // chờ tới custom_nav.init() ở cuối hàm (sau startup_INS mất vài giây)
+  g2.custom_nav.init_disc_output();
+  // [/AP_ShoesAgtech]
 
   // init wheel encoders
   g2.wheel_encoder.init();

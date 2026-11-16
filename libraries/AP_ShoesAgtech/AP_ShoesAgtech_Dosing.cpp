@@ -10,6 +10,8 @@
 #include <RC_Channel/RC_Channel.h>
 #include <SRV_Channel/SRV_Channel.h>
 
+extern const AP_HAL::HAL &hal;
+
 // =============================================================
 // BẢNG THAM SỐ MODULE 3 (Cho ăn) — var_info RIÊNG, subgroup lồng trong
 // AP_ShoesAgtech (xem AP_SUBGROUPINFO trong AP_ShoesAgtech.cpp), tiền
@@ -523,6 +525,11 @@ void AP_ShoesAgtech::_update_dosing_motor(void) {
   _check_dosing_config();
   if (!_dos_config_ok) {
     _dos_pwm = 1500;
+    // Vẫn phải ghi PWM dừng cho đĩa rải trước khi return — nếu không, kênh
+    // SA_DISC_CHAN không bao giờ được ghi và giữ SERVOx_TRIM (1500) mặc
+    // định lúc boot, sai với REV=0 (StandardESC phải dừng ở SA_DISC_MIN).
+    _disc_running = false;
+    _write_disc_output();
     return;
   }
 
@@ -734,7 +741,51 @@ void AP_ShoesAgtech::_update_dosing_motor(void) {
   //     thật — Bidir vẫn dùng MIN thật của channel, chỉ StandardESC mới
   //     dùng SA_DISC_MIN).
   //   Lúc dừng (1/2) = TRIM.
-  if (disc_enabled) {
+  _write_disc_output();
+
+  // ---- IN LOG MOTOR CHO ĂN RA CONSOLE (SA_DOS_LOG) ----
+  // Rút gọn (2026-09-04), giống hệt kiểu Module 1: đúng 1 dòng
+  // "[DOS] FM<x> Q:<y> - running/not running" — FM<x> = SA_DOS_MODE (0/1/2),
+  // Q = dos_rate_gpm (lưu lượng g/phút; = 0 ở mode 0 vì không có khái niệm
+  // tốc độ, giống cách Q=0 ở nấc manual bên Module 1). Đổi 2026-10-15: Q ở
+  // mode 1/2 giờ là PREVIEW — tính sẵn theo SA_DOS_SP/mission/speed hiện tại
+  // dù Dosing motor đang off (xem khối tính dos_rate_gpm phía trên), nên
+  // thêm tag "running"/"not running" (dựa theo auger_allowed — true khi PWM
+  // thật sự được áp ra servo, không chỉ theo SA_DOS_RC) để phân biệt đây là
+  // số sẽ áp dụng nếu bật hay số đang thực sự chạy, thay vì tưởng nhầm 0.0
+  // là "không có gì để hiển thị". Bỏ SERVO/ON-OFF/PWM/mật độ khỏi log định
+  // kỳ để đồng nhất với Module 1 — xem SA_DATA nếu cần chi tiết.
+  if (_dos_params.dos_log_enable.get() > 0) {
+    if (now - _dos_last_log_ms >= (uint32_t)_dos_params.dos_log_ms.get()) {
+      _dos_last_log_ms = now;
+      gcs().send_text(MAV_SEVERITY_INFO, "[DOS] FM%d Q:%.2f - %s",
+                      (int)_dos_params.dos_mode.get(), (double)dos_rate_gpm,
+                      auger_allowed ? "running" : "not running");
+    }
+  }
+}
+
+// =============================================================
+// GHI PWM ĐĨA RẢI LY TÂM theo _disc_running / _disc_config_ok — tách riêng
+// để gọi được cả khi _update_dosing_motor() thoát sớm (kênh vít tải cấu
+// hình sai), đảm bảo đĩa luôn nhận đúng giá trị dừng theo SA_DISC_REV
+// (REV=0 -> SA_DISC_MIN, REV=1/2 -> TRIM) thay vì kẹt ở SERVOx_TRIM.
+// =============================================================
+void AP_ShoesAgtech::init_disc_output(void) {
+  if (!is_enabled() || _dos_params.disc_chan.get() <= 0) {
+    return;
+  }
+  _disc_running = false;
+  _write_disc_output();
+  // Main loop chưa chạy (chưa có SRV_Channels push) -> tự ghi thẳng ra
+  // RCOutput, chỉ riêng kênh đĩa, không đụng các kênh khác.
+  uint8_t disc_idx =
+      (uint8_t)constrain_int16(_dos_params.disc_chan.get() - 1, 0, 15);
+  hal.rcout->write(disc_idx, _disc_pwm);
+}
+
+void AP_ShoesAgtech::_write_disc_output(void) {
+  if (_dos_params.disc_chan.get() > 0) {
     uint8_t disc_idx =
         (uint8_t)constrain_int16(_dos_params.disc_chan.get() - 1, 0, 15);
     SRV_Channel *ch_disc = SRV_Channels::srv_channel(disc_idx);
@@ -762,27 +813,6 @@ void AP_ShoesAgtech::_update_dosing_motor(void) {
         _disc_pwm = (rev_mode == 0) ? disc_min : disc_trim;
       }
       SRV_Channels::set_output_pwm_chan(disc_idx, _disc_pwm);
-    }
-  }
-
-  // ---- IN LOG MOTOR CHO ĂN RA CONSOLE (SA_DOS_LOG) ----
-  // Rút gọn (2026-09-04), giống hệt kiểu Module 1: đúng 1 dòng
-  // "[DOS] FM<x> Q:<y> - running/not running" — FM<x> = SA_DOS_MODE (0/1/2),
-  // Q = dos_rate_gpm (lưu lượng g/phút; = 0 ở mode 0 vì không có khái niệm
-  // tốc độ, giống cách Q=0 ở nấc manual bên Module 1). Đổi 2026-10-15: Q ở
-  // mode 1/2 giờ là PREVIEW — tính sẵn theo SA_DOS_SP/mission/speed hiện tại
-  // dù Dosing motor đang off (xem khối tính dos_rate_gpm phía trên), nên
-  // thêm tag "running"/"not running" (dựa theo auger_allowed — true khi PWM
-  // thật sự được áp ra servo, không chỉ theo SA_DOS_RC) để phân biệt đây là
-  // số sẽ áp dụng nếu bật hay số đang thực sự chạy, thay vì tưởng nhầm 0.0
-  // là "không có gì để hiển thị". Bỏ SERVO/ON-OFF/PWM/mật độ khỏi log định
-  // kỳ để đồng nhất với Module 1 — xem SA_DATA nếu cần chi tiết.
-  if (_dos_params.dos_log_enable.get() > 0) {
-    if (now - _dos_last_log_ms >= (uint32_t)_dos_params.dos_log_ms.get()) {
-      _dos_last_log_ms = now;
-      gcs().send_text(MAV_SEVERITY_INFO, "[DOS] FM%d Q:%.2f - %s",
-                      (int)_dos_params.dos_mode.get(), (double)dos_rate_gpm,
-                      auger_allowed ? "running" : "not running");
     }
   }
 }
